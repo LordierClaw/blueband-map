@@ -88,11 +88,11 @@ export default {
       page.detailText = "Press CHECK CONNECTION."
     }
     connection.onclose = function () {
-      if (!page.ownsConnectionEpoch(connection, epoch) || (!page.connected && !page.acceptingMessages)) return
+      if (!page.ownsConnectionEpoch(connection, epoch)) return
       page.lock("IOS LINK CLOSED")
     }
     connection.onerror = function () {
-      if (!page.ownsConnectionEpoch(connection, epoch) || (!page.connected && !page.acceptingMessages)) return
+      if (!page.ownsConnectionEpoch(connection, epoch)) return
       page.lock("IOS LINK ERROR")
     }
     connection.onmessage = function (event) {

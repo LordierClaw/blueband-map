@@ -916,3 +916,38 @@ test("send failure callbacks lock only the lifecycle that issued them", async ()
   assert.equal(page.acceptingMessages, false)
   assert.equal(page.lifecycleEpoch, lockedEpoch + 1)
 })
+
+test("current close and error invalidate pending pre-admission readiness", async () => {
+  for (const event of ["close", "error"]) {
+    const readyCallbacks = []
+    const sent = []
+    const file = memoryFile()
+    const connection = {
+      send(options) { sent.push(options.data) },
+      getReadyState(options) { readyCallbacks.push(options) }
+    }
+    const page = await loadPage(connection, file, fakeCrypto())
+    assert.equal(page.connected, false)
+    assert.equal(page.acceptingMessages, false)
+    page.checkConnection()
+    assert.equal(readyCallbacks.length, 1)
+    const initialEpoch = page.lifecycleEpoch
+    const handler = event === "close" ? connection.onclose : connection.onerror
+    handler()
+    assert.equal(page.lifecycleEpoch, initialEpoch + 1)
+    assert.equal(page.connected, false)
+    assert.equal(page.acceptingMessages, false)
+    assert.equal(page.statusText, event === "close" ? "IOS LINK CLOSED" : "IOS LINK ERROR")
+
+    const lockedEpoch = page.lifecycleEpoch
+    handler()
+    assert.equal(page.lifecycleEpoch, lockedEpoch, "repeated stale event must not reset twice")
+    readyCallbacks[0].success({ status: 1 })
+    assert.equal(page.connected, false)
+    assert.equal(page.acceptingMessages, false)
+    page.receiveMessage({ data: envelope(`${event}-queued`, "system.echo", { text: "QUEUED" }) })
+    assert.equal(sent.length, 0)
+    assert.equal(page.logRows.length, 0)
+    assert.equal(file.accesses.length, 0)
+  }
+})
