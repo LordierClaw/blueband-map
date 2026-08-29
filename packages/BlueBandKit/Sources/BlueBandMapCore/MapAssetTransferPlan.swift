@@ -16,7 +16,7 @@ public enum MapAssetTransferPlan {
         case cannotFitChunk
     }
 
-    private static let envelopeID = String(repeating: "x", count: 32)
+    private static let envelopeID = String(repeating: "\\", count: 32)
     private static let maximumChunkBytes = 320
 
     public static func make(asset: MapAsset) throws -> [MapTransferStep] {

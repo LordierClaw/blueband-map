@@ -4,7 +4,7 @@ import BlueBandCore
 @testable import BlueBandMapCore
 
 final class MapAssetTransferPlanTests: XCTestCase {
-    private let envelopeID = String(repeating: "x", count: 32)
+    private let envelopeID = String(repeating: "\\", count: 32)
 
     func testMakeProducesOrderedBoundedStepsThatReconstructAsset() throws {
         let data = pngData(byteCount: 1_001, width: 212, height: 360)
@@ -27,7 +27,6 @@ final class MapAssetTransferPlanTests: XCTestCase {
 
         var reconstructed = Data()
         var expectedOffset = 0
-        var hasMaximalNonfinalChunk = false
         let chunkSteps = Array(steps.dropFirst().dropLast())
 
         for (index, step) in chunkSteps.enumerated() {
@@ -38,12 +37,18 @@ final class MapAssetTransferPlanTests: XCTestCase {
             let chunk = try XCTUnwrap(Data(base64Encoded: encodedChunk))
 
             XCTAssertEqual(offset, expectedOffset)
+            XCTAssertLessThanOrEqual(chunk.count, 320)
             expectedOffset += chunk.count
             reconstructed.append(chunk)
 
             if index < chunkSteps.index(before: chunkSteps.endIndex) {
-                var largerChunk = chunk
-                largerChunk.append(0)
+                if chunk.count == 320 {
+                    continue
+                }
+                let logicalEnd = offset + chunk.count + 1
+                let startIndex = asset.data.index(asset.data.startIndex, offsetBy: offset)
+                let endIndex = asset.data.index(asset.data.startIndex, offsetBy: logicalEnd)
+                let largerChunk = Data(asset.data[startIndex..<endIndex])
                 let largerBody: [String: JSONValue] = [
                     "asset": .string(asset.id),
                     "offset": .number(Double(offset)),
@@ -55,19 +60,14 @@ final class MapAssetTransferPlanTests: XCTestCase {
                     topic: step.topic,
                     body: largerBody
                 )
-                do {
-                    _ = try largerEnvelope.encoded()
-                } catch ApplicationEnvelope.Error.tooLarge {
-                    hasMaximalNonfinalChunk = true
-                } catch {
-                    XCTFail("Expected oversized envelope, got \(error)")
+                XCTAssertThrowsError(try largerEnvelope.encoded()) { error in
+                    XCTAssertEqual(error as? ApplicationEnvelope.Error, .tooLarge)
                 }
             }
         }
 
         XCTAssertEqual(expectedOffset, asset.byteCount)
         XCTAssertEqual(reconstructed, asset.data)
-        XCTAssertTrue(hasMaximalNonfinalChunk)
 
         for step in steps {
             let envelope = ApplicationEnvelope.message(
