@@ -514,6 +514,42 @@ final class InterconnectSessionTests: XCTestCase {
         XCTAssertEqual(remainingEvents, [.disconnected])
     }
 
+    func testCancelledNonCooperativeTransmitDoesNotRetainSession() async throws {
+        let sender = ControllableCommandSender()
+        var session: InterconnectSession? = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            idGenerator: { "i-noncooperative-retention" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        weak let weakSession = session
+        try await session?.receive(.statusRequest(identity))
+
+        var result: Task<Result<String, Swift.Error>, Never>? = Task { [session] in
+            do {
+                return .success(try await session!.sendAwaitingAcknowledgement(
+                    topic: "system.echo",
+                    body: [:]
+                ))
+            } catch {
+                return .failure(error)
+            }
+        }
+        _ = await sender.waitForPhoneCommand()
+        result?.cancel()
+        guard case let .failure(error) = await result?.value else {
+            return XCTFail("Expected cancellation")
+        }
+        XCTAssertTrue(error is CancellationError)
+
+        result = nil
+        session = nil
+        await Task.yield()
+        XCTAssertNil(weakSession)
+
+        await sender.releasePhone(with: .success(()))
+    }
+
     func testBlockedLegacySendCannotBecomeSentAfterTerminalDisconnect() async throws {
         let sender = ControllableCommandSender()
         let clock = ImmediateRecordingClock()
@@ -653,6 +689,143 @@ final class InterconnectSessionTests: XCTestCase {
         try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
         let acknowledged = await events.next()
         XCTAssertEqual(acknowledged, .acknowledged("i-cross-collision"))
+    }
+
+    func testCompletedAwaitedIdentifierCannotBeReusedByLegacySend() async throws {
+        let recorder = CommandRecorder()
+        let session = makeSession(recorder: recorder, trust: MemoryTrustStore())
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let first = Task {
+            try await session.sendAwaitingAcknowledgement(topic: "first", body: [:])
+        }
+        let commands = await recorder.commands(countAtLeast: 2)
+        let envelope = try decodePhoneEnvelope(commands[1])
+        _ = await events.next()
+        let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+        let firstID = try await first.value
+        XCTAssertEqual(firstID, "i-test")
+        _ = await events.next()
+
+        do {
+            _ = try await session.send(topic: "second", body: [:])
+            XCTFail("Expected identifier collision")
+        } catch {
+            XCTAssertEqual(error as? InterconnectDeliveryError, .identifierCollision("i-test"))
+        }
+        let commandCount = await recorder.commands().count
+        XCTAssertEqual(commandCount, 2)
+    }
+
+    func testCompletedLegacyIdentifierCannotBeReusedByAwaitedSend() async throws {
+        let recorder = CommandRecorder()
+        let session = makeSession(recorder: recorder, trust: MemoryTrustStore())
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let id = try await session.send(topic: "first", body: [:])
+        _ = await events.next()
+        let ack = ApplicationEnvelope.acknowledgement(id: id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+        _ = await events.next()
+
+        do {
+            _ = try await session.sendAwaitingAcknowledgement(topic: "second", body: [:])
+            XCTFail("Expected identifier collision")
+        } catch {
+            XCTAssertEqual(error as? InterconnectDeliveryError, .identifierCollision("i-test"))
+        }
+        let commandCount = await recorder.commands().count
+        XCTAssertEqual(commandCount, 2)
+    }
+
+    func testLateDuplicateAcknowledgementCannotAcknowledgeNewerDistinctDelivery() async throws {
+        let recorder = CommandRecorder()
+        let ids = LockedIDSequence(["i-old", "i-new"])
+        let session = makeSession(
+            recorder: recorder,
+            trust: MemoryTrustStore(),
+            idGenerator: { ids.next() }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let oldResult = Task {
+            try await session.sendAwaitingAcknowledgement(topic: "old", body: [:])
+        }
+        _ = await recorder.commands(countAtLeast: 2)
+        _ = await events.next()
+        let oldAck = ApplicationEnvelope.acknowledgement(id: "i-old", source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try oldAck.encoded()))
+        let oldID = try await oldResult.value
+        XCTAssertEqual(oldID, "i-old")
+        _ = await events.next()
+
+        let newResult = Task {
+            try await session.sendAwaitingAcknowledgement(topic: "new", body: [:])
+        }
+        _ = await recorder.commands(countAtLeast: 3)
+        let newSent = await events.next()
+        try await session.receive(.wearMessage(identity: identity, content: try oldAck.encoded()))
+        let newAck = ApplicationEnvelope.acknowledgement(id: "i-new", source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try newAck.encoded()))
+
+        let newID = try await newResult.value
+        XCTAssertEqual(newID, "i-new")
+        guard case let .sent(newEnvelope) = newSent else {
+            return XCTFail("Expected newer sent event")
+        }
+        XCTAssertEqual(newEnvelope.id, "i-new")
+        let acknowledged = await events.next()
+        XCTAssertEqual(acknowledged, .acknowledged("i-new"))
+    }
+
+    func testDisconnectDuringBlockedInboundAcknowledgementDoesNotReceiveMessage() async throws {
+        let sender = ControllableCommandSender()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+        let message = ApplicationEnvelope.message(
+            id: "b-terminal",
+            source: .band,
+            topic: "system.echo",
+            body: [:]
+        )
+        let packet = ThirdPartyAppPacket.wearMessage(
+            identity: identity,
+            content: try message.encoded()
+        )
+
+        let receive = Task<Result<Void, Swift.Error>, Never> {
+            do {
+                try await session.receive(packet)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+        _ = await sender.waitForPhoneCommand()
+        await session.disconnect()
+        await sender.releasePhone(with: .success(()))
+        let outcome = await receive.value
+
+        guard case let .failure(error) = outcome else {
+            return XCTFail("Expected terminal inbound receive failure")
+        }
+        var remainingEvents: [InterconnectEvent] = []
+        while let event = await events.next() { remainingEvents.append(event) }
+        XCTAssertEqual(error as? InterconnectSession.Error, .notReady)
+        XCTAssertEqual(remainingEvents, [.disconnected])
     }
 
     private func makeSession(

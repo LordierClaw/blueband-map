@@ -48,6 +48,7 @@ public actor InterconnectSession {
     private var identity: ThirdPartyAppIdentity?
     private var recentIDs: [String] = []
     private var recentIDSet: Set<String> = []
+    private var issuedOutgoingIDs: Set<String> = []
     private var pendingDeliveries: [String: PendingDelivery] = [:]
     private var generation: UInt64 = 0
     private var isTerminal = false
@@ -76,13 +77,15 @@ public actor InterconnectSession {
         case let .statusRequest(requestedIdentity):
             try await accept(requestedIdentity)
         case let .wearMessage(messageIdentity, content):
-            guard let identity else { throw Error.notReady }
+            guard !isTerminal, let identity else { throw Error.notReady }
+            let currentGeneration = generation
             guard messageIdentity == identity else { throw Error.identityMismatch }
             let envelope = try ApplicationEnvelope.decode(content, expecting: .ios)
             switch envelope.type {
             case .message:
                 let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .ios)
                 try await sendCommand(ThirdPartyAppCodec.phoneMessage(identity: identity, content: try ack.encoded()))
+                try ensureReceiveIsCurrent(currentGeneration, identity: identity)
                 if remember(envelope.id) { eventContinuation.yield(.received(envelope)) }
             case .ack:
                 guard var pending = pendingDeliveries[envelope.id] else { return }
@@ -147,14 +150,14 @@ public actor InterconnectSession {
                         generation: currentGeneration,
                         waiter: continuation
                     )
-                    let transmitTask = Task {
-                        await self.transmitAwaited(
-                            command,
-                            envelope: envelope,
-                            token: token,
-                            generation: currentGeneration
-                        )
-                    }
+                    let transmitTask = Self.makeTransmitTask(
+                        sender: sendCommand,
+                        command: command,
+                        envelope: envelope,
+                        token: token,
+                        generation: currentGeneration,
+                        session: self
+                    )
                     guard var pending = pendingDeliveries[id], pending.token == token else {
                         transmitTask.cancel()
                         return
@@ -211,26 +214,52 @@ public actor InterconnectSession {
         return true
     }
 
-    private func transmitAwaited(
-        _ command: BandCommand,
+    private nonisolated static func makeTransmitTask(
+        sender: @escaping CommandSender,
+        command: BandCommand,
+        envelope: ApplicationEnvelope,
+        token: UUID,
+        generation: UInt64,
+        session: InterconnectSession
+    ) -> Task<Void, Never> {
+        Task { [weak session, sender, command, envelope, token, generation] in
+            do {
+                try await sender(command)
+                await session?.transmitAwaitedCompleted(
+                    .success(()),
+                    envelope: envelope,
+                    token: token,
+                    generation: generation
+                )
+            } catch {
+                await session?.transmitAwaitedCompleted(
+                    .failure(error),
+                    envelope: envelope,
+                    token: token,
+                    generation: generation
+                )
+            }
+        }
+    }
+
+    private func transmitAwaitedCompleted(
+        _ result: Result<Void, Swift.Error>,
         envelope: ApplicationEnvelope,
         token: UUID,
         generation currentGeneration: UInt64
-    ) async {
+    ) {
         let id = envelope.id
         guard isCurrent(id: id, token: token, generation: currentGeneration) else { return }
-        do {
-            try await sendCommand(command)
-        } catch {
+        switch result {
+        case let .failure(error):
             guard isCurrent(id: id, token: token, generation: currentGeneration),
                   let pending = removeDelivery(id: id, token: token) else { return }
             pending.timeoutTask?.cancel()
             pending.waiter?.resume(throwing: error)
             eventContinuation.yield(.failed(id))
-            return
+        case .success:
+            finishSuccessfulTransmission(id: id, token: token, envelope: envelope)
         }
-        guard isCurrent(id: id, token: token, generation: currentGeneration) else { return }
-        finishSuccessfulTransmission(id: id, token: token, envelope: envelope)
     }
 
     private func startDeliveryTimeout(for id: String, token: UUID, generation: UInt64) {
@@ -267,9 +296,10 @@ public actor InterconnectSession {
         guard !isTerminal, self.generation == generation else {
             throw InterconnectDeliveryError.disconnected
         }
-        guard pendingDeliveries[id] == nil else {
+        guard pendingDeliveries[id] == nil, !issuedOutgoingIDs.contains(id) else {
             throw InterconnectDeliveryError.identifierCollision(id)
         }
+        issuedOutgoingIDs.insert(id)
         pendingDeliveries[id] = PendingDelivery(
             token: token,
             generation: generation,
@@ -317,6 +347,15 @@ public actor InterconnectSession {
         guard !isTerminal, self.generation == generation else { throw Error.notReady }
     }
 
+    private func ensureReceiveIsCurrent(
+        _ generation: UInt64,
+        identity expectedIdentity: ThirdPartyAppIdentity
+    ) throws {
+        guard !isTerminal, self.generation == generation, identity == expectedIdentity else {
+            throw Error.notReady
+        }
+    }
+
     private func terminate() -> ThirdPartyAppIdentity? {
         isTerminal = true
         generation &+= 1
@@ -331,6 +370,7 @@ public actor InterconnectSession {
         }
         recentIDs.removeAll()
         recentIDSet.removeAll()
+        issuedOutgoingIDs.removeAll()
         eventContinuation.yield(.disconnected)
         eventContinuation.finish()
         return disconnectedIdentity
