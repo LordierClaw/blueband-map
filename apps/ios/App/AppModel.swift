@@ -194,6 +194,9 @@ final class AppModel: ObservableObject {
             if let index = events.lastIndex(where: { $0.id == id }) { events[index].delivery = .acknowledged }
         case let .failed(id):
             if let index = events.lastIndex(where: { $0.id == id }) { events[index].delivery = .failed }
+        case .trustRejected:
+            rpkState = .failed("Fingerprint RPK đã thay đổi")
+            errorMessage = "Fingerprint RPK đã thay đổi. Chỉ reset trust nếu bạn vừa cài lại RPK tin cậy."
         }
     }
 

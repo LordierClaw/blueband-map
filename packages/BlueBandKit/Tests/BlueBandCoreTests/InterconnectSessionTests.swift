@@ -13,7 +13,9 @@ final class InterconnectSessionTests: XCTestCase {
         let recorder = CommandRecorder()
         let trust = MemoryTrustStore()
         let session = makeSession(recorder: recorder, trust: trust)
+        var events = await session.events().makeAsyncIterator()
         try await session.receive(.statusRequest(identity))
+        _ = await events.next()
         let enrolled = await trust.value()
         XCTAssertEqual(enrolled, identity.fingerprint)
 
@@ -24,6 +26,8 @@ final class InterconnectSessionTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? InterconnectSession.Error, .fingerprintMismatch)
         }
+        let rejectedEvent = await events.next()
+        XCTAssertEqual(rejectedEvent, .trustRejected)
         let firstCommandCount = await recorder.commands().count
         XCTAssertEqual(firstCommandCount, 1)
 

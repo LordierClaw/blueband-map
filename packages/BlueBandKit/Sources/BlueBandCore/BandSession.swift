@@ -136,8 +136,14 @@ public actor BandSession {
                     }
                     guard let command = try? BandCommand.decode(plaintext), command.type == 20,
                           let packet = try? ThirdPartyAppCodec.decode(command) else { continue }
-                    try await session.receive(packet)
-                    if case .statusRequest = packet { await self?.markApplicationReady() }
+                    do {
+                        try await session.receive(packet)
+                        if case .statusRequest = packet { await self?.markApplicationReady() }
+                    } catch {
+                        // Reject malformed, unexpected, or untrusted app packets without
+                        // surrendering the authenticated Band transport.
+                        continue
+                    }
                 }
             } catch {}
         }

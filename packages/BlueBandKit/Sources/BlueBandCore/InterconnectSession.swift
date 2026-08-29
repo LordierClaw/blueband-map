@@ -9,6 +9,7 @@ public enum InterconnectEvent: Equatable, Sendable {
     case received(ApplicationEnvelope)
     case acknowledged(String)
     case failed(String)
+    case trustRejected
 }
 
 public actor InterconnectSession {
@@ -111,6 +112,7 @@ public actor InterconnectSession {
         guard requestedIdentity.packageName == expectedPackage else { throw Error.unexpectedPackage }
         if let trusted = try await trustedRPKStore.trustedRPKFingerprint() {
             guard SessionCrypto.constantTimeEqual(trusted, requestedIdentity.fingerprint) else {
+                eventContinuation.yield(.trustRejected)
                 throw Error.fingerprintMismatch
             }
         } else {

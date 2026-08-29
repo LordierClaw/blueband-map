@@ -363,7 +363,7 @@ extension CoreBluetoothBandLink: CBPeripheralDelegate {
         if error != nil {
             notificationContinuation.finish(throwing: BandBLEError.disconnected)
         } else if let value = characteristic.value {
-            notificationContinuation.yield(value)
+            notificationContinuation.yield(Data(value))
         }
     }
 
