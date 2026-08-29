@@ -40,6 +40,8 @@ The repository intentionally does not support macOS virtualization on non-Apple 
 
 ## Engineering handbook
 
+- [Product overview and POC roadmap](docs/product/overview.md)
+- [Map/navigation feasibility review](docs/research/map-navigation-feasibility.md)
 - [Architecture overview](docs/architecture/overview.md)
 - [Module boundaries](docs/architecture/module-boundaries.md)
 - [Runtime state machine](docs/architecture/runtime-state-machine.md)
@@ -55,6 +57,7 @@ The repository intentionally does not support macOS virtualization on non-Apple 
 ## Design records
 
 - [Approved foundation design](docs/superpowers/specs/2026-08-29-blueband-map-foundation-design.md)
+- [Approved risk-first map/navigation POC design](docs/superpowers/specs/2026-08-29-blueband-map-poc-roadmap-design.md)
 - [Implementation plan](docs/superpowers/plans/2026-08-29-blueband-map-foundation.md)
 - [Architecture decisions](docs/adr/)
 
