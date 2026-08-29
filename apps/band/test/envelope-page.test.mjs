@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import test from "node:test"
 
@@ -45,6 +46,29 @@ function fakeCrypto(digest = DIGEST) {
     hashCalls,
     atob(value) { return Buffer.from(value, "base64").toString("binary") },
     hashDigest(options) { hashCalls.push(options); return digest }
+  }
+}
+
+function memoryHashCrypto(file) {
+  const hashCalls = []
+  return {
+    hashCalls,
+    atob(value) { return Buffer.from(value, "base64").toString("binary") },
+    hashDigest(options) {
+      hashCalls.push(options)
+      return createHash("sha256").update(Buffer.from(file.storage.get(options.uri))).digest("hex")
+    }
+  }
+}
+
+function pendingToken(page) {
+  assert.equal(typeof page.pendingPublication?.token, "string")
+  return page.pendingPublication.token
+}
+
+function assertBoundedBandEnvelopes(page, sent) {
+  for (const message of sent) {
+    assert.ok(page.utf8Length(JSON.stringify(message)) <= 512, JSON.stringify(message))
   }
 }
 
@@ -183,7 +207,8 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
   assert.equal(page.mapHashPrefix, "01234567")
   assert.deepEqual(sent.at(-1), { v: 1, id: "end-1", src: "band", type: "ack" })
   assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
-  page.mapComplete()
+  const token = pendingToken(page)
+  page.mapComplete(token)
   assert.deepEqual(sent.at(-1).body, {
     asset: ASSET,
     status: "ok",
@@ -193,8 +218,8 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
   assert.equal(sent.at(-1).topic, "map.asset.result")
   assert.match(sent.at(-1).id, /^b-[0-9]+-[0-9]+$/)
   const resultCount = sent.filter(message => message.topic === "map.asset.result").length
-  page.mapComplete()
-  page.mapError()
+  page.mapComplete(token)
+  page.mapError(token)
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
 })
 
@@ -222,7 +247,7 @@ test("deduplicates successful and in-flight asset messages without repeating sid
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
   assert.equal(sent.filter(message => message.id === "end-1").length, 2)
   assert.equal(page.activeMapOperationID, "end-1")
-  page.mapComplete()
+  page.mapComplete(pendingToken(page))
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 1)
   assert.equal(page.activeMapOperationID, "")
 })
@@ -259,7 +284,7 @@ test("holds asset A ownership through rendering and blocks the full asset B sequ
   page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
   assert.equal(sent.filter(message => message.type === "ack" && message.id === "end-1").length, 2)
   assert.equal(crypto.hashCalls.length, 1)
-  page.mapComplete()
+  page.mapComplete(pendingA.token)
   const okResults = sent.filter(message => message.topic === "map.asset.result" && message.body.status === "ok")
   assert.equal(okResults.length, 1)
   assert.equal(okResults[0].body.asset, ASSET)
@@ -284,18 +309,18 @@ test("serializes distinct chunks while coalescing the same in-flight ID", async 
   page.receiveMessage({ data: busyChunkB })
   assert.equal(writes.length, 1)
   assert.equal(writes[0].position, 0)
-  assert.equal(sent.at(-1).body.code, "ASSET_BUSY")
-  assert.equal(sent.some(message => message.type === "ack" && message.id === "chunk-b"), false)
+  assert.equal(sent.at(-2).body.code, "ASSET_BUSY")
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "chunk-b").length, 1)
   writes[0].success()
   assert.equal(page.activeMapOperationID, "")
 
   page.receiveMessage({
-    data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET, offset: 4, data: "+vv8/Q==" })
+    data: envelope("chunk-b-retry", "map.asset.chunk", { asset: ASSET, offset: 4, data: "+vv8/Q==" })
   })
   assert.equal(writes.length, 2)
   assert.equal(writes[1].position, 4)
   writes[1].success()
-  assert.equal(sent.filter(message => message.type === "ack" && message.id === "chunk-b").length, 1)
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "chunk-b-retry").length, 1)
 })
 
 test("connection unlock does not release a held map operation", async () => {
@@ -312,7 +337,7 @@ test("connection unlock does not release a held map operation", async () => {
     data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET, offset: 0, data: "+vv8/Q==" })
   })
   assert.equal(writes.length, 1)
-  assert.equal(sent.at(-1).body.code, "ASSET_BUSY")
+  assert.equal(sent.at(-2).body.code, "ASSET_BUSY")
   writes[0].success()
   assert.equal(page.activeMapOperationID, "")
 })
@@ -320,7 +345,8 @@ test("connection unlock does not release a held map operation", async () => {
 test("reports ASSET_RENDER only when image rendering fails and consumes lifecycle once", async () => {
   const { page, sent, file } = await pendingPublicationHarness()
   assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
-  page.mapError()
+  const token = pendingToken(page)
+  page.mapError(token)
   const results = sent.filter(message => message.topic === "map.asset.result")
   assert.equal(page.mapReady, false)
   assert.equal(results.length, 1)
@@ -335,27 +361,29 @@ test("reports ASSET_RENDER only when image rendering fails and consumes lifecycl
   assert.equal(page.activeMapOperationID, "")
   page.receiveMessage({ data: envelope("begin-b", "map.asset.begin", beginBody({ asset: ASSET_B, bytes: 4 })) })
   assert.equal(page.activeTransfer.asset, ASSET_B)
-  page.mapError()
-  page.mapComplete()
+  page.mapError(token)
+  page.mapComplete(token)
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 1)
   assert.equal(file.deletes.filter(uri => uri === URI).length, 1)
 })
 
 test("lock and destroy discard pending render publication", async () => {
   const locked = await pendingPublicationHarness()
+  const lockedToken = pendingToken(locked.page)
   locked.page.lock("IOS LINK CLOSED")
-  locked.page.mapComplete()
+  locked.page.mapComplete(lockedToken)
   assert.equal(locked.sent.some(message => message.topic === "map.asset.result"), false)
   assert.equal(locked.page.activeMapOperationID, "")
 
   const destroyed = await pendingPublicationHarness()
+  const destroyedToken = pendingToken(destroyed.page)
   destroyed.page.onDestroy()
-  destroyed.page.mapComplete()
+  destroyed.page.mapComplete(destroyedToken)
   assert.equal(destroyed.sent.some(message => message.topic === "map.asset.result"), false)
   assert.equal(destroyed.page.activeMapOperationID, "")
 })
 
-test("rejects chunk offset, Base64 and overflow with stable results and no ACK", async () => {
+test("rejects chunk offset, Base64 and overflow with stable results and ACK", async () => {
   for (const [id, body, code] of [
     ["bad-offset", { asset: ASSET, offset: 1, data: "AA==" }, "ASSET_OFFSET_INVALID"],
     ["bad-base64", { asset: ASSET, offset: 0, data: "@@@=" }, "ASSET_BASE64_INVALID"],
@@ -366,8 +394,8 @@ test("rejects chunk offset, Base64 and overflow with stable results and no ACK",
     page.receiveMessage({ data: envelope(id, "map.asset.chunk", body) })
     assert.equal(file.writes.length, 0)
     assert.equal(page.mapReady, false)
-    assert.equal(sent.some(message => message.type === "ack" && message.id === id), false)
-    assert.equal(sent.at(-1).body.code, code)
+    assert.equal(sent.filter(message => message.type === "ack" && message.id === id).length, 1)
+    assert.equal(sent.at(-2).body.code, code)
   }
 })
 
@@ -385,12 +413,12 @@ test("rejects wrong final length, digest mismatch and thrown hash with stable re
     page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
     page.receiveMessage({ data: envelope(`end-${scenario.name}`, "map.asset.end", { asset: ASSET }) })
     assert.equal(page.mapReady, false)
-    assert.equal(sent.at(-1).body.code, scenario.code)
-    assert.equal(sent.some(message => message.type === "ack" && message.id === `end-${scenario.name}`), false)
+    assert.equal(sent.at(-2).body.code, scenario.code)
+    assert.equal(sent.filter(message => message.type === "ack" && message.id === `end-${scenario.name}`).length, 1)
   }
 })
 
-test("write failure is retryable with the same ID and ACKs only corrected success", async () => {
+test("handled write failure is deduplicated and corrected retry requires a new ID", async () => {
   const file = memoryFile()
   let failFirst = true
   file.writeArrayBuffer = options => {
@@ -404,11 +432,14 @@ test("write failure is retryable with the same ID and ACKs only corrected succes
   page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({ bytes: 4 })) })
   const chunk = envelope("retry-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
   page.receiveMessage({ data: chunk })
-  assert.equal(sent.at(-1).body.code, "ASSET_WRITE_FAILED")
-  assert.equal(sent.some(message => message.type === "ack" && message.id === "retry-1"), false)
-  page.receiveMessage({ data: chunk })
-  assert.equal(file.writes.length, 2)
+  assert.equal(sent.at(-2).body.code, "ASSET_WRITE_FAILED")
   assert.equal(sent.filter(message => message.type === "ack" && message.id === "retry-1").length, 1)
+  page.receiveMessage({ data: chunk })
+  assert.equal(file.writes.length, 1)
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "retry-1").length, 2)
+  page.receiveMessage({ data: envelope("retry-2", "map.asset.chunk", chunk.body) })
+  assert.equal(file.writes.length, 2)
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "retry-2").length, 1)
 })
 
 test("validates every begin field, enforces one transfer and prepares files safely", async () => {
@@ -426,14 +457,14 @@ test("validates every begin field, enforces one transfer and prepares files safe
     const { page, sent } = await readyHarness(file)
     page.receiveMessage({ data: envelope(`invalid-${index}`, "map.asset.begin", body) })
     assert.equal(touched, false)
-    assert.equal(sent.at(-1).body.code, "ASSET_BEGIN_INVALID")
+    assert.equal(sent.at(-2).body.code, "ASSET_BEGIN_INVALID")
     assert.equal(page.activeTransfer, null)
   }
 
   const { page, sent } = await readyHarness()
   page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody()) })
   page.receiveMessage({ data: envelope("begin-2", "map.asset.begin", beginBody({ asset: "m1-fedcba9876543210" })) })
-  assert.equal(sent.at(-1).body.code, "ASSET_BUSY")
+  assert.equal(sent.at(-2).body.code, "ASSET_BUSY")
 
   const pendingAccess = []
   const pendingFile = { access(options) { pendingAccess.push(options) } }
@@ -441,15 +472,15 @@ test("validates every begin field, enforces one transfer and prepares files safe
   pending.page.receiveMessage({ data: envelope("pending-1", "map.asset.begin", beginBody()) })
   pending.page.receiveMessage({ data: envelope("pending-2", "map.asset.begin", beginBody({ asset: "m1-fedcba9876543210" })) })
   assert.equal(pendingAccess.length, 1)
-  assert.equal(pending.sent.at(-1).body.code, "ASSET_BUSY")
+  assert.equal(pending.sent.at(-2).body.code, "ASSET_BUSY")
 
   const deleteFile = memoryFile(new Map([[URI, new Uint8Array([9])]]))
   deleteFile.delete = ({ uri, fail }) => { deleteFile.deletes.push(uri); fail() }
   const failed = await readyHarness(deleteFile)
   failed.page.receiveMessage({ data: envelope("delete-1", "map.asset.begin", beginBody()) })
   assert.equal(failed.page.activeTransfer, null)
-  assert.equal(failed.sent.at(-1).body.code, "ASSET_DELETE_FAILED")
-  assert.equal(failed.sent.some(message => message.type === "ack" && message.id === "delete-1"), false)
+  assert.equal(failed.sent.at(-2).body.code, "ASSET_DELETE_FAILED")
+  assert.equal(failed.sent.filter(message => message.type === "ack" && message.id === "delete-1").length, 1)
 })
 
 test("bounds successful deduplication IDs to 64", async () => {
@@ -459,4 +490,156 @@ test("bounds successful deduplication IDs to 64", async () => {
   }
   assert.equal(page.recentIDs.length, 64)
   assert.equal(page.recentIDs[0], "echo-2")
+})
+
+test("lifecycle teardown makes pending access, delete and write callbacks inert and allows reconnect", async () => {
+  for (const lifecycle of ["lock", "onDestroy"]) {
+    for (const stage of ["access", "delete", "write"]) {
+      const pending = { access: [], delete: [], write: [] }
+      let controlled = true
+      const file = {
+        access(options) {
+          if (controlled && stage === "access") pending.access.push(options)
+          else if (controlled && stage === "delete") options.success()
+          else options.fail()
+        },
+        delete(options) {
+          if (controlled && stage === "delete") pending.delete.push(options)
+          else options.success()
+        },
+        writeArrayBuffer(options) {
+          if (controlled && stage === "write") pending.write.push(options)
+          else options.success()
+        }
+      }
+      const { page, sent } = await readyHarness(file)
+      page.receiveMessage({ data: envelope(`${lifecycle}-${stage}-begin`, "map.asset.begin", beginBody({ bytes: 4 })) })
+      if (stage === "write") {
+        page.receiveMessage({
+          data: envelope(`${lifecycle}-${stage}-chunk`, "map.asset.chunk", {
+            asset: ASSET, offset: 0, data: "AAECAw=="
+          })
+        })
+      }
+      const callback = pending[stage][0]
+      assert.ok(callback, `${lifecycle} ${stage} callback must be pending`)
+      const sentBefore = sent.length
+      const epochBefore = page.lifecycleEpoch
+      if (lifecycle === "lock") page.lock("IOS LINK CLOSED")
+      else page.onDestroy()
+      assert.equal(page.lifecycleEpoch, epochBefore + 1)
+      callback.success()
+      if (callback.fail) callback.fail()
+      assert.equal(sent.length, sentBefore)
+      assert.equal(page.activeMapOperationID, "")
+      assert.equal(page.activeTransfer, null)
+      assert.equal(page.pendingPublication, null)
+      assert.equal(page.mapReady, false)
+
+      controlled = false
+      page.unlock()
+      const freshID = `${lifecycle}-${stage}-fresh`
+      page.receiveMessage({ data: envelope(freshID, "map.asset.begin", beginBody({ bytes: 4 })) })
+      assert.equal(page.activeTransfer.asset, ASSET)
+      assert.equal(sent.filter(message => message.type === "ack" && message.id === freshID).length, 1)
+    }
+  }
+})
+
+test("immutable render token ignores stale A events while B remains pending", async () => {
+  const harness = await pendingPublicationHarness()
+  const { page, sent } = harness
+  const tokenA = pendingToken(page)
+  page.lock("IOS LINK CLOSED")
+  page.unlock()
+  page.receiveMessage({ data: envelope("begin-b", "map.asset.begin", beginBody({ asset: ASSET_B, bytes: 4 })) })
+  page.receiveMessage({
+    data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET_B, offset: 0, data: "AAECAw==" })
+  })
+  page.receiveMessage({ data: envelope("end-b", "map.asset.end", { asset: ASSET_B }) })
+  const tokenB = pendingToken(page)
+  assert.notEqual(tokenB, tokenA)
+  const pendingB = structuredClone(page.pendingPublication)
+  const resultCount = sent.filter(message => message.topic === "map.asset.result").length
+
+  page.mapComplete(tokenA)
+  page.mapError(tokenA)
+  assert.deepEqual(page.pendingPublication, pendingB)
+  assert.equal(page.activeMapOperationID, "end-b")
+  assert.equal(page.mapPath, `internal://files/${ASSET_B}.png`)
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
+
+  page.mapComplete(tokenB)
+  const results = sent.filter(message => message.topic === "map.asset.result")
+  assert.equal(results.at(-1).body.status, "ok")
+  assert.equal(results.at(-1).body.asset, ASSET_B)
+  assert.equal(page.activeMapOperationID, "")
+})
+
+test("render error token releases ownership and stale callbacks cannot consume the next publication", async () => {
+  const { page, sent } = await pendingPublicationHarness()
+  const tokenA = pendingToken(page)
+  page.mapError(tokenA)
+  assert.equal(page.activeMapOperationID, "")
+  page.receiveMessage({ data: envelope("begin-b", "map.asset.begin", beginBody({ asset: ASSET_B, bytes: 4 })) })
+  page.receiveMessage({ data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET_B, offset: 0, data: "AAECAw==" }) })
+  page.receiveMessage({ data: envelope("end-b", "map.asset.end", { asset: ASSET_B }) })
+  const tokenB = pendingToken(page)
+  page.mapComplete(tokenA)
+  page.mapError(tokenA)
+  assert.equal(page.pendingPublication.token, tokenB)
+  page.mapError(tokenB)
+  const errors = sent.filter(message => message.topic === "map.asset.result" && message.body.code === "ASSET_RENDER")
+  assert.equal(errors.length, 2)
+  assert.equal(errors.at(-1).body.asset, ASSET_B)
+  assert.equal(page.activeMapOperationID, "")
+})
+
+test("confirmed map survives lifecycle reset while an unconfirmed map is hidden and deleted", async () => {
+  const confirmed = await pendingPublicationHarness()
+  const token = pendingToken(confirmed.page)
+  confirmed.page.mapComplete(token)
+  const deleteCount = confirmed.file.deletes.length
+  confirmed.page.lock("IOS LINK CLOSED")
+  assert.equal(confirmed.file.deletes.length, deleteCount)
+  assert.equal(confirmed.page.mapReady, true)
+  assert.equal(confirmed.page.mapPath, URI)
+
+  const unconfirmed = await pendingPublicationHarness()
+  unconfirmed.page.lock("IOS LINK CLOSED")
+  assert.equal(unconfirmed.page.mapReady, false)
+  assert.deepEqual(unconfirmed.page.renderItems, [])
+  assert.equal(unconfirmed.file.deletes.filter(uri => uri === URI).length, 1)
+})
+
+test("handled failures ACK once, deduplicate result side effects, and bound adversarial result envelopes", async () => {
+  const { page, sent } = await readyHarness()
+  const invalidAssets = ["x".repeat(220), "地図".repeat(40), "m1-0123456789abcdeG"]
+  for (const [index, asset] of invalidAssets.entries()) {
+    const id = `invalid-asset-${index}`
+    const request = envelope(id, "map.asset.begin", beginBody({ asset }))
+    assert.ok(page.utf8Length(JSON.stringify(request)) <= 512)
+    page.receiveMessage({ data: request })
+    const resultCount = sent.filter(message => message.topic === "map.asset.result").length
+    page.receiveMessage({ data: request })
+    assert.equal(sent.filter(message => message.type === "ack" && message.id === id).length, 2)
+    assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
+    assert.equal(sent.findLast(message => message.topic === "map.asset.result").body.asset, "")
+  }
+  assertBoundedBandEnvelopes(page, sent)
+})
+
+test("hashes realistic memory-file bytes synchronously before render publication", async () => {
+  const file = memoryFile()
+  const crypto = memoryHashCrypto(file)
+  const bytes = new Uint8Array([0, 1, 2, 3])
+  const digest = createHash("sha256").update(bytes).digest("hex")
+  const { page, sent } = await readyHarness(file, crypto)
+  page.receiveMessage({ data: envelope("real-begin", "map.asset.begin", beginBody({ bytes: 4, sha256: digest })) })
+  page.receiveMessage({ data: envelope("real-chunk", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
+  page.receiveMessage({ data: envelope("real-end", "map.asset.end", { asset: ASSET }) })
+  assert.deepEqual(crypto.hashCalls, [{ uri: URI, algo: "SHA256" }])
+  assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
+  page.mapComplete(pendingToken(page))
+  assert.equal(sent.at(-1).body.sha256Prefix, digest.slice(0, 8))
 })

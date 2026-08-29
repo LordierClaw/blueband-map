@@ -14,7 +14,7 @@
       <text class="online">IOS CONNECTED</text>
       <text class="map-ready" if="{{ mapReady }}">M1 MAP READY</text>
       <text class="map-hash" if="{{ mapReady }}">SHA256 {{ mapHashPrefix }}</text>
-      <image class="map" if="{{ mapReady }}" src="{{ mapPath }}" object-fit="contain" @complete="mapComplete" @error="mapError" />
+      <image class="map" for="{{ renderItems }}" src="{{ $item.path }}" @complete="mapComplete($item.token)" @error="mapError($item.token)" />
       <div class="diagnostics" if="{{ showDiagnostics }}">
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
@@ -46,12 +46,18 @@ export default {
     logRows: [],
     recentIDs: [],
     inFlightIDs: [],
+    lifecycleEpoch: 0,
     activeMapOperationID: "",
     activeTransfer: null,
+    unconfirmedURI: "",
+    unconfirmedTouched: false,
     mapReady: false,
     mapPath: "",
     mapHashPrefix: "",
+    renderItems: [],
     pendingPublication: null,
+    confirmedMap: null,
+    nextRenderToken: 1,
     showDiagnostics: true,
     nextID: 1
   },
@@ -74,7 +80,7 @@ export default {
   },
 
   onDestroy() {
-    this.discardPendingPublication()
+    this.resetMapLifecycle()
     if (!this.connection) return
     this.connection.onopen = null
     this.connection.onclose = null
@@ -112,11 +118,38 @@ export default {
   },
 
   lock(reason) {
-    this.discardPendingPublication()
+    this.resetMapLifecycle()
     this.connected = false
     this.waiting = true
     this.statusText = reason
     this.detailText = "Reconnect on iPhone, then check again."
+  },
+
+  resetMapLifecycle() {
+    this.lifecycleEpoch = this.lifecycleEpoch + 1
+    var cleanupURI = this.pendingPublication ? this.pendingPublication.uri :
+      (this.activeTransfer ? this.activeTransfer.uri : this.unconfirmedURI)
+    var preserveURI = this.confirmedMap ? this.confirmedMap.uri : ""
+    var shouldDelete = cleanupURI && (cleanupURI !== preserveURI || this.unconfirmedTouched)
+    this.activeMapOperationID = ""
+    this.inFlightIDs = []
+    this.activeTransfer = null
+    this.pendingPublication = null
+    this.unconfirmedURI = ""
+    this.unconfirmedTouched = false
+    if (this.confirmedMap) {
+      this.mapPath = this.confirmedMap.uri
+      this.mapHashPrefix = this.confirmedMap.sha256Prefix
+      this.mapReady = true
+      this.renderItems = [{ path: this.confirmedMap.uri, token: this.confirmedMap.token }]
+    } else {
+      this.mapPath = ""
+      this.mapHashPrefix = ""
+      this.mapReady = false
+      this.renderItems = []
+      this.showDiagnostics = true
+    }
+    if (shouldDelete) this.deleteBestEffort(cleanupURI)
   },
 
   utf8Length(text) {
@@ -221,6 +254,7 @@ export default {
   beginAsset(message) {
     var page = this
     var body = message.body
+    var epoch = this.lifecycleEpoch
     if (!this.validBeginBody(body)) {
       this.failAsset(message, "ASSET_BEGIN_INVALID")
       return
@@ -239,10 +273,16 @@ export default {
       uri: "internal://files/" + body.asset + ".png",
       receivedBytes: 0
     }
+    this.unconfirmedURI = transfer.uri
+    this.unconfirmedTouched = false
     var activate = function () {
-      if (page.activeMapOperationID !== message.id) return
+      if (!page.ownsMapOperation(message.id, epoch)) return
+      if (page.confirmedMap && page.confirmedMap.uri === transfer.uri) page.confirmedMap = null
       page.activeTransfer = transfer
       page.mapReady = false
+      page.mapPath = ""
+      page.mapHashPrefix = ""
+      page.renderItems = []
       page.showDiagnostics = true
       page.succeedAsset(message.id)
     }
@@ -250,21 +290,31 @@ export default {
       file.access({
         uri: transfer.uri,
         success: function () {
-          if (page.activeMapOperationID !== message.id) return
+          if (!page.ownsMapOperation(message.id, epoch)) return
           try {
             file.delete({
               uri: transfer.uri,
-              success: activate,
-              fail: function () { page.failAsset(message, "ASSET_DELETE_FAILED") }
+              success: function () {
+                if (!page.ownsMapOperation(message.id, epoch)) return
+                page.unconfirmedTouched = true
+                activate()
+              },
+              fail: function () {
+                if (!page.ownsMapOperation(message.id, epoch)) return
+                page.failAsset(message, "ASSET_DELETE_FAILED")
+              }
             })
           } catch (error) {
-            page.failAsset(message, "ASSET_DELETE_FAILED")
+            if (page.ownsMapOperation(message.id, epoch)) page.failAsset(message, "ASSET_DELETE_FAILED")
           }
         },
-        fail: activate
+        fail: function () {
+          if (!page.ownsMapOperation(message.id, epoch)) return
+          activate()
+        }
       })
     } catch (error) {
-      this.failAsset(message, "ASSET_PREPARE_FAILED")
+      if (this.ownsMapOperation(message.id, epoch)) this.failAsset(message, "ASSET_PREPARE_FAILED")
     }
   },
 
@@ -287,6 +337,7 @@ export default {
     var page = this
     var transfer = this.activeTransfer
     var body = message.body
+    var epoch = this.lifecycleEpoch
     if (!transfer) {
       this.failAsset(message, "ASSET_NO_TRANSFER")
       return
@@ -309,19 +360,24 @@ export default {
       return
     }
     try {
+      this.unconfirmedURI = transfer.uri
+      this.unconfirmedTouched = true
       file.writeArrayBuffer({
         uri: transfer.uri,
         buffer: buffer,
         position: body.offset,
         success: function () {
-          if (page.activeMapOperationID !== message.id) return
+          if (!page.ownsMapOperation(message.id, epoch)) return
           transfer.receivedBytes = transfer.receivedBytes + buffer.length
           page.succeedAsset(message.id)
         },
-        fail: function () { page.failAsset(message, "ASSET_WRITE_FAILED") }
+        fail: function () {
+          if (!page.ownsMapOperation(message.id, epoch)) return
+          page.failAsset(message, "ASSET_WRITE_FAILED")
+        }
       })
     } catch (error) {
-      this.failAsset(message, "ASSET_WRITE_FAILED")
+      if (this.ownsMapOperation(message.id, epoch)) this.failAsset(message, "ASSET_WRITE_FAILED")
     }
   },
 
@@ -353,16 +409,21 @@ export default {
     var asset = transfer.asset
     var bytes = transfer.bytes
     var prefix = transfer.sha256.slice(0, 8)
+    var token = "render-" + this.lifecycleEpoch + "-" + this.nextRenderToken
+    this.nextRenderToken = this.nextRenderToken + 1
     this.mapPath = transfer.uri
     this.mapHashPrefix = prefix
     this.mapReady = true
+    this.renderItems = [{ path: transfer.uri, token: token }]
     this.showDiagnostics = false
     this.pendingPublication = {
       asset: asset,
       bytes: bytes,
       sha256Prefix: prefix,
       uri: transfer.uri,
-      operationID: message.id
+      operationID: message.id,
+      token: token,
+      epoch: this.lifecycleEpoch
     }
     this.activeTransfer = null
     this.holdSuccessfulAsset(message.id)
@@ -385,6 +446,10 @@ export default {
     this.sendACK(id)
   },
 
+  ownsMapOperation(id, epoch) {
+    return this.activeMapOperationID === id && this.lifecycleEpoch === epoch
+  },
+
   holdSuccessfulAsset(id) {
     if (this.activeMapOperationID !== id) return
     this.removeInFlight(id)
@@ -398,18 +463,28 @@ export default {
     var transfer = this.activeTransfer
     this.removeInFlight(message.id)
     if (code === "ASSET_BUSY") {
-      var rejectedAsset = typeof message.body.asset === "string" ? message.body.asset : ""
+      var rejectedAsset = this.safeAsset(message.body.asset)
       this.sendAssetResult(rejectedAsset, "error", 0, "", code)
+      this.rememberSuccess(message.id)
+      this.sendACK(message.id)
       return
     }
     if (discardTransfer && transfer) {
       this.activeTransfer = null
       this.deleteBestEffort(transfer.uri)
+      this.unconfirmedURI = ""
+      this.unconfirmedTouched = false
+      this.mapReady = false
+      this.mapPath = ""
+      this.mapHashPrefix = ""
+      this.renderItems = []
     }
     var asset = transfer ? transfer.asset : (typeof message.body.asset === "string" ? message.body.asset : "")
     var bytes = transfer ? transfer.receivedBytes : 0
     var prefix = transfer ? transfer.sha256.slice(0, 8) : ""
     this.sendAssetResult(asset, "error", bytes, prefix, code)
+    this.rememberSuccess(message.id)
+    this.sendACK(message.id)
   },
 
   releaseMapOperation(id) {
@@ -418,11 +493,8 @@ export default {
     return true
   },
 
-  discardPendingPublication() {
-    var publication = this.pendingPublication
-    if (!publication) return
-    this.pendingPublication = null
-    this.releaseMapOperation(publication.operationID)
+  safeAsset(asset) {
+    return typeof asset === "string" && /^m1-[0-9a-f]{16}$/.test(asset) ? asset : ""
   },
 
   deleteBestEffort(uri) {
@@ -434,8 +506,16 @@ export default {
   },
 
   sendAssetResult(asset, status, bytes, prefix, code) {
-    var body = { asset: asset, status: status, bytes: bytes, sha256Prefix: prefix }
-    if (code) body.code = code
+    var safeBytes = this.validInteger(bytes) && bytes >= 0 && bytes <= this.MAX_ASSET_BYTES ? bytes : 0
+    var safePrefix = typeof prefix === "string" && /^[0-9a-f]{8}$/.test(prefix) ? prefix : ""
+    var safeCode = typeof code === "string" && /^ASSET_[A-Z0-9_]{1,40}$/.test(code) ? code : ""
+    var body = {
+      asset: this.safeAsset(asset),
+      status: status === "ok" ? "ok" : "error",
+      bytes: safeBytes,
+      sha256Prefix: safePrefix
+    }
+    if (safeCode) body.code = safeCode
     var id = "b-" + Date.now() + "-" + this.nextID
     this.nextID = this.nextID + 1
     this.sendEnvelope({
@@ -504,21 +584,42 @@ export default {
     this.logText = "Echo ready."
   },
 
-  mapComplete() {
+  mapComplete(token) {
     var publication = this.pendingPublication
-    if (!publication || this.activeMapOperationID !== publication.operationID) return
+    if (!publication || token !== publication.token || this.lifecycleEpoch !== publication.epoch ||
+      this.activeMapOperationID !== publication.operationID) return
     this.pendingPublication = null
     if (!this.releaseMapOperation(publication.operationID)) return
+    this.unconfirmedURI = ""
+    this.unconfirmedTouched = false
+    this.confirmedMap = {
+      uri: publication.uri,
+      sha256Prefix: publication.sha256Prefix,
+      token: publication.token
+    }
     this.statusText = "M1 MAP READY"
     this.sendAssetResult(publication.asset, "ok", publication.bytes, publication.sha256Prefix)
   },
 
-  mapError() {
+  mapError(token) {
     var publication = this.pendingPublication
-    if (!publication || this.activeMapOperationID !== publication.operationID) return
+    if (!publication || token !== publication.token || this.lifecycleEpoch !== publication.epoch ||
+      this.activeMapOperationID !== publication.operationID) return
     this.pendingPublication = null
     if (!this.releaseMapOperation(publication.operationID)) return
-    this.mapReady = false
+    this.unconfirmedURI = ""
+    this.unconfirmedTouched = false
+    if (this.confirmedMap) {
+      this.mapPath = this.confirmedMap.uri
+      this.mapHashPrefix = this.confirmedMap.sha256Prefix
+      this.mapReady = true
+      this.renderItems = [{ path: this.confirmedMap.uri, token: this.confirmedMap.token }]
+    } else {
+      this.mapReady = false
+      this.mapPath = ""
+      this.mapHashPrefix = ""
+      this.renderItems = []
+    }
     this.showDiagnostics = true
     this.logText = "Map image display failed."
     this.deleteBestEffort(publication.uri)
@@ -541,7 +642,7 @@ export default {
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
 .map-ready { margin-top: 8px; font-size: 16px; font-weight: bold; color: #5dffb0; }
 .map-hash { margin-top: 3px; font-size: 12px; color: #a9bdd6; }
-.map { margin-top: 8px; width: 212px; height: 360px; }
+.map { margin-top: 8px; width: 212px; height: 360px; object-fit: contain; }
 .diagnostics { width: 212px; flex-direction: column; align-items: center; }
 .log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }
 .clear { margin-top: 10px; width: 184px; height: 40px; border-radius: 20px; font-size: 14px; color: #a9bdd6; background-color: #1f3652; }

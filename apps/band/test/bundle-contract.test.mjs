@@ -41,7 +41,9 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /hashDigest\s*\(\s*\{[^}]*success:/s)
   assert.match(page, /RPK 0\.2\.0/)
   assert.match(page, /<input[^>]+\/>/)
-  assert.match(page, /<image[^>]+if="\{\{ mapReady \}\}"[^>]+src="\{\{ mapPath \}\}"[^>]+object-fit="contain"[^>]+@complete="mapComplete"[^>]+@error="mapError"[^>]+\/>/)
+  assert.match(page, /<image[^>]+for="\{\{ renderItems \}\}"[^>]+src="\{\{ \$item\.path \}\}"[^>]+@complete="mapComplete\(\$item\.token\)"[^>]+@error="mapError\(\$item\.token\)"[^>]+\/>/)
+  assert.doesNotMatch(page, /<image[^>]+object-fit=/)
+  assert.match(page, /\.map\s*\{[^}]*object-fit:\s*contain;/s)
 })
 
 test("normal npm build exits successfully through canonical archive verification", { timeout: 120000 }, () => {
@@ -49,6 +51,8 @@ test("normal npm build exits successfully through canonical archive verification
     cwd: fileURLToPath(root),
     encoding: "utf8"
   })
-  assert.equal(result.status, 0, result.stdout + result.stderr)
+  const diagnostics = result.stdout + result.stderr
+  assert.equal(result.status, 0, diagnostics)
+  assert.doesNotMatch(diagnostics, /unsupport(?:ed)? attribute|unsupported (?:attribute|property)/i)
   assert.match(result.stdout, /verified .*\.0\.2\.0\.rpk/)
 })
