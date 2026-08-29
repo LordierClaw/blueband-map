@@ -40,6 +40,7 @@ public actor InterconnectSession {
     private var recentIDSet: Set<String> = []
     private var deliveryTasks: [String: Task<Void, Never>] = [:]
     private var deliveryWaiters: [String: CheckedContinuation<String, Swift.Error>] = [:]
+    private var earlyAcknowledgements: Set<String> = []
 
     public init(
         expectedPackage: String,
@@ -74,12 +75,13 @@ public actor InterconnectSession {
                 try await sendCommand(ThirdPartyAppCodec.phoneMessage(identity: identity, content: try ack.encoded()))
                 if remember(envelope.id) { eventContinuation.yield(.received(envelope)) }
             case .ack:
-                let task = deliveryTasks.removeValue(forKey: envelope.id)
-                let waiter = deliveryWaiters.removeValue(forKey: envelope.id)
-                if task != nil || waiter != nil {
-                    task?.cancel()
+                if let task = deliveryTasks.removeValue(forKey: envelope.id) {
+                    task.cancel()
+                    let waiter = deliveryWaiters.removeValue(forKey: envelope.id)
                     eventContinuation.yield(.acknowledged(envelope.id))
                     waiter?.resume(returning: envelope.id)
+                } else if deliveryWaiters[envelope.id] != nil {
+                    earlyAcknowledgements.insert(envelope.id)
                 }
             }
         }
@@ -109,18 +111,21 @@ public actor InterconnectSession {
     }
 
     public func disconnect() async {
-        if let identity {
-            try? await sendCommand(ThirdPartyAppCodec.status(identity: identity, connected: false))
-        }
+        let disconnectedIdentity = identity
+        identity = nil
         deliveryTasks.values.forEach { $0.cancel() }
         deliveryTasks.removeAll()
-        deliveryWaiters.values.forEach { $0.resume(throwing: InterconnectDeliveryError.disconnected) }
+        earlyAcknowledgements.removeAll()
+        let waiters = Array(deliveryWaiters.values)
         deliveryWaiters.removeAll()
-        identity = nil
+        waiters.forEach { $0.resume(throwing: InterconnectDeliveryError.disconnected) }
         recentIDs.removeAll()
         recentIDSet.removeAll()
         eventContinuation.yield(.disconnected)
         eventContinuation.finish()
+        if let disconnectedIdentity {
+            try? await sendCommand(ThirdPartyAppCodec.status(identity: disconnectedIdentity, connected: false))
+        }
     }
 
     private func accept(_ requestedIdentity: ThirdPartyAppIdentity) async throws {
@@ -152,6 +157,7 @@ public actor InterconnectSession {
             try await sendCommand(command)
         } catch {
             deliveryTasks.removeValue(forKey: id)?.cancel()
+            earlyAcknowledgements.remove(id)
             guard let waiter = deliveryWaiters.removeValue(forKey: id) else { return }
             waiter.resume(throwing: error)
             eventContinuation.yield(.failed(id))
@@ -159,7 +165,13 @@ public actor InterconnectSession {
         }
         guard deliveryWaiters[id] != nil else { return }
         eventContinuation.yield(.sent(envelope))
-        startDeliveryTimeout(for: id)
+        if earlyAcknowledgements.remove(id) != nil {
+            let waiter = deliveryWaiters.removeValue(forKey: id)
+            eventContinuation.yield(.acknowledged(id))
+            waiter?.resume(returning: id)
+        } else {
+            startDeliveryTimeout(for: id)
+        }
     }
 
     private func startDeliveryTimeout(for id: String) {

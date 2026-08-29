@@ -302,6 +302,127 @@ final class InterconnectSessionTests: XCTestCase {
         XCTAssertEqual(firstAcknowledged, .acknowledged("i-first"))
     }
 
+    func testEarlyAcknowledgementWaitsForSuccessfulTransmissionThenOrdersEvents() async throws {
+        let sender = ControllableCommandSender()
+        let clock = ImmediateRecordingClock()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            clock: clock,
+            idGenerator: { "i-early-success" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let result = Task {
+            try await session.sendAwaitingAcknowledgement(topic: "system.echo", body: [:])
+        }
+        let outgoing = await sender.waitForPhoneCommand()
+        let envelope = try decodePhoneEnvelope(outgoing)
+        let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+
+        await sender.releasePhone(with: .success(()))
+        let returnedID = try await result.value
+        await session.disconnect()
+
+        var remainingEvents: [InterconnectEvent] = []
+        while let event = await events.next() { remainingEvents.append(event) }
+        let timeoutDuration = await clock.lastDuration()
+        XCTAssertEqual(returnedID, "i-early-success")
+        XCTAssertEqual(remainingEvents, [.sent(envelope), .acknowledged(envelope.id), .disconnected])
+        XCTAssertNil(timeoutDuration)
+    }
+
+    func testEarlyAcknowledgementCannotOverrideOriginalSendFailure() async throws {
+        let sender = ControllableCommandSender()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            idGenerator: { "i-early-failure" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let result = Task<Result<String, Swift.Error>, Never> {
+            do {
+                return .success(try await session.sendAwaitingAcknowledgement(topic: "system.echo", body: [:]))
+            } catch {
+                return .failure(error)
+            }
+        }
+        let outgoing = await sender.waitForPhoneCommand()
+        let envelope = try decodePhoneEnvelope(outgoing)
+        let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+
+        await sender.releasePhone(with: .failure(.rejected))
+        let outcome = await result.value
+        await session.disconnect()
+
+        guard case let .failure(error) = outcome else {
+            return XCTFail("Expected original send failure")
+        }
+        var remainingEvents: [InterconnectEvent] = []
+        while let event = await events.next() { remainingEvents.append(event) }
+        XCTAssertEqual(error as? TestSendError, .rejected)
+        XCTAssertEqual(remainingEvents, [.failed(envelope.id), .disconnected])
+    }
+
+    func testDisconnectInvalidatesAwaitedSendBeforeBlockedStatusTransmission() async throws {
+        let sender = ControllableCommandSender(suspendDisconnectStatus: true)
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            idGenerator: { "i-disconnect-race" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let result = Task<Result<String, Swift.Error>, Never> {
+            do {
+                return .success(try await session.sendAwaitingAcknowledgement(topic: "system.echo", body: [:]))
+            } catch {
+                return .failure(error)
+            }
+        }
+        let outgoing = await sender.waitForPhoneCommand()
+        let envelope = try decodePhoneEnvelope(outgoing)
+        let disconnectTask = Task { await session.disconnect() }
+        let statusCommand = await sender.waitForDisconnectStatusCommand()
+
+        let lateAck = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        do {
+            try await session.receive(.wearMessage(identity: identity, content: try lateAck.encoded()))
+            XCTFail("Expected disconnected session to reject ACK")
+        } catch {
+            XCTAssertEqual(error as? InterconnectSession.Error, .notReady)
+        }
+        let outcome = await result.value
+
+        await sender.releasePhone(with: .success(()))
+        await sender.releaseDisconnectStatus()
+        await disconnectTask.value
+
+        guard case let .failure(error) = outcome else {
+            return XCTFail("Expected disconnected delivery")
+        }
+        var remainingEvents: [InterconnectEvent] = []
+        while let event = await events.next() { remainingEvents.append(event) }
+        XCTAssertEqual(error as? InterconnectDeliveryError, .disconnected)
+        XCTAssertEqual(
+            statusCommand,
+            ThirdPartyAppCodec.status(identity: identity, connected: false)
+        )
+        XCTAssertEqual(remainingEvents, [.disconnected])
+    }
+
     private func makeSession(
         recorder: CommandRecorder,
         trust: MemoryTrustStore,
@@ -382,6 +503,66 @@ private actor FailingCommandRecorder {
     }
 
     func attemptCount() -> Int { attempts }
+}
+
+private actor ControllableCommandSender {
+    private let suspendDisconnectStatus: Bool
+    private var statusCount = 0
+    private var phoneCommand: BandCommand?
+    private var disconnectStatusCommand: BandCommand?
+    private var phoneContinuation: CheckedContinuation<Void, Swift.Error>?
+    private var disconnectStatusContinuation: CheckedContinuation<Void, Never>?
+    private var phoneWaiters: [CheckedContinuation<BandCommand, Never>] = []
+    private var disconnectStatusWaiters: [CheckedContinuation<BandCommand, Never>] = []
+
+    init(suspendDisconnectStatus: Bool = false) {
+        self.suspendDisconnectStatus = suspendDisconnectStatus
+    }
+
+    func send(_ command: BandCommand) async throws {
+        if command.subtype == 7 {
+            statusCount += 1
+            guard suspendDisconnectStatus, statusCount > 1 else { return }
+            disconnectStatusCommand = command
+            disconnectStatusWaiters.forEach { $0.resume(returning: command) }
+            disconnectStatusWaiters.removeAll()
+            await withCheckedContinuation { continuation in
+                disconnectStatusContinuation = continuation
+            }
+            return
+        }
+        guard command.subtype == 8 else { return }
+        phoneCommand = command
+        try await withCheckedThrowingContinuation { continuation in
+            phoneContinuation = continuation
+            phoneWaiters.forEach { $0.resume(returning: command) }
+            phoneWaiters.removeAll()
+        }
+    }
+
+    func waitForPhoneCommand() async -> BandCommand {
+        if let phoneCommand { return phoneCommand }
+        return await withCheckedContinuation { phoneWaiters.append($0) }
+    }
+
+    func waitForDisconnectStatusCommand() async -> BandCommand {
+        if let disconnectStatusCommand { return disconnectStatusCommand }
+        return await withCheckedContinuation { disconnectStatusWaiters.append($0) }
+    }
+
+    func releasePhone(with result: Result<Void, TestSendError>) {
+        guard let continuation = phoneContinuation else { return }
+        phoneContinuation = nil
+        switch result {
+        case .success: continuation.resume()
+        case let .failure(error): continuation.resume(throwing: error)
+        }
+    }
+
+    func releaseDisconnectStatus() {
+        disconnectStatusContinuation?.resume()
+        disconnectStatusContinuation = nil
+    }
 }
 
 private final class LockedIDSequence: @unchecked Sendable {
