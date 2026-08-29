@@ -3,11 +3,12 @@ import BlueBandCore
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @State private var isConfigPresented = false
+    @State private var isBandPickerPresented = false
 
     var body: some View {
         NavigationStack {
             Form {
-                authSection
                 devicesSection
                 connectionSection
                 proofSection
@@ -24,47 +25,22 @@ struct ContentView: View {
                 }
             }
             .navigationTitle(BlueBandProduct.displayName)
-        }
-    }
-
-    private var authSection: some View {
-        Section("AuthKey") {
-            SecureField("32 ký tự hex", text: $model.authKeyInput)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button("Lưu vào Keychain") { model.saveKey() }.disabled(model.authKeyInput.isEmpty)
-            if model.hasSavedKey {
-                Label("Đã lưu trên thiết bị", systemImage: "checkmark.shield").foregroundStyle(.green)
-                Button("Xóa AuthKey", role: .destructive) { model.deleteKey() }
+            .toolbar {
+                Button("Cấu hình") { isConfigPresented = true }
+            }
+            .sheet(isPresented: $isConfigPresented) {
+                ConfigView(model: model)
+            }
+            .sheet(isPresented: $isBandPickerPresented) {
+                BandPickerView(model: model)
             }
         }
     }
 
     private var devicesSection: some View {
         Section("Xiaomi Smart Band 10") {
-            if let band = model.rememberedBand {
-                HStack {
-                    VStack(alignment: .leading) { Text(band.name); Text("Đã nhớ").font(.caption).foregroundStyle(.secondary) }
-                    Spacer()
-                    Button("Kết nối") { Task { await model.connect(to: BandCandidate(id: band.id, name: band.name, rssi: nil)) } }
-                }
-                Button("Quên band", role: .destructive) { model.forgetBand() }
-            }
-            HStack {
-                Button("Quét BLE") { Task { await model.scan() } }.disabled(model.sessionState != .idle)
-                Spacer()
-                if model.sessionState == .scanning { Button("Dừng") { Task { await model.stopScan() } } }
-            }
-            if !model.candidates.isEmpty { Button("Xóa kết quả") { Task { await model.stopScan(clear: true) } } }
-            ForEach(model.candidates) { candidate in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(candidate.name)
-                        Text(candidate.rssi.map { "RSSI \($0) dBm" } ?? "Đã biết bởi iOS").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Kết nối") { Task { await model.connect(to: candidate) } }
-                }
-            }
+            Button("Kết nối") { isBandPickerPresented = true }
+                .disabled(model.sessionState != .idle)
             Text("Chỉ chọn Band 10. Mi Fitness phải đóng trong lúc BlueBandMap giữ phiên Xiaomi.")
                 .font(.caption).foregroundStyle(.secondary)
         }

@@ -26,6 +26,7 @@ struct BlueBandMapApp: App {
         )
         _model = StateObject(wrappedValue: AppModel(
             keyStore: KeychainAuthKeyStore(),
+            vietmapKeyStore: KeychainVietmapKeyStore(),
             bandStore: UserDefaultsRememberedBandStore(),
             trustedRPKStore: trustStore,
             central: central,

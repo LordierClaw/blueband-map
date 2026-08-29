@@ -27,8 +27,12 @@ struct EchoEntry: Identifiable, Equatable, Sendable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var authKeyInput = ""
+    @Published var tileMapKeyInput = ""
+    @Published var serviceKeyInput = ""
     @Published var echoInput = "PING"
     @Published private(set) var hasSavedKey = false
+    @Published private(set) var hasTileMapKey = false
+    @Published private(set) var hasServiceKey = false
     @Published private(set) var candidates: [BandCandidate] = []
     @Published private(set) var rememberedBand: RememberedBand?
     @Published private(set) var sessionState: SessionState = .idle
@@ -38,6 +42,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private let keyStore: any AuthKeyStoreProtocol
+    private let vietmapKeyStore: any VietmapKeyStoreProtocol
     private let bandStore: any RememberedBandStoreProtocol
     private let trustedRPKStore: any TrustedRPKStore
     private let central: any BandCentralProtocol
@@ -48,6 +53,7 @@ final class AppModel: ObservableObject {
 
     init(
         keyStore: any AuthKeyStoreProtocol,
+        vietmapKeyStore: any VietmapKeyStoreProtocol,
         bandStore: any RememberedBandStoreProtocol,
         trustedRPKStore: any TrustedRPKStore,
         central: any BandCentralProtocol,
@@ -55,6 +61,7 @@ final class AppModel: ObservableObject {
         scanDuration: Duration = .seconds(15)
     ) {
         self.keyStore = keyStore
+        self.vietmapKeyStore = vietmapKeyStore
         self.bandStore = bandStore
         self.trustedRPKStore = trustedRPKStore
         self.central = central
@@ -63,6 +70,11 @@ final class AppModel: ObservableObject {
         rememberedBand = bandStore.load()
         do { hasSavedKey = try keyStore.load() != nil }
         catch { errorMessage = "Không đọc được AuthKey trong Keychain." }
+        loadVietmapKeyHealth()
+    }
+
+    var pickerCandidates: [BandCandidate] {
+        BandCandidateOrdering.order(candidates, remembered: rememberedBand)
     }
 
     func saveKey() {
@@ -79,11 +91,47 @@ final class AppModel: ObservableObject {
     }
 
     func deleteKey() {
+        errorMessage = nil
         do {
             try keyStore.delete()
             authKeyInput = ""
             hasSavedKey = false
         } catch { errorMessage = "Không xóa được AuthKey khỏi Keychain." }
+    }
+
+    func saveVietmapKey(_ kind: VietmapKeyKind) {
+        errorMessage = nil
+        do {
+            switch kind {
+            case .tileMap:
+                try vietmapKeyStore.save(tileMapKeyInput, kind: .tileMap)
+                tileMapKeyInput = ""
+                hasTileMapKey = true
+            case .service:
+                try vietmapKeyStore.save(serviceKeyInput, kind: .service)
+                serviceKeyInput = ""
+                hasServiceKey = true
+            }
+        } catch {
+            errorMessage = "Không lưu được cấu hình Vietmap vào Keychain."
+        }
+    }
+
+    func deleteVietmapKey(_ kind: VietmapKeyKind) {
+        errorMessage = nil
+        do {
+            try vietmapKeyStore.delete(kind)
+            switch kind {
+            case .tileMap:
+                tileMapKeyInput = ""
+                hasTileMapKey = false
+            case .service:
+                serviceKeyInput = ""
+                hasServiceKey = false
+            }
+        } catch {
+            errorMessage = "Không xóa được cấu hình Vietmap khỏi Keychain."
+        }
     }
 
     func scan() async {
@@ -102,7 +150,7 @@ final class AppModel: ObservableObject {
         defer { timeout.cancel() }
         do {
             for try await batch in stream where generation == scanGeneration {
-                candidates = Array(batch.sorted { ($0.rssi ?? .min) > ($1.rssi ?? .min) }.prefix(20))
+                candidates = batch
             }
         } catch { errorMessage = safeMessage(for: error) }
         if sessionState == .scanning { sessionState = .idle }
@@ -129,7 +177,11 @@ final class AppModel: ObservableObject {
             try await session.connect(candidate: candidate, authKey: key)
             sessionState = .readingDeviceProof
             snapshot = try await session.requestProofData()
-            let remembered = RememberedBand(id: candidate.id, name: candidate.name)
+            let remembered = RememberedBand(
+                id: candidate.id,
+                name: candidate.name,
+                lastConnectedAt: Date()
+            )
             bandStore.save(remembered)
             rememberedBand = remembered
             sessionState = .waitingForRpk
@@ -176,6 +228,19 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self?.consume(event)
             }
+        }
+    }
+
+    private func loadVietmapKeyHealth() {
+        do {
+            hasTileMapKey = try vietmapKeyStore.load(.tileMap) != nil
+        } catch {
+            errorMessage = "Không đọc được cấu hình Vietmap trong Keychain."
+        }
+        do {
+            hasServiceKey = try vietmapKeyStore.load(.service) != nil
+        } catch {
+            errorMessage = "Không đọc được cấu hình Vietmap trong Keychain."
         }
     }
 
