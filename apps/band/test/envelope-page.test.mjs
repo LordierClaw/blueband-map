@@ -76,6 +76,14 @@ async function readyHarness(file = memoryFile(), crypto = fakeCrypto()) {
   return { page, sent, file, crypto }
 }
 
+async function pendingPublicationHarness(file = memoryFile(), crypto = fakeCrypto()) {
+  const harness = await readyHarness(file, crypto)
+  harness.page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({ bytes: 4 })) })
+  harness.page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
+  harness.page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
+  return harness
+}
+
 test("valid iOS echo is ACKed every time but rendered once", async () => {
   const sent = []
   const page = await loadPage({ send(options) { sent.push(options.data) } })
@@ -170,7 +178,9 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
   assert.equal(page.mapReady, true)
   assert.equal(page.mapPath, URI)
   assert.equal(page.mapHashPrefix, "01234567")
-  assert.deepEqual(sent.at(-2), { v: 1, id: "end-1", src: "band", type: "ack" })
+  assert.deepEqual(sent.at(-1), { v: 1, id: "end-1", src: "band", type: "ack" })
+  assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
+  page.mapComplete()
   assert.deepEqual(sent.at(-1).body, {
     asset: ASSET,
     status: "ok",
@@ -179,6 +189,10 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
   })
   assert.equal(sent.at(-1).topic, "map.asset.result")
   assert.match(sent.at(-1).id, /^b-[0-9]+-[0-9]+$/)
+  const resultCount = sent.filter(message => message.topic === "map.asset.result").length
+  page.mapComplete()
+  page.mapError()
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
 })
 
 test("deduplicates successful and in-flight asset messages without repeating side effects", async () => {
@@ -204,6 +218,94 @@ test("deduplicates successful and in-flight asset messages without repeating sid
   assert.equal(crypto.hashCalls.length, 1)
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
   assert.equal(sent.filter(message => message.id === "end-1").length, 2)
+  page.mapComplete()
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 1)
+})
+
+test("serializes distinct chunks while coalescing the same in-flight ID", async () => {
+  const file = memoryFile()
+  const writes = []
+  file.writeArrayBuffer = options => writes.push(options)
+  const { page, sent } = await readyHarness(file)
+  page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody()) })
+  const chunkA = envelope("chunk-a", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
+  const busyChunkB = envelope("chunk-b", "map.asset.chunk", { asset: ASSET, offset: 0, data: "+vv8/Q==" })
+  page.receiveMessage({ data: chunkA })
+  page.receiveMessage({ data: chunkA })
+  page.receiveMessage({ data: busyChunkB })
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].position, 0)
+  assert.equal(sent.at(-1).body.code, "ASSET_BUSY")
+  assert.equal(sent.some(message => message.type === "ack" && message.id === "chunk-b"), false)
+  writes[0].success()
+  assert.equal(page.activeMapOperationID, "")
+
+  page.receiveMessage({
+    data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET, offset: 4, data: "+vv8/Q==" })
+  })
+  assert.equal(writes.length, 2)
+  assert.equal(writes[1].position, 4)
+  writes[1].success()
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "chunk-b").length, 1)
+})
+
+test("connection unlock does not release a held map operation", async () => {
+  const file = memoryFile()
+  const writes = []
+  file.writeArrayBuffer = options => writes.push(options)
+  const { page, sent } = await readyHarness(file)
+  page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody()) })
+  page.receiveMessage({
+    data: envelope("chunk-a", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
+  })
+  page.unlock()
+  page.receiveMessage({
+    data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET, offset: 0, data: "+vv8/Q==" })
+  })
+  assert.equal(writes.length, 1)
+  assert.equal(sent.at(-1).body.code, "ASSET_BUSY")
+  writes[0].success()
+  assert.equal(page.activeMapOperationID, "")
+})
+
+test("reports ASSET_RENDER only when image rendering fails and consumes lifecycle once", async () => {
+  const { page, sent, file } = await pendingPublicationHarness()
+  assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
+  page.mapError()
+  const results = sent.filter(message => message.topic === "map.asset.result")
+  assert.equal(page.mapReady, false)
+  assert.equal(results.length, 1)
+  assert.deepEqual(results[0].body, {
+    asset: ASSET,
+    status: "error",
+    bytes: 4,
+    sha256Prefix: "01234567",
+    code: "ASSET_RENDER"
+  })
+  assert.equal(file.deletes.filter(uri => uri === URI).length, 1)
+  page.mapError()
+  page.mapComplete()
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 1)
+  assert.equal(file.deletes.filter(uri => uri === URI).length, 1)
+})
+
+test("new begin, lock and destroy discard pending render publication", async () => {
+  const newBegin = await pendingPublicationHarness()
+  newBegin.page.receiveMessage({
+    data: envelope("begin-2", "map.asset.begin", beginBody({ asset: "m1-fedcba9876543210" }))
+  })
+  newBegin.page.mapComplete()
+  assert.equal(newBegin.sent.some(message => message.topic === "map.asset.result"), false)
+
+  const locked = await pendingPublicationHarness()
+  locked.page.lock("IOS LINK CLOSED")
+  locked.page.mapComplete()
+  assert.equal(locked.sent.some(message => message.topic === "map.asset.result"), false)
+
+  const destroyed = await pendingPublicationHarness()
+  destroyed.page.onDestroy()
+  destroyed.page.mapComplete()
+  assert.equal(destroyed.sent.some(message => message.topic === "map.asset.result"), false)
 })
 
 test("rejects chunk offset, Base64 and overflow with stable results and no ACK", async () => {

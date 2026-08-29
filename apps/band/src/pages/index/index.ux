@@ -46,11 +46,12 @@ export default {
     logRows: [],
     recentIDs: [],
     inFlightIDs: [],
-    preparingAssetID: "",
+    activeMapOperationID: "",
     activeTransfer: null,
     mapReady: false,
     mapPath: "",
     mapHashPrefix: "",
+    pendingPublication: null,
     showDiagnostics: true,
     nextID: 1
   },
@@ -73,6 +74,7 @@ export default {
   },
 
   onDestroy() {
+    this.pendingPublication = null
     if (!this.connection) return
     this.connection.onopen = null
     this.connection.onclose = null
@@ -106,12 +108,11 @@ export default {
     this.connected = true
     this.logRows = []
     this.recentIDs = []
-    this.inFlightIDs = []
-    this.preparingAssetID = ""
     this.logText = "Echo ready."
   },
 
   lock(reason) {
+    this.pendingPublication = null
     this.connected = false
     this.waiting = true
     this.statusText = reason
@@ -178,8 +179,15 @@ export default {
     }
     if (this.inFlightIDs.indexOf(message.id) >= 0) return
     if (message.topic.indexOf("map.asset.") === 0) {
+      if (this.activeMapOperationID) {
+        this.failAsset(message, "ASSET_BUSY")
+        return
+      }
+      this.activeMapOperationID = message.id
       this.inFlightIDs.push(message.id)
-      this.receiveAssetMessage(message)
+      try { this.receiveAssetMessage(message) } catch (error) {
+        this.failAsset(message, "ASSET_OPERATION_FAILED")
+      }
       return
     }
     if (message.topic === "system.echo") {
@@ -217,11 +225,11 @@ export default {
       this.failAsset(message, "ASSET_BEGIN_INVALID")
       return
     }
-    if (this.activeTransfer || this.preparingAssetID) {
+    if (this.activeTransfer) {
       this.failAsset(message, "ASSET_BUSY")
       return
     }
-    this.preparingAssetID = message.id
+    this.pendingPublication = null
     var transfer = {
       asset: body.asset,
       bytes: body.bytes,
@@ -233,7 +241,7 @@ export default {
       receivedBytes: 0
     }
     var activate = function () {
-      page.preparingAssetID = ""
+      if (page.activeMapOperationID !== message.id) return
       page.activeTransfer = transfer
       page.mapReady = false
       page.showDiagnostics = true
@@ -243,24 +251,20 @@ export default {
       file.access({
         uri: transfer.uri,
         success: function () {
+          if (page.activeMapOperationID !== message.id) return
           try {
             file.delete({
               uri: transfer.uri,
               success: activate,
-              fail: function () {
-                page.preparingAssetID = ""
-                page.failAsset(message, "ASSET_DELETE_FAILED")
-              }
+              fail: function () { page.failAsset(message, "ASSET_DELETE_FAILED") }
             })
           } catch (error) {
-            page.preparingAssetID = ""
             page.failAsset(message, "ASSET_DELETE_FAILED")
           }
         },
         fail: activate
       })
     } catch (error) {
-      this.preparingAssetID = ""
       this.failAsset(message, "ASSET_PREPARE_FAILED")
     }
   },
@@ -311,6 +315,7 @@ export default {
         buffer: buffer,
         position: body.offset,
         success: function () {
+          if (page.activeMapOperationID !== message.id) return
           transfer.receivedBytes = transfer.receivedBytes + buffer.length
           page.succeedAsset(message.id)
         },
@@ -353,9 +358,9 @@ export default {
     this.mapHashPrefix = prefix
     this.mapReady = true
     this.showDiagnostics = false
+    this.pendingPublication = { asset: asset, bytes: bytes, sha256Prefix: prefix, uri: transfer.uri }
     this.activeTransfer = null
     this.succeedAsset(message.id)
-    this.sendAssetResult(asset, "ok", bytes, prefix)
   },
 
   removeInFlight(id) {
@@ -369,12 +374,15 @@ export default {
   },
 
   succeedAsset(id) {
+    if (!this.releaseMapOperation(id)) return
     this.removeInFlight(id)
     this.rememberSuccess(id)
     this.sendACK(id)
   },
 
   failAsset(message, code, discardTransfer) {
+    var owned = this.releaseMapOperation(message.id)
+    if (!owned && code !== "ASSET_BUSY") return
     var transfer = this.activeTransfer
     this.removeInFlight(message.id)
     if (discardTransfer && transfer) {
@@ -385,6 +393,12 @@ export default {
     var bytes = transfer ? transfer.receivedBytes : 0
     var prefix = transfer ? transfer.sha256.slice(0, 8) : ""
     this.sendAssetResult(asset, "error", bytes, prefix, code)
+  },
+
+  releaseMapOperation(id) {
+    if (this.activeMapOperationID !== id) return false
+    this.activeMapOperationID = ""
+    return true
   },
 
   deleteBestEffort(uri) {
@@ -467,13 +481,22 @@ export default {
   },
 
   mapComplete() {
+    var publication = this.pendingPublication
+    if (!publication) return
+    this.pendingPublication = null
     this.statusText = "M1 MAP READY"
+    this.sendAssetResult(publication.asset, "ok", publication.bytes, publication.sha256Prefix)
   },
 
   mapError() {
+    var publication = this.pendingPublication
+    if (!publication) return
+    this.pendingPublication = null
     this.mapReady = false
     this.showDiagnostics = true
     this.logText = "Map image display failed."
+    this.deleteBestEffort(publication.uri)
+    this.sendAssetResult(publication.asset, "error", publication.bytes, publication.sha256Prefix, "ASSET_RENDER")
   }
 }
 </script>

@@ -45,7 +45,14 @@ for (const required of [
   if (!files.has(required)) throw new Error(`RPK missing ${required}`)
 }
 const manifest = JSON.parse(files.get("manifest.json").toString("utf8"))
-if (manifest.package !== "dev.lordierclaw.bluebandmap.band" || manifest.icon !== "/common/icon.png" || manifest.versionCode !== 1 || manifest.config.designWidth !== 212) {
+const expectedFeatures = [
+  { name: "system.interconnect" },
+  { name: "system.file" },
+  { name: "system.crypto" }
+]
+if (manifest.package !== "dev.lordierclaw.bluebandmap.band" || manifest.icon !== "/common/icon.png" ||
+    manifest.versionName !== "0.2.0" || manifest.versionCode !== 2 || manifest.config.designWidth !== 212 ||
+    JSON.stringify(manifest.features) !== JSON.stringify(expectedFeatures)) {
   throw new Error("compiled manifest does not match Band 10 bundle contract")
 }
 const icon = files.get("common/icon.png")
@@ -59,8 +66,9 @@ if (manifest.router.entry !== "pages/index" || Object.keys(manifest.router.pages
   throw new Error("compiled manifest must expose exactly one bridge page")
 }
 const entryCode = files.get("pages/index/index.js").toString("utf8")
-if (!entryCode.includes("system.interconnect") || entryCode.includes("system.router")) {
-  throw new Error("compiled entry must own interconnect without loading router")
+if (!entryCode.includes("system.interconnect") || !entryCode.includes("system.file") ||
+    !entryCode.includes("system.crypto") || entryCode.includes("system.router")) {
+  throw new Error("compiled entry must own interconnect, file and crypto without loading router")
 }
 if (files.has("pages/check/check.js")) {
   throw new Error("compiled RPK must not include the obsolete check route")

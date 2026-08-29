@@ -1,9 +1,8 @@
 import assert from "node:assert/strict"
-import { execSync } from "node:child_process"
-import { readFile, readdir } from "node:fs/promises"
+import { spawnSync } from "node:child_process"
+import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
-import { inflateRawSync } from "node:zlib"
 
 const root = new URL("../", import.meta.url)
 
@@ -45,51 +44,11 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /<image[^>]+if="\{\{ mapReady \}\}"[^>]+src="\{\{ mapPath \}\}"[^>]+object-fit="contain"[^>]+@complete="mapComplete"[^>]+@error="mapError"[^>]+\/>/)
 })
 
-function archiveEntries(bytes) {
-  let end = -1
-  for (let offset = bytes.length - 22; offset >= 0; offset -= 1) {
-    if (bytes.readUInt32LE(offset) === 0x06054b50) { end = offset; break }
-  }
-  assert.notEqual(end, -1, "RPK has a ZIP end record")
-  const total = bytes.readUInt16LE(end + 10)
-  let offset = bytes.readUInt32LE(end + 16)
-  const files = new Map()
-  for (let index = 0; index < total; index += 1) {
-    assert.equal(bytes.readUInt32LE(offset), 0x02014b50)
-    const method = bytes.readUInt16LE(offset + 10)
-    const compressedSize = bytes.readUInt32LE(offset + 20)
-    const nameLength = bytes.readUInt16LE(offset + 28)
-    const extraLength = bytes.readUInt16LE(offset + 30)
-    const commentLength = bytes.readUInt16LE(offset + 32)
-    const localOffset = bytes.readUInt32LE(offset + 42)
-    const name = bytes.subarray(offset + 46, offset + 46 + nameLength).toString("utf8")
-    const localNameLength = bytes.readUInt16LE(localOffset + 26)
-    const localExtraLength = bytes.readUInt16LE(localOffset + 28)
-    const start = localOffset + 30 + localNameLength + localExtraLength
-    const compressed = bytes.subarray(start, start + compressedSize)
-    files.set(name, method === 0 ? compressed : inflateRawSync(compressed))
-    offset += 46 + nameLength + extraLength + commentLength
-  }
-  return files
-}
-
-test("real RPK build passes archive verification", { timeout: 120000 }, async () => {
-  execSync("npm run prebuild && npx aiot build", { cwd: fileURLToPath(root), stdio: "pipe", shell: true })
-  const dist = new URL("dist/", root)
-  const rpks = (await readdir(dist)).filter(name => name.endsWith(".rpk"))
-  assert.equal(rpks.length, 1)
-  const files = archiveEntries(await readFile(new URL(rpks[0], dist)))
-  for (const required of ["META-INF/CERT", "manifest.json", "app.js", "pages/index/index.js", "common/icon.png"]) {
-    assert.ok(files.has(required), `RPK contains ${required}`)
-  }
-  const manifest = JSON.parse(files.get("manifest.json").toString("utf8"))
-  assert.equal(manifest.versionName, "0.2.0")
-  assert.equal(manifest.versionCode, 2)
-  assert.deepEqual(manifest.features, [
-    { name: "system.interconnect" },
-    { name: "system.file" },
-    { name: "system.crypto" }
-  ])
-  const entryCode = files.get("pages/index/index.js").toString("utf8")
-  for (const module of ["system.interconnect", "system.file", "system.crypto"]) assert.match(entryCode, new RegExp(module))
+test("normal npm build exits successfully through canonical archive verification", { timeout: 120000 }, () => {
+  const result = spawnSync("npm", ["run", "build"], {
+    cwd: fileURLToPath(root),
+    encoding: "utf8"
+  })
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /verified .*\.0\.2\.0\.rpk/)
 })
