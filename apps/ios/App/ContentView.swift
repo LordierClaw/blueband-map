@@ -1,0 +1,119 @@
+import SwiftUI
+import BlueBandCore
+
+struct ContentView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                authSection
+                devicesSection
+                connectionSection
+                proofSection
+                rpkSection
+                echoSection
+                if let error = model.errorMessage {
+                    Section("Lỗi an toàn") { Text(error).foregroundStyle(.red) }
+                }
+                Section("Build") {
+                    LabeledContent("iOS", value: BlueBandProduct.version)
+                    LabeledContent("Envelope", value: "v\(ApplicationEnvelope.version)")
+                    Text("Foreground-only • Xiaomi Smart Band 10")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle(BlueBandProduct.displayName)
+        }
+    }
+
+    private var authSection: some View {
+        Section("AuthKey") {
+            SecureField("32 ký tự hex", text: $model.authKeyInput)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("Lưu vào Keychain") { model.saveKey() }.disabled(model.authKeyInput.isEmpty)
+            if model.hasSavedKey {
+                Label("Đã lưu trên thiết bị", systemImage: "checkmark.shield").foregroundStyle(.green)
+                Button("Xóa AuthKey", role: .destructive) { model.deleteKey() }
+            }
+        }
+    }
+
+    private var devicesSection: some View {
+        Section("Xiaomi Smart Band 10") {
+            if let band = model.rememberedBand {
+                HStack {
+                    VStack(alignment: .leading) { Text(band.name); Text("Đã nhớ").font(.caption).foregroundStyle(.secondary) }
+                    Spacer()
+                    Button("Kết nối") { Task { await model.connect(to: BandCandidate(id: band.id, name: band.name, rssi: nil)) } }
+                }
+                Button("Quên band", role: .destructive) { model.forgetBand() }
+            }
+            HStack {
+                Button("Quét BLE") { Task { await model.scan() } }.disabled(model.sessionState != .idle)
+                Spacer()
+                if model.sessionState == .scanning { Button("Dừng") { Task { await model.stopScan() } } }
+            }
+            if !model.candidates.isEmpty { Button("Xóa kết quả") { Task { await model.stopScan(clear: true) } } }
+            ForEach(model.candidates) { candidate in
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(candidate.name)
+                        Text(candidate.rssi.map { "RSSI \($0) dBm" } ?? "Đã biết bởi iOS").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Kết nối") { Task { await model.connect(to: candidate) } }
+                }
+            }
+            Text("Chỉ chọn Band 10. Mi Fitness phải đóng trong lúc BlueBandMap giữ phiên Xiaomi.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var connectionSection: some View {
+        Section("Phiên") {
+            LabeledContent("Trạng thái", value: model.sessionState.rawValue)
+            if model.sessionState != .idle && model.sessionState != .scanning {
+                Button("Ngắt kết nối", role: .destructive) { Task { await model.disconnect() } }
+            }
+        }
+    }
+
+    private var proofSection: some View {
+        Section("Device proof") {
+            LabeledContent("Battery", value: model.snapshot.batteryLevel.map { "\($0)%" } ?? "—")
+            LabeledContent("Model", value: model.snapshot.model ?? "—")
+            LabeledContent("Firmware", value: model.snapshot.firmware ?? "—")
+        }
+    }
+
+    private var rpkSection: some View {
+        Section("RPK trust") {
+            LabeledContent("Package", value: BlueBandProduct.rpkPackage)
+            LabeledContent("Handshake", value: rpkLabel)
+            Button("Reset trusted fingerprint", role: .destructive) { Task { await model.resetTrustedRPK() } }
+            Text("TOFU kiểm tra tính liên tục fingerprint, không xác minh certificate chain.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var echoSection: some View {
+        Section("system.echo") {
+            TextField("Payload", text: $model.echoInput)
+            Button("Gửi echo") { Task { await model.sendEcho() } }.disabled(model.rpkState != .ready)
+            ForEach(model.events) { item in
+                HStack { Text(item.source.rawValue.uppercased()).font(.caption.bold()); Text(item.text); Spacer(); Text(item.delivery.rawValue).font(.caption2) }
+            }
+            if !model.events.isEmpty { Button("Xóa events") { model.clearEvents() } }
+        }
+    }
+
+    private var rpkLabel: String {
+        switch model.rpkState {
+        case .locked: return "Chưa có phiên"
+        case .waiting: return "Chờ mở app trên band"
+        case .ready: return "Đã xác thực"
+        case let .failed(message): return message
+        }
+    }
+}

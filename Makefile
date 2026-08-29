@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor bootstrap test test-swift test-rpk test-lab lint clean
+.PHONY: help doctor bootstrap test test-swift test-rpk test-lab test-ios-metadata lint clean
 
 help:
 	@echo "BlueBand Map development targets"
@@ -29,6 +29,9 @@ test-rpk:
 
 test-lab:
 	docker compose run --rm node-lab bash -lc 'npm ci && npm test'
+
+test-ios-metadata:
+	bash tools/ios/test-project-metadata.sh
 
 lint:
 	bash -n scripts/*.sh tests/scripts/*.sh

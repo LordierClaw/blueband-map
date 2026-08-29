@@ -1,0 +1,39 @@
+import SwiftUI
+import BlueBandCore
+import BlueBandCryptoCommonCrypto
+
+enum BlueBandProduct {
+    static let displayName = "BlueBandMap"
+    static let version = "0.1.0"
+    static let bundleIdentifier = "dev.lordierclaw.bluebandmap"
+    static let rpkPackage = "dev.lordierclaw.bluebandmap.band"
+}
+
+@main
+struct BlueBandMapApp: App {
+    @StateObject private var model: AppModel
+
+    init() {
+        let central = BandCentral()
+        let cipher = CommonCryptoAESBlockCipher()
+        let trustStore = KeychainTrustedRPKStore()
+        let session = BandSession(
+            central: central,
+            authenticator: BandAuthenticator(cipher: cipher),
+            cipher: cipher,
+            trustedRPKStore: trustStore,
+            expectedPackage: BlueBandProduct.rpkPackage
+        )
+        _model = StateObject(wrappedValue: AppModel(
+            keyStore: KeychainAuthKeyStore(),
+            bandStore: UserDefaultsRememberedBandStore(),
+            trustedRPKStore: trustStore,
+            central: central,
+            session: session
+        ))
+    }
+
+    var body: some Scene {
+        WindowGroup { ContentView(model: model) }
+    }
+}
