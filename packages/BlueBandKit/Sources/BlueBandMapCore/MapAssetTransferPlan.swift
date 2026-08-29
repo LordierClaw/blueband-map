@@ -14,12 +14,18 @@ public struct MapTransferStep: Equatable, Sendable {
 public enum MapAssetTransferPlan {
     public enum Error: Swift.Error, Equatable {
         case cannotFitChunk
+        case invalidRunID
     }
 
+    public static let maximumRunIDBytes = 24
     private static let envelopeID = String(repeating: "\\", count: 32)
     private static let maximumChunkBytes = 320
+    private static let sizingRunID = String(repeating: "r", count: maximumRunIDBytes)
 
-    public static func make(asset: MapAsset) throws -> [MapTransferStep] {
+    public static func make(asset: MapAsset, runID: String) throws -> [MapTransferStep] {
+        guard isValidRunID(runID) else {
+            throw Error.invalidRunID
+        }
         let begin = MapTransferStep(
             topic: "map.asset.begin",
             body: [
@@ -29,6 +35,7 @@ public enum MapAssetTransferPlan {
                 "sha256": .string(asset.sha256),
                 "width": .number(Double(asset.width)),
                 "height": .number(Double(asset.height)),
+                "run": .string(runID),
             ]
         )
         guard fitsEnvelope(begin) else {
@@ -43,7 +50,7 @@ public enum MapAssetTransferPlan {
                 throw Error.cannotFitChunk
             }
 
-            let step = chunkStep(for: asset, offset: offset, byteCount: chunkByteCount)
+            let step = chunkStep(for: asset, offset: offset, byteCount: chunkByteCount, runID: runID)
             guard fitsEnvelope(step) else {
                 throw Error.cannotFitChunk
             }
@@ -53,7 +60,7 @@ public enum MapAssetTransferPlan {
 
         let end = MapTransferStep(
             topic: "map.asset.end",
-            body: ["asset": .string(asset.id)]
+            body: ["asset": .string(asset.id), "run": .string(runID)]
         )
         guard fitsEnvelope(end) else {
             throw Error.cannotFitChunk
@@ -69,7 +76,7 @@ public enum MapAssetTransferPlan {
 
         while lowerBound <= upperBound {
             let candidate = lowerBound + (upperBound - lowerBound) / 2
-            let step = chunkStep(for: asset, offset: offset, byteCount: candidate)
+            let step = chunkStep(for: asset, offset: offset, byteCount: candidate, runID: sizingRunID)
             if fitsEnvelope(step) {
                 best = candidate
                 lowerBound = candidate + 1
@@ -80,7 +87,12 @@ public enum MapAssetTransferPlan {
         return best
     }
 
-    private static func chunkStep(for asset: MapAsset, offset: Int, byteCount: Int) -> MapTransferStep {
+    private static func chunkStep(
+        for asset: MapAsset,
+        offset: Int,
+        byteCount: Int,
+        runID: String
+    ) -> MapTransferStep {
         let start = asset.data.index(asset.data.startIndex, offsetBy: offset)
         let end = asset.data.index(start, offsetBy: byteCount)
         let encodedData = Data(asset.data[start..<end]).base64EncodedString()
@@ -90,8 +102,16 @@ public enum MapAssetTransferPlan {
                 "asset": .string(asset.id),
                 "offset": .number(Double(offset)),
                 "data": .string(encodedData),
+                "run": .string(runID),
             ]
         )
+    }
+
+    public static func isValidRunID(_ runID: String) -> Bool {
+        guard (1...maximumRunIDBytes).contains(runID.utf8.count) else { return false }
+        return runID.utf8.allSatisfy {
+            (48...57).contains($0) || (97...122).contains($0) || $0 == 45
+        }
     }
 
     private static func fitsEnvelope(_ step: MapTransferStep) -> Bool {

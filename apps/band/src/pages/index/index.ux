@@ -290,13 +290,18 @@ export default {
     return typeof value === "number" && isFinite(value) && Math.floor(value) === value
   },
 
+  validRun(run) {
+    return typeof run === "string" && run.length >= 1 && run.length <= 24 &&
+      /^[a-z0-9-]+$/.test(run)
+  },
+
   validBeginBody(body) {
     return typeof body.asset === "string" && /^m1-[0-9a-f]{16}$/.test(body.asset) &&
       this.validInteger(body.bytes) && body.bytes > 0 && body.bytes <= this.MAX_ASSET_BYTES &&
       this.validInteger(body.width) && body.width === this.MAP_WIDTH &&
       this.validInteger(body.height) && body.height === this.MAP_HEIGHT &&
       body.mime === "image/png" && typeof body.sha256 === "string" &&
-      /^[0-9a-f]{64}$/.test(body.sha256)
+      /^[0-9a-f]{64}$/.test(body.sha256) && this.validRun(body.run)
   },
 
   beginAsset(message) {
@@ -318,6 +323,7 @@ export default {
       height: body.height,
       mime: body.mime,
       sha256: body.sha256,
+      run: body.run,
       uri: "internal://files/" + body.asset + ".png",
       receivedBytes: 0
     }
@@ -393,6 +399,10 @@ export default {
       this.failAsset(message, "ASSET_MISMATCH")
       return
     }
+    if (body.run !== transfer.run) {
+      this.failAsset(message, "ASSET_RUN_MISMATCH")
+      return
+    }
     if (!this.validInteger(body.offset) || body.offset !== transfer.receivedBytes) {
       this.failAsset(message, "ASSET_OFFSET_INVALID")
       return
@@ -438,6 +448,10 @@ export default {
       this.failAsset(message, "ASSET_MISMATCH")
       return
     }
+    if (message.body.run !== transfer.run) {
+      this.failAsset(message, "ASSET_RUN_MISMATCH")
+      return
+    }
     if (transfer.receivedBytes !== transfer.bytes) {
       this.failAsset(message, "ASSET_LENGTH_MISMATCH", true)
       return
@@ -465,6 +479,7 @@ export default {
     this.showDiagnostics = false
     this.pendingPublication = {
       asset: asset,
+      run: transfer.run,
       bytes: bytes,
       sha256Prefix: prefix,
       uri: transfer.uri,
@@ -511,7 +526,7 @@ export default {
     this.removeInFlight(message.id)
     if (code === "ASSET_BUSY") {
       var rejectedAsset = this.safeAsset(message.body.asset)
-      this.sendAssetResult(rejectedAsset, "error", 0, "", code)
+      this.sendAssetResult(rejectedAsset, this.safeRun(message.body.run), "error", 0, "", code)
       this.rememberSuccess(message.id)
       this.sendACK(message.id)
       return
@@ -529,7 +544,8 @@ export default {
     var asset = transfer ? transfer.asset : (typeof message.body.asset === "string" ? message.body.asset : "")
     var bytes = transfer ? transfer.receivedBytes : 0
     var prefix = transfer ? transfer.sha256.slice(0, 8) : ""
-    this.sendAssetResult(asset, "error", bytes, prefix, code)
+    var run = transfer ? transfer.run : this.safeRun(message.body.run)
+    this.sendAssetResult(asset, run, "error", bytes, prefix, code)
     this.rememberSuccess(message.id)
     this.sendACK(message.id)
   },
@@ -542,6 +558,10 @@ export default {
 
   safeAsset(asset) {
     return typeof asset === "string" && /^m1-[0-9a-f]{16}$/.test(asset) ? asset : ""
+  },
+
+  safeRun(run) {
+    return this.validRun(run) ? run : ""
   },
 
   invalidateConfirmedURI(uri) {
@@ -588,12 +608,13 @@ export default {
     this.sendEnvelope({ v: 1, id: id, src: "band", type: "ack" })
   },
 
-  sendAssetResult(asset, status, bytes, prefix, code) {
+  sendAssetResult(asset, run, status, bytes, prefix, code) {
     var safeBytes = this.validInteger(bytes) && bytes >= 0 && bytes <= this.MAX_ASSET_BYTES ? bytes : 0
     var safePrefix = typeof prefix === "string" && /^[0-9a-f]{8}$/.test(prefix) ? prefix : ""
     var safeCode = typeof code === "string" && /^ASSET_[A-Z0-9_]{1,40}$/.test(code) ? code : ""
     var body = {
       asset: this.safeAsset(asset),
+      run: this.safeRun(run),
       status: status === "ok" ? "ok" : "error",
       bytes: safeBytes,
       sha256Prefix: safePrefix
@@ -687,7 +708,7 @@ export default {
       token: publication.token
     }
     this.statusText = "M1 MAP READY"
-    this.sendAssetResult(publication.asset, "ok", publication.bytes, publication.sha256Prefix)
+    this.sendAssetResult(publication.asset, publication.run, "ok", publication.bytes, publication.sha256Prefix)
   },
 
   mapError(token) {
@@ -712,7 +733,10 @@ export default {
     this.showDiagnostics = true
     this.logText = "Map image display failed."
     this.deleteBestEffort(publication.uri)
-    this.sendAssetResult(publication.asset, "error", publication.bytes, publication.sha256Prefix, "ASSET_RENDER")
+    this.sendAssetResult(
+      publication.asset, publication.run, "error", publication.bytes,
+      publication.sha256Prefix, "ASSET_RENDER"
+    )
   }
 }
 </script>

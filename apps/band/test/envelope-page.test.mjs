@@ -7,6 +7,8 @@ const ASSET = "m1-0123456789abcdef"
 const ASSET_B = "m1-fedcba9876543210"
 const URI = `internal://files/${ASSET}.png`
 const DIGEST = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const RUN = "run-0123456789abcdef"
+const RUN_B = "run-fedcba9876543210"
 
 async function loadPage(connection, file, crypto) {
   const ux = await readFile(new URL("../src/pages/index/index.ux", import.meta.url), "utf8")
@@ -25,7 +27,8 @@ async function loadPage(connection, file, crypto) {
 }
 
 function envelope(id, topic, body) {
-  return { v: 1, id, src: "ios", type: "message", topic, body }
+  const correlated = topic.startsWith("map.asset.") && !("run" in body) ? { ...body, run: RUN } : body
+  return { v: 1, id, src: "ios", type: "message", topic, body: correlated }
 }
 
 function beginBody(overrides = {}) {
@@ -36,9 +39,52 @@ function beginBody(overrides = {}) {
     height: 360,
     mime: "image/png",
     sha256: DIGEST,
+    run: RUN,
     ...overrides
   }
 }
+
+test("map transfer requires one bounded run ID and result round-trips it exactly", async () => {
+  const { page, sent } = await readyHarness()
+  const begin = envelope("run-begin", "map.asset.begin", beginBody({ bytes: 4 }))
+  const chunk = envelope("run-chunk", "map.asset.chunk", {
+    asset: ASSET, offset: 0, data: "AAECAw==", run: RUN
+  })
+  const end = envelope("run-end", "map.asset.end", { asset: ASSET, run: RUN })
+
+  page.receiveMessage({ data: begin })
+  page.receiveMessage({ data: chunk })
+  page.receiveMessage({ data: end })
+  page.mapComplete(pendingToken(page))
+
+  const result = sent.findLast(message => message.topic === "map.asset.result")
+  assert.equal(result.body.run, RUN)
+  assert.deepEqual(begin.body, {
+    asset: ASSET, bytes: 4, width: 212, height: 360,
+    mime: "image/png", sha256: DIGEST, run: RUN
+  })
+  assert.deepEqual(chunk.body, { asset: ASSET, offset: 0, data: "AAECAw==", run: RUN })
+  assert.deepEqual(end.body, { asset: ASSET, run: RUN })
+  assertBoundedBandEnvelopes(page, sent)
+})
+
+test("rejects missing invalid or changed map run correlation", async () => {
+  for (const run of [undefined, "", "UPPER", "run_under", "é", "r".repeat(25)]) {
+    const { page, sent } = await readyHarness()
+    page.receiveMessage({ data: envelope("invalid-run", "map.asset.begin", beginBody({ run })) })
+    const result = sent.find(message => message.topic === "map.asset.result")
+    assert.equal(result?.body.code, "ASSET_BEGIN_INVALID")
+  }
+
+  const { page, sent } = await readyHarness()
+  page.receiveMessage({ data: envelope("begin", "map.asset.begin", beginBody({ bytes: 4 })) })
+  page.receiveMessage({ data: envelope("chunk", "map.asset.chunk", {
+    asset: ASSET, offset: 0, data: "AAECAw==", run: RUN_B
+  }) })
+  const result = sent.findLast(message => message.topic === "map.asset.result")
+  assert.equal(result.body.code, "ASSET_RUN_MISMATCH")
+  assert.equal(result.body.run, RUN)
+})
 
 function fakeCrypto(digest = DIGEST) {
   const hashCalls = []
@@ -211,6 +257,7 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
   page.mapComplete(token)
   assert.deepEqual(sent.at(-1).body, {
     asset: ASSET,
+    run: RUN,
     status: "ok",
     bytes: 8,
     sha256Prefix: "01234567"
@@ -269,6 +316,7 @@ test("holds asset A ownership through rendering and blocks the full asset B sequ
   for (const result of busyResults) {
     assert.deepEqual(result.body, {
       asset: ASSET_B,
+      run: RUN,
       status: "error",
       bytes: 0,
       sha256Prefix: "",
@@ -352,6 +400,7 @@ test("reports ASSET_RENDER only when image rendering fails and consumes lifecycl
   assert.equal(results.length, 1)
   assert.deepEqual(results[0].body, {
     asset: ASSET,
+    run: RUN,
     status: "error",
     bytes: 4,
     sha256Prefix: "01234567",
