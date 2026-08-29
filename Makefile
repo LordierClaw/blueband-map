@@ -32,6 +32,8 @@ test-lab:
 
 lint:
 	bash -n scripts/*.sh tests/scripts/*.sh
+	bash tests/scripts/verify-no-secrets.test.sh
+	scripts/verify-no-secrets.sh
 	git diff --check
 
 clean:

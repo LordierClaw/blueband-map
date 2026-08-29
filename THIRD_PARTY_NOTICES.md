@@ -3,3 +3,5 @@
 This repository is derived from protocol behavior and independent public evidence listed in the approved design. Reference implementations are not linked into the runtime unless explicitly listed here.
 
 Runtime and test dependencies, their pinned versions, roles, and required notices are added with the implementation that introduces them.
+
+The protocol laboratory is a clean, narrow implementation based on behavior documented in the BlueBand POC. Its provenance and fixed reference revisions are recorded in the approved design and its `CAPTURE.md` file.
