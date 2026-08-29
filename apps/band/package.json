@@ -1,0 +1,19 @@
+{
+  "name": "blueband-map-rpk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "generate:icon": "node scripts/generate-icon.mjs",
+    "clean": "node scripts/clean.mjs",
+    "pretest": "npm run generate:icon",
+    "test": "node --test",
+    "prebuild": "npm run clean && npm run generate:icon",
+    "build": "aiot build && node scripts/verify-rpk.mjs"
+  },
+  "devDependencies": {
+    "@aiot-toolkit/jsc": "1.0.3",
+    "aiot-toolkit": "2.0.5"
+  }
+}

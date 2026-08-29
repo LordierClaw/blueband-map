@@ -1,0 +1,237 @@
+<template>
+  <div class="page">
+    <div class="waiting" if="{{ waiting }}">
+      <div class="mark"><text class="mark-text">M</text></div>
+      <text class="title">BLUEBAND MAP</text>
+      <text class="status">{{ statusText }}</text>
+      <text class="detail">{{ detailText }}</text>
+      <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
+      <text class="version">RPK 0.1.0</text>
+    </div>
+
+    <div class="connected" if="{{ connected }}">
+      <text class="title small">BLUEBAND MAP</text>
+      <text class="online">IOS CONNECTED</text>
+      <text class="log">{{ logText }}</text>
+      <input class="button" type="button" value="ECHO PING" @click="sendPing" />
+      <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
+      <text class="version">RPK 0.1.0 • ENV V1</text>
+    </div>
+  </div>
+</template>
+
+<script>
+import interconnect from "@system.interconnect"
+
+export default {
+  private: {
+    MAX_ENVELOPE_BYTES: 512,
+    MAX_RECENT_IDS: 64,
+    connection: null,
+    waiting: true,
+    connected: false,
+    statusText: "PAGE READY",
+    detailText: "Connect Band 10 in BlueBandMap on iPhone.",
+    logText: "Echo ready.",
+    logRows: [],
+    recentIDs: [],
+    nextID: 1
+  },
+
+  onReady() {
+    try {
+      this.connection = interconnect.instance()
+      var page = this
+      this.connection.onopen = function () {
+        page.statusText = "IOS LINK OPEN"
+        page.detailText = "Press CHECK CONNECTION."
+      }
+      this.connection.onclose = function () { page.lock("IOS LINK CLOSED") }
+      this.connection.onerror = function () { page.lock("IOS LINK ERROR") }
+      this.connection.onmessage = function (event) { page.receiveMessage(event) }
+    } catch (error) {
+      this.statusText = "INTERCONNECT ERROR"
+      this.detailText = "Unable to start the system bridge."
+    }
+  },
+
+  onDestroy() {
+    if (!this.connection) return
+    this.connection.onopen = null
+    this.connection.onclose = null
+    this.connection.onerror = null
+    this.connection.onmessage = null
+  },
+
+  checkConnection() {
+    if (!this.connection) {
+      this.statusText = "NO INTERCONNECT API"
+      return
+    }
+    var page = this
+    this.connection.getReadyState({
+      success: function (result) {
+        if (result.status === 1) page.unlock()
+        else {
+          page.statusText = "IOS NOT CONNECTED"
+          page.detailText = "Ready state: " + result.status
+        }
+      },
+      fail: function (result, code) {
+        page.statusText = "CHECK FAILED"
+        page.detailText = "Error code: " + code
+      }
+    })
+  },
+
+  unlock() {
+    this.waiting = false
+    this.connected = true
+    this.logRows = []
+    this.recentIDs = []
+    this.logText = "Echo ready."
+  },
+
+  lock(reason) {
+    this.connected = false
+    this.waiting = true
+    this.statusText = reason
+    this.detailText = "Reconnect on iPhone, then check again."
+  },
+
+  utf8Length(text) {
+    var length = 0
+    for (var index = 0; index < text.length; index = index + 1) {
+      var code = text.charCodeAt(index)
+      if (code < 128) length = length + 1
+      else if (code < 2048) length = length + 2
+      else if (code >= 55296 && code <= 56319 && index + 1 < text.length) {
+        index = index + 1
+        length = length + 4
+      } else length = length + 3
+    }
+    return length
+  },
+
+  validID(id) {
+    if (typeof id !== "string" || id.length < 1 || id.length > 32) return false
+    for (var index = 0; index < id.length; index = index + 1) {
+      var code = id.charCodeAt(index)
+      if (code < 32 || code > 126) return false
+    }
+    return true
+  },
+
+  validTopic(topic) {
+    return typeof topic === "string" && topic.length >= 1 && topic.length <= 64 &&
+      /^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(topic)
+  },
+
+  validBody(body) {
+    return body !== null && typeof body === "object" && !Array.isArray(body)
+  },
+
+  validEnvelope(message, source) {
+    if (!message || message.v !== 1 || message.src !== source || !this.validID(message.id)) return false
+    var encoded
+    try { encoded = JSON.stringify(message) } catch (error) { return false }
+    if (this.utf8Length(encoded) > this.MAX_ENVELOPE_BYTES) return false
+    if (message.type === "ack") return message.topic === undefined && message.body === undefined
+    if (message.type !== "message") return false
+    return this.validTopic(message.topic) && this.validBody(message.body)
+  },
+
+  receiveMessage(event) {
+    var message = event
+    if (event && event.data !== undefined) message = event.data
+    if (typeof message === "string") {
+      try { message = JSON.parse(message) } catch (error) { return }
+    }
+    if (!this.validEnvelope(message, "ios")) return
+    if (message.type === "ack") {
+      this.acknowledge(message.id)
+      return
+    }
+
+    this.sendEnvelope({ v: 1, id: message.id, src: "band", type: "ack" })
+    if (this.recentIDs.indexOf(message.id) >= 0) return
+    this.recentIDs.push(message.id)
+    if (this.recentIDs.length > this.MAX_RECENT_IDS) this.recentIDs.shift()
+    if (message.topic === "system.echo") {
+      var text = typeof message.body.text === "string" ? message.body.text : "(object)"
+      this.appendRow(message.id, "IOS > " + text, false)
+    }
+  },
+
+  sendEnvelope(message) {
+    if (!this.connected || !this.connection || !this.validEnvelope(message, "band")) return
+    var page = this
+    this.connection.send({
+      data: message,
+      fail: function () { page.lock("SEND FAILED") }
+    })
+  },
+
+  sendPing() {
+    if (!this.connected) return
+    var id = "b-" + Date.now() + "-" + this.nextID
+    this.nextID = this.nextID + 1
+    this.appendRow(id, "BAND > PING", true)
+    this.sendEnvelope({
+      v: 1,
+      id: id,
+      src: "band",
+      type: "message",
+      topic: "system.echo",
+      body: { text: "PING" }
+    })
+  },
+
+  appendRow(id, line, outgoing) {
+    this.logRows.push({ id: id, line: line, outgoing: outgoing, acknowledged: false })
+    if (this.logRows.length > 12) this.logRows.shift()
+    this.renderLog()
+  },
+
+  acknowledge(id) {
+    for (var index = 0; index < this.logRows.length; index = index + 1) {
+      var row = this.logRows[index]
+      if (row.id === id && row.outgoing) {
+        row.acknowledged = true
+        this.renderLog()
+        return
+      }
+    }
+  },
+
+  renderLog() {
+    var output = ""
+    for (var index = 0; index < this.logRows.length; index = index + 1) {
+      if (index > 0) output = output + "\n"
+      output = output + this.logRows[index].line
+      if (this.logRows[index].acknowledged) output = output + " ✓"
+    }
+    this.logText = output || "Echo ready."
+  },
+
+  clearEvents() {
+    this.logRows = []
+    this.logText = "Echo ready."
+  }
+}
+</script>
+
+<style>
+.page { width: 212px; height: 520px; background-color: #07162b; }
+.waiting, .connected { width: 212px; height: 520px; padding-top: 54px; flex-direction: column; align-items: center; }
+.mark { width: 72px; height: 72px; border-radius: 18px; justify-content: center; align-items: center; background-color: #168cff; }
+.mark-text { font-size: 46px; font-weight: bold; color: #ffffff; }
+.title { margin-top: 18px; font-size: 25px; font-weight: bold; color: #ffffff; }
+.small { margin-top: 0; font-size: 22px; }
+.status, .online { margin-top: 12px; font-size: 16px; font-weight: bold; color: #5dffb0; }
+.detail { margin-top: 14px; width: 180px; height: 76px; font-size: 15px; lines: 4; text-align: center; color: #a9bdd6; }
+.check, .button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
+.version { margin-top: 22px; font-size: 13px; color: #7897b8; }
+.log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }
+.clear { margin-top: 10px; width: 184px; height: 40px; border-radius: 20px; font-size: 14px; color: #a9bdd6; background-color: #1f3652; }
+</style>

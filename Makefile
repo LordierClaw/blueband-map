@@ -19,7 +19,7 @@ doctor:
 bootstrap:
 	docker compose pull swift node-rpk node-lab
 
-test: test-swift test-rpk test-lab
+test: test-swift test-rpk test-lab test-ios-metadata
 
 test-swift:
 	docker compose run --rm swift swift test
@@ -34,7 +34,7 @@ test-ios-metadata:
 	bash tools/ios/test-project-metadata.sh
 
 lint:
-	bash -n scripts/*.sh tests/scripts/*.sh
+	bash -n scripts/*.sh tests/scripts/*.sh tools/ios/*.sh
 	bash tests/scripts/verify-no-secrets.test.sh
 	scripts/verify-no-secrets.sh
 	git diff --check
