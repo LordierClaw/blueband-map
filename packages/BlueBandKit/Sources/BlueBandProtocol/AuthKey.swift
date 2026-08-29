@@ -1,14 +1,14 @@
 import Foundation
 
-struct AuthKey: Equatable, Sendable {
-    enum ValidationError: Error, Equatable {
+public struct AuthKey: Equatable, Sendable {
+    public enum ValidationError: Error, Equatable {
         case invalidLength
         case invalidHex
     }
 
-    let bytes: Data
+    public let bytes: Data
 
-    init(hex: String) throws {
+    public init(hex: String) throws {
         let normalized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.utf8.count == 32 else {
             throw ValidationError.invalidLength
@@ -28,7 +28,7 @@ struct AuthKey: Equatable, Sendable {
         bytes = decoded
     }
 
-    init(bytes: Data) throws {
+    public init(bytes: Data) throws {
         guard bytes.count == 16 else {
             throw ValidationError.invalidLength
         }
