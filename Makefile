@@ -40,4 +40,5 @@ lint:
 	git diff --check
 
 clean:
-	rm -rf -- packages/BlueBandKit/.build apps/band/dist apps/ios/BlueBandMap.xcodeproj tools/protocol-lab/.coverage
+	docker compose run --rm node-rpk npm run clean
+	rm -rf -- packages/BlueBandKit/.build apps/ios/BlueBandMap.xcodeproj tools/protocol-lab/.coverage
