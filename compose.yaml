@@ -1,0 +1,36 @@
+name: blueband-map
+
+services:
+  swift:
+    image: swift:6.3.3-noble
+    working_dir: /workspace/packages/BlueBandKit
+    volumes:
+      - .:/workspace
+      - swift-build:/workspace/packages/BlueBandKit/.build
+      - swift-cache:/root/.cache
+    command: swift test
+
+  node-rpk:
+    image: node:20.19.5-bookworm
+    working_dir: /workspace/apps/band
+    volumes:
+      - .:/workspace
+      - rpk-modules:/workspace/apps/band/node_modules
+      - npm-cache:/root/.npm
+    command: npm test
+
+  node-lab:
+    image: node:20.19.5-bookworm
+    working_dir: /workspace/tools/protocol-lab
+    volumes:
+      - .:/workspace
+      - lab-modules:/workspace/tools/protocol-lab/node_modules
+      - npm-cache:/root/.npm
+    command: npm test
+
+volumes:
+  swift-build:
+  swift-cache:
+  rpk-modules:
+  lab-modules:
+  npm-cache:

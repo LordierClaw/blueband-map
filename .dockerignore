@@ -1,0 +1,11 @@
+.git
+.worktrees
+.build
+.swiftpm
+DerivedData
+build
+dist
+node_modules
+local
+captures/raw
+sign
