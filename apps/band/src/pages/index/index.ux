@@ -48,6 +48,7 @@ export default {
     inFlightIDs: [],
     lifecycleEpoch: 0,
     activeMapOperationID: "",
+    pendingDeleteURIs: [],
     activeTransfer: null,
     unconfirmedURI: "",
     unconfirmedTouched: false,
@@ -110,10 +111,11 @@ export default {
   },
 
   unlock() {
+    var newSession = !this.connected
     this.waiting = false
     this.connected = true
     this.logRows = []
-    this.recentIDs = []
+    if (newSession) this.recentIDs = []
     this.logText = "Echo ready."
   },
 
@@ -273,6 +275,10 @@ export default {
       uri: "internal://files/" + body.asset + ".png",
       receivedBytes: 0
     }
+    if (this.pendingDeleteURIs.indexOf(transfer.uri) >= 0) {
+      this.failAsset(message, "ASSET_BUSY")
+      return
+    }
     this.unconfirmedURI = transfer.uri
     this.unconfirmedTouched = false
     var activate = function () {
@@ -291,21 +297,16 @@ export default {
         uri: transfer.uri,
         success: function () {
           if (!page.ownsMapOperation(message.id, epoch)) return
-          try {
-            file.delete({
-              uri: transfer.uri,
-              success: function () {
-                if (!page.ownsMapOperation(message.id, epoch)) return
-                page.unconfirmedTouched = true
-                activate()
-              },
-              fail: function () {
-                if (!page.ownsMapOperation(message.id, epoch)) return
-                page.failAsset(message, "ASSET_DELETE_FAILED")
-              }
-            })
-          } catch (error) {
-            if (page.ownsMapOperation(message.id, epoch)) page.failAsset(message, "ASSET_DELETE_FAILED")
+          var scheduled = page.scheduleDelete(transfer.uri, function () {
+            if (!page.ownsMapOperation(message.id, epoch)) return
+            page.unconfirmedTouched = true
+            activate()
+          }, function () {
+            if (!page.ownsMapOperation(message.id, epoch)) return
+            page.failAsset(message, "ASSET_DELETE_FAILED")
+          })
+          if (!scheduled && page.ownsMapOperation(message.id, epoch)) {
+            page.failAsset(message, "ASSET_BUSY")
           }
         },
         fail: function () {
@@ -497,8 +498,44 @@ export default {
     return typeof asset === "string" && /^m1-[0-9a-f]{16}$/.test(asset) ? asset : ""
   },
 
+  invalidateConfirmedURI(uri) {
+    if (!this.confirmedMap || this.confirmedMap.uri !== uri) return
+    this.confirmedMap = null
+    if (this.mapPath !== uri) return
+    this.mapReady = false
+    this.mapPath = ""
+    this.mapHashPrefix = ""
+    this.renderItems = []
+    this.showDiagnostics = true
+  },
+
+  scheduleDelete(uri, success, fail) {
+    if (typeof uri !== "string" || !uri || this.pendingDeleteURIs.indexOf(uri) >= 0) return false
+    this.invalidateConfirmedURI(uri)
+    this.pendingDeleteURIs.push(uri)
+    var page = this
+    var completed = false
+    var finish = function (callback) {
+      if (completed) return
+      completed = true
+      var index = page.pendingDeleteURIs.indexOf(uri)
+      if (index >= 0) page.pendingDeleteURIs.splice(index, 1)
+      if (callback) callback()
+    }
+    try {
+      file.delete({
+        uri: uri,
+        success: function () { finish(success) },
+        fail: function () { finish(fail) }
+      })
+    } catch (error) {
+      finish(fail)
+    }
+    return true
+  },
+
   deleteBestEffort(uri) {
-    try { file.delete({ uri: uri, success: function () {}, fail: function () {} }) } catch (error) {}
+    this.scheduleDelete(uri, null, null)
   },
 
   sendACK(id) {

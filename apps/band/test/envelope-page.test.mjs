@@ -643,3 +643,116 @@ test("hashes realistic memory-file bytes synchronously before render publication
   page.mapComplete(pendingToken(page))
   assert.equal(sent.at(-1).body.sha256Prefix, digest.slice(0, 8))
 })
+
+test("same-asset replacement keeps deletion ownership across lifecycle reset", async () => {
+  const file = memoryFile()
+  const harness = await pendingPublicationHarness(file)
+  const { page, sent } = harness
+  page.mapComplete(pendingToken(page))
+  assert.equal(page.mapReady, true)
+
+  const heldDeletes = []
+  file.delete = options => { heldDeletes.push(options) }
+  const accessCount = file.accesses.length
+  page.receiveMessage({ data: envelope("replace-begin", "map.asset.begin", beginBody({ bytes: 4 })) })
+  assert.equal(heldDeletes.length, 1)
+  assert.deepEqual(page.pendingDeleteURIs, [URI])
+  assert.equal(page.confirmedMap, null)
+  assert.equal(page.mapReady, false)
+  assert.equal(page.mapPath, "")
+  assert.deepEqual(page.renderItems, [])
+
+  page.lock("IOS LINK CLOSED")
+  assert.deepEqual(page.pendingDeleteURIs, [URI])
+  assert.equal(heldDeletes.length, 1, "reset must not schedule a duplicate delete")
+  assert.equal(page.mapReady, false)
+  page.unlock()
+  page.receiveMessage({ data: envelope("replace-blocked", "map.asset.begin", beginBody({ bytes: 4 })) })
+  assert.equal(file.accesses.length, accessCount + 1, "blocked retry must not call access")
+  assert.equal(sent.at(-2).body.code, "ASSET_BUSY")
+  assert.equal(sent.at(-1).id, "replace-blocked")
+
+  file.storage.delete(URI)
+  heldDeletes[0].success()
+  assert.deepEqual(page.pendingDeleteURIs, [])
+  page.receiveMessage({ data: envelope("replace-allowed", "map.asset.begin", beginBody({ bytes: 4 })) })
+  assert.equal(file.accesses.length, accessCount + 2)
+  assert.equal(page.activeTransfer.asset, ASSET)
+  assert.equal(sent.at(-1).id, "replace-allowed")
+})
+
+test("delayed best-effort cleanup blocks same URI retry until callback completion", async () => {
+  for (const completion of ["success", "fail"]) {
+    const file = memoryFile()
+    const heldDeletes = []
+    file.delete = options => { heldDeletes.push(options) }
+    const crypto = fakeCrypto("f".repeat(64))
+    const { page, sent } = await readyHarness(file, crypto)
+    page.receiveMessage({ data: envelope(`${completion}-begin`, "map.asset.begin", beginBody({ bytes: 4 })) })
+    page.receiveMessage({ data: envelope(`${completion}-chunk`, "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
+    page.receiveMessage({ data: envelope(`${completion}-end`, "map.asset.end", { asset: ASSET }) })
+    assert.equal(heldDeletes.length, 1)
+    assert.deepEqual(page.pendingDeleteURIs, [URI])
+    const accessCount = file.accesses.length
+
+    page.receiveMessage({ data: envelope(`${completion}-blocked`, "map.asset.begin", beginBody({ bytes: 4 })) })
+    assert.equal(file.accesses.length, accessCount)
+    assert.equal(sent.at(-2).body.code, "ASSET_BUSY")
+    heldDeletes[0][completion]()
+    assert.deepEqual(page.pendingDeleteURIs, [])
+
+    page.receiveMessage({ data: envelope(`${completion}-allowed`, "map.asset.begin", beginBody({ bytes: 4 })) })
+    assert.equal(file.accesses.length, accessCount + 1)
+  }
+})
+
+test("delete registry clears on synchronous throw and never schedules duplicate URI cleanup", async () => {
+  const file = memoryFile()
+  file.delete = () => { throw new Error("delete") }
+  const crypto = fakeCrypto("f".repeat(64))
+  const { page } = await readyHarness(file, crypto)
+  page.receiveMessage({ data: envelope("throw-begin", "map.asset.begin", beginBody({ bytes: 4 })) })
+  page.receiveMessage({ data: envelope("throw-chunk", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
+  page.receiveMessage({ data: envelope("throw-end", "map.asset.end", { asset: ASSET }) })
+  assert.deepEqual(page.pendingDeleteURIs, [])
+  page.deleteBestEffort(URI)
+  page.deleteBestEffort(URI)
+  assert.deepEqual(page.pendingDeleteURIs, [])
+})
+
+test("repeated readiness while connected preserves dedup side effects until a real new session", async () => {
+  const sent = []
+  const file = memoryFile()
+  const connection = {
+    send(options) { sent.push(options.data) },
+    getReadyState({ success }) { success({ status: 1 }) }
+  }
+  const page = await loadPage(connection, file, fakeCrypto())
+  page.unlock()
+  const echo = envelope("stable-echo", "system.echo", { text: "PING" })
+  const begin = envelope("stable-begin", "map.asset.begin", beginBody({ bytes: 4 }))
+  const chunk = envelope("stable-chunk", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
+  page.receiveMessage({ data: echo })
+  page.receiveMessage({ data: begin })
+  page.receiveMessage({ data: chunk })
+  const accessCount = file.accesses.length
+  const writeCount = file.writes.length
+  const resultCount = sent.filter(message => message.topic === "map.asset.result").length
+
+  page.checkConnection()
+  page.receiveMessage({ data: echo })
+  page.receiveMessage({ data: begin })
+  page.receiveMessage({ data: chunk })
+  assert.equal(file.accesses.length, accessCount)
+  assert.equal(file.writes.length, writeCount)
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
+  for (const id of [echo.id, begin.id, chunk.id]) {
+    assert.equal(sent.filter(message => message.type === "ack" && message.id === id).length, 2)
+  }
+  assert.equal(page.logRows.length, 0, "repeated check may clear diagnostics but must not rerender duplicate echo")
+
+  page.lock("IOS LINK CLOSED")
+  page.unlock()
+  page.receiveMessage({ data: echo })
+  assert.equal(page.logRows.length, 1, "new interconnect session may clear dedup history")
+})
