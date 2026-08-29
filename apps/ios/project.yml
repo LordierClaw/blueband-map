@@ -31,6 +31,8 @@ targets:
         product: BlueBandCryptoCommonCrypto
       - package: BlueBandKit
         product: BlueBandCore
+      - package: BlueBandKit
+        product: BlueBandMapCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lordierclaw.bluebandmap

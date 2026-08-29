@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 import BlueBandCore
 import BlueBandCrypto
+import BlueBandMapCore
 import BlueBandProtocol
 @testable import BlueBandMap
 
@@ -93,6 +94,8 @@ final class AppModelPickerTests: XCTestCase {
             trustedRPKStore: trustStore,
             central: central,
             session: session,
+            staticMapProvider: PickerStaticMapProvider(),
+            m1Session: PickerM1Session(),
             scanDuration: .seconds(3_600)
         )
     }
@@ -185,4 +188,16 @@ private actor PickerCentral: BandCentralProtocol {
 
 private enum PickerCentralError: Swift.Error {
     case unexpectedConnect
+}
+
+private struct PickerStaticMapProvider: StaticMapProviding {
+    func fetch(_ request: StaticMapRequest, serviceKey: String) async throws -> MapAsset {
+        throw PickerCentralError.unexpectedConnect
+    }
+}
+
+private struct PickerM1Session: M1SessionSending {
+    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws {
+        throw PickerCentralError.unexpectedConnect
+    }
 }

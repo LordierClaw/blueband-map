@@ -1,6 +1,7 @@
 import SwiftUI
 import BlueBandCore
 import BlueBandCryptoCommonCrypto
+import BlueBandMapCore
 
 enum BlueBandProduct {
     static let displayName = "BlueBandMap"
@@ -17,6 +18,7 @@ struct BlueBandMapApp: App {
         let central = BandCentral()
         let cipher = CommonCryptoAESBlockCipher()
         let trustStore = KeychainTrustedRPKStore()
+        let vietmapKeyStore = KeychainVietmapKeyStore()
         let session = BandSession(
             central: central,
             authenticator: BandAuthenticator(cipher: cipher),
@@ -26,11 +28,13 @@ struct BlueBandMapApp: App {
         )
         _model = StateObject(wrappedValue: AppModel(
             keyStore: KeychainAuthKeyStore(),
-            vietmapKeyStore: KeychainVietmapKeyStore(),
+            vietmapKeyStore: vietmapKeyStore,
             bandStore: UserDefaultsRememberedBandStore(),
             trustedRPKStore: trustStore,
             central: central,
-            session: session
+            session: session,
+            staticMapProvider: VietmapStaticMapClient(transport: URLSessionHTTPTransport()),
+            m1Session: BandSessionM1Sender(session: session)
         ))
     }
 

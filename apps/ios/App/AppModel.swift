@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import BlueBandCore
+import BlueBandMapCore
 import BlueBandProtocol
 
 enum RPKState: Equatable, Sendable {
@@ -24,6 +25,18 @@ struct EchoEntry: Identifiable, Equatable, Sendable {
     var delivery: EchoDelivery
 }
 
+protocol M1SessionSending: Sendable {
+    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws
+}
+
+struct BandSessionM1Sender: M1SessionSending, Sendable {
+    let session: BandSession
+
+    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws {
+        _ = try await session.sendAwaitingAcknowledgement(topic: topic, body: body)
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var authKeyInput = ""
@@ -39,6 +52,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var rpkState: RPKState = .locked
     @Published private(set) var snapshot = BandSnapshot()
     @Published private(set) var events: [EchoEntry] = []
+    @Published private(set) var m1State: M1State = .idle
     @Published private(set) var errorMessage: String?
 
     private let keyStore: any AuthKeyStoreProtocol
@@ -47,9 +61,19 @@ final class AppModel: ObservableObject {
     private let trustedRPKStore: any TrustedRPKStore
     private let central: any BandCentralProtocol
     private let session: BandSession
+    private let staticMapProvider: any StaticMapProviding
+    private let m1Session: any M1SessionSending
     private let scanDuration: Duration
     private var scanGeneration = 0
     private var eventTask: Task<Void, Never>?
+    private var currentM1Attempt: UUID?
+    private var pendingM1Asset: PendingM1Asset?
+
+    private struct PendingM1Asset: Sendable {
+        let id: String
+        let hashPrefix: String
+        let byteCount: Int
+    }
 
     init(
         keyStore: any AuthKeyStoreProtocol,
@@ -58,6 +82,8 @@ final class AppModel: ObservableObject {
         trustedRPKStore: any TrustedRPKStore,
         central: any BandCentralProtocol,
         session: BandSession,
+        staticMapProvider: any StaticMapProviding,
+        m1Session: any M1SessionSending,
         scanDuration: Duration = .seconds(15)
     ) {
         self.keyStore = keyStore
@@ -66,6 +92,8 @@ final class AppModel: ObservableObject {
         self.trustedRPKStore = trustedRPKStore
         self.central = central
         self.session = session
+        self.staticMapProvider = staticMapProvider
+        self.m1Session = m1Session
         self.scanDuration = scanDuration
         rememberedBand = bandStore.load()
         do { hasSavedKey = try keyStore.load() != nil }
@@ -236,6 +264,10 @@ final class AppModel: ObservableObject {
         guard sessionState != .idle else { return }
         sessionState = .disconnecting
         eventTask?.cancel()
+        if !isM1Terminal {
+            currentM1Attempt = nil
+            failM1("TRANSFER_DISCONNECTED")
+        }
         await session.disconnect()
         rpkState = .locked
         sessionState = .idle
@@ -246,6 +278,72 @@ final class AppModel: ObservableObject {
         do {
             _ = try await session.send(topic: "system.echo", body: ["text": .string(echoInput)])
         } catch { errorMessage = "Không gửi được echo tới band." }
+    }
+
+    func startM1() async {
+        guard isM1Terminal else { return }
+        guard rpkState == .ready else {
+            failM1("RPK_NOT_READY")
+            return
+        }
+
+        let serviceKey: String
+        do {
+            guard let savedServiceKey = try vietmapKeyStore.load(.service) else {
+                failM1("SERVICE_KEY_MISSING")
+                return
+            }
+            serviceKey = savedServiceKey
+        } catch {
+            failM1("SERVICE_KEY_MISSING")
+            return
+        }
+
+        let attempt = UUID()
+        currentM1Attempt = attempt
+        pendingM1Asset = nil
+        m1State = .fetching
+
+        let asset: MapAsset
+        do {
+            asset = try await staticMapProvider.fetch(M1Configuration.request, serviceKey: serviceKey)
+        } catch {
+            guard currentM1Attempt == attempt else { return }
+            failM1(providerCode(for: error))
+            return
+        }
+        guard currentM1Attempt == attempt else { return }
+
+        let steps: [MapTransferStep]
+        do {
+            steps = try MapAssetTransferPlan.make(asset: asset)
+        } catch {
+            failM1("ASSET_INVALID")
+            return
+        }
+
+        let expected = PendingM1Asset(
+            id: asset.id,
+            hashPrefix: String(asset.sha256.prefix(8)),
+            byteCount: asset.byteCount
+        )
+        m1State = .transferring(completed: 0, total: steps.count)
+        do {
+            for (index, step) in steps.enumerated() {
+                try await m1Session.sendAwaitingAcknowledgement(topic: step.topic, body: step.body)
+                guard currentM1Attempt == attempt else { return }
+                m1State = .transferring(completed: index + 1, total: steps.count)
+            }
+        } catch {
+            guard currentM1Attempt == attempt else { return }
+            failM1(transferCode(for: error))
+            return
+        }
+
+        guard currentM1Attempt == attempt else { return }
+        pendingM1Asset = expected
+        currentM1Attempt = nil
+        m1State = .waitingForBand(assetID: expected.id, hashPrefix: expected.hashPrefix)
     }
 
     func clearEvents() { events = [] }
@@ -281,16 +379,21 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func consume(_ event: InterconnectEvent) {
+    func consume(_ event: InterconnectEvent) {
         switch event {
         case .connected:
             rpkState = .ready
             sessionState = .applicationReady
         case .disconnected:
             rpkState = .locked
+            if !isM1Terminal {
+                currentM1Attempt = nil
+                failM1("TRANSFER_DISCONNECTED")
+            }
         case let .sent(envelope):
             append(envelope, delivery: .sent)
         case let .received(envelope):
+            consumeM1Result(envelope)
             append(envelope, delivery: .received)
         case let .acknowledged(id):
             if let index = events.lastIndex(where: { $0.id == id }) { events[index].delivery = .acknowledged }
@@ -299,6 +402,115 @@ final class AppModel: ObservableObject {
         case .trustRejected:
             rpkState = .failed("Fingerprint RPK đã thay đổi")
             errorMessage = "Fingerprint RPK đã thay đổi. Chỉ reset trust nếu bạn vừa cài lại RPK tin cậy."
+        }
+    }
+
+    private var isM1Terminal: Bool {
+        switch m1State {
+        case .idle, .displayed, .failed: true
+        case .fetching, .transferring, .waitingForBand: false
+        }
+    }
+
+    private func failM1(_ code: String) {
+        currentM1Attempt = nil
+        pendingM1Asset = nil
+        m1State = .failed(code: code)
+    }
+
+    private func providerCode(for error: Swift.Error) -> String {
+        switch error {
+        case VietmapStaticMapError.rateLimited:
+            "PROVIDER_RATE_LIMITED"
+        case VietmapStaticMapError.httpStatus:
+            "PROVIDER_HTTP"
+        case VietmapStaticMapError.wrongContentType:
+            "PROVIDER_MIME"
+        case is MapAsset.Error, is MapAssetTransferPlan.Error:
+            "ASSET_INVALID"
+        default:
+            "PROVIDER_REQUEST"
+        }
+    }
+
+    private func transferCode(for error: Swift.Error) -> String {
+        switch error {
+        case is CancellationError:
+            "TRANSFER_CANCELLED"
+        case InterconnectDeliveryError.timeout:
+            "TRANSFER_TIMEOUT"
+        case InterconnectDeliveryError.disconnected,
+             BandSessionError.disconnected,
+             BandSessionError.notConnected,
+             InterconnectSession.Error.notReady:
+            "TRANSFER_DISCONNECTED"
+        default:
+            "TRANSFER_FAILED"
+        }
+    }
+
+    private func consumeM1Result(_ envelope: ApplicationEnvelope) {
+        guard envelope.src == .band,
+              envelope.type == .message,
+              envelope.topic == "map.asset.result",
+              case let .waitingForBand(assetID, hashPrefix) = m1State,
+              let expected = pendingM1Asset,
+              expected.id == assetID,
+              expected.hashPrefix == hashPrefix,
+              let body = envelope.body,
+              case let .string(receivedAsset)? = body["asset"],
+              receivedAsset == expected.id else {
+            return
+        }
+
+        guard case let .string(status)? = body["status"],
+              case let .number(rawBytes)? = body["bytes"],
+              rawBytes.isFinite,
+              rawBytes.rounded(.towardZero) == rawBytes,
+              rawBytes >= 0,
+              rawBytes <= Double(MapAsset.maximumPNGBytes),
+              case let .string(receivedPrefix)? = body["sha256Prefix"],
+              isHashPrefix(receivedPrefix) else {
+            return
+        }
+
+        if let rawCode = body["code"], case .string = rawCode {
+            // The exact value is validated below for error results.
+        } else if body["code"] != nil {
+            return
+        }
+
+        switch status {
+        case "ok":
+            guard Int(rawBytes) == expected.byteCount,
+                  receivedPrefix == expected.hashPrefix else {
+                failM1("ASSET_RESULT_INVALID")
+                return
+            }
+            pendingM1Asset = nil
+            m1State = .displayed(assetID: expected.id, hashPrefix: expected.hashPrefix)
+        case "error":
+            guard case let .string(code)? = body["code"], isAssetCode(code) else {
+                failM1("ASSET_RESULT_INVALID")
+                return
+            }
+            failM1(code)
+        default:
+            return
+        }
+    }
+
+    private func isHashPrefix(_ value: String) -> Bool {
+        value.utf8.count == 8 && value.utf8.allSatisfy {
+            (48...57).contains($0) || (97...102).contains($0)
+        }
+    }
+
+    private func isAssetCode(_ value: String) -> Bool {
+        guard value.hasPrefix("ASSET_") else { return false }
+        let suffix = value.utf8.dropFirst(6)
+        return (1...40).contains(suffix.count) && suffix.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || $0 == 95
         }
     }
 

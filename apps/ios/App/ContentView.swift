@@ -13,6 +13,7 @@ struct ContentView: View {
                 connectionSection
                 proofSection
                 rpkSection
+                m1Section
                 echoSection
                 if let error = model.errorMessage {
                     Section("Lỗi an toàn") { Text(error).foregroundStyle(.red) }
@@ -81,6 +82,34 @@ struct ContentView: View {
                 HStack { Text(item.source.rawValue.uppercased()).font(.caption.bold()); Text(item.text); Spacer(); Text(item.delivery.rawValue).font(.caption2) }
             }
             if !model.events.isEmpty { Button("Xóa events") { model.clearEvents() } }
+        }
+    }
+
+    private var m1Section: some View {
+        Section("M1 · One Vietmap street PNG") {
+            LabeledContent("Trạng thái", value: m1Label)
+            Text("Tối đa 1 Static Map request mỗi lần bấm")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Tải và gửi M1") { Task { await model.startM1() } }
+                .disabled(model.rpkState != .ready || m1IsBusy)
+        }
+    }
+
+    private var m1IsBusy: Bool {
+        switch model.m1State {
+        case .fetching, .transferring, .waitingForBand: return true
+        case .idle, .displayed, .failed: return false
+        }
+    }
+
+    private var m1Label: String {
+        switch model.m1State {
+        case .idle: return "Sẵn sàng"
+        case .fetching: return "Đang tải PNG"
+        case let .transferring(completed, total): return "Đang gửi \(completed)/\(total) ACK"
+        case let .waitingForBand(_, hashPrefix): return "Chờ Band hiển thị · \(hashPrefix)"
+        case let .displayed(_, hashPrefix): return "Đã hiển thị · \(hashPrefix)"
+        case let .failed(code): return code
         }
     }
 
