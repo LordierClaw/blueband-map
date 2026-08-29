@@ -19,3 +19,4 @@ sign/
 !.env.example
 .DS_Store
 .superpowers/
+.worktrees/
