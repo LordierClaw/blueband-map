@@ -74,7 +74,7 @@ export default {
   },
 
   onDestroy() {
-    this.pendingPublication = null
+    this.discardPendingPublication()
     if (!this.connection) return
     this.connection.onopen = null
     this.connection.onclose = null
@@ -112,7 +112,7 @@ export default {
   },
 
   lock(reason) {
-    this.pendingPublication = null
+    this.discardPendingPublication()
     this.connected = false
     this.waiting = true
     this.statusText = reason
@@ -229,7 +229,6 @@ export default {
       this.failAsset(message, "ASSET_BUSY")
       return
     }
-    this.pendingPublication = null
     var transfer = {
       asset: body.asset,
       bytes: body.bytes,
@@ -358,9 +357,15 @@ export default {
     this.mapHashPrefix = prefix
     this.mapReady = true
     this.showDiagnostics = false
-    this.pendingPublication = { asset: asset, bytes: bytes, sha256Prefix: prefix, uri: transfer.uri }
+    this.pendingPublication = {
+      asset: asset,
+      bytes: bytes,
+      sha256Prefix: prefix,
+      uri: transfer.uri,
+      operationID: message.id
+    }
     this.activeTransfer = null
-    this.succeedAsset(message.id)
+    this.holdSuccessfulAsset(message.id)
   },
 
   removeInFlight(id) {
@@ -380,16 +385,28 @@ export default {
     this.sendACK(id)
   },
 
+  holdSuccessfulAsset(id) {
+    if (this.activeMapOperationID !== id) return
+    this.removeInFlight(id)
+    this.rememberSuccess(id)
+    this.sendACK(id)
+  },
+
   failAsset(message, code, discardTransfer) {
     var owned = this.releaseMapOperation(message.id)
     if (!owned && code !== "ASSET_BUSY") return
     var transfer = this.activeTransfer
     this.removeInFlight(message.id)
+    if (code === "ASSET_BUSY") {
+      var rejectedAsset = typeof message.body.asset === "string" ? message.body.asset : ""
+      this.sendAssetResult(rejectedAsset, "error", 0, "", code)
+      return
+    }
     if (discardTransfer && transfer) {
       this.activeTransfer = null
       this.deleteBestEffort(transfer.uri)
     }
-    var asset = typeof message.body.asset === "string" ? message.body.asset : (transfer ? transfer.asset : "")
+    var asset = transfer ? transfer.asset : (typeof message.body.asset === "string" ? message.body.asset : "")
     var bytes = transfer ? transfer.receivedBytes : 0
     var prefix = transfer ? transfer.sha256.slice(0, 8) : ""
     this.sendAssetResult(asset, "error", bytes, prefix, code)
@@ -399,6 +416,13 @@ export default {
     if (this.activeMapOperationID !== id) return false
     this.activeMapOperationID = ""
     return true
+  },
+
+  discardPendingPublication() {
+    var publication = this.pendingPublication
+    if (!publication) return
+    this.pendingPublication = null
+    this.releaseMapOperation(publication.operationID)
   },
 
   deleteBestEffort(uri) {
@@ -482,16 +506,18 @@ export default {
 
   mapComplete() {
     var publication = this.pendingPublication
-    if (!publication) return
+    if (!publication || this.activeMapOperationID !== publication.operationID) return
     this.pendingPublication = null
+    if (!this.releaseMapOperation(publication.operationID)) return
     this.statusText = "M1 MAP READY"
     this.sendAssetResult(publication.asset, "ok", publication.bytes, publication.sha256Prefix)
   },
 
   mapError() {
     var publication = this.pendingPublication
-    if (!publication) return
+    if (!publication || this.activeMapOperationID !== publication.operationID) return
     this.pendingPublication = null
+    if (!this.releaseMapOperation(publication.operationID)) return
     this.mapReady = false
     this.showDiagnostics = true
     this.logText = "Map image display failed."
