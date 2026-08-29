@@ -152,10 +152,26 @@ public actor BandSession {
                     }
                 }
             } catch {}
+            guard !Task.isCancelled else { return }
+            await session.transportDisconnected()
+            await self?.receiverTerminated(session: session, transport: transport)
         }
     }
 
     private func markApplicationReady() { currentState = .applicationReady }
+
+    private func receiverTerminated(
+        session: InterconnectSession,
+        transport activeTransport: any BandTransportProtocol
+    ) async {
+        guard interconnect === session else { return }
+        receiverTask = nil
+        interconnect = nil
+        transport = nil
+        keys = nil
+        currentState = .idle
+        await activeTransport.close()
+    }
 
     private func clearAndClose(_ activeTransport: any BandTransportProtocol) async {
         receiverTask?.cancel()

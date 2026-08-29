@@ -15,6 +15,7 @@ public enum InterconnectEvent: Equatable, Sendable {
 public enum InterconnectDeliveryError: Swift.Error, Equatable, Sendable {
     case timeout(String)
     case disconnected
+    case identifierCollision(String)
 }
 
 public actor InterconnectSession {
@@ -28,6 +29,15 @@ public actor InterconnectSession {
     public typealias CommandSender = @Sendable (BandCommand) async throws -> Void
     public typealias IDGenerator = @Sendable () -> String
 
+    private struct PendingDelivery {
+        let token: UUID
+        let generation: UInt64
+        var waiter: CheckedContinuation<String, Swift.Error>?
+        var transmitTask: Task<Void, Never>?
+        var timeoutTask: Task<Void, Never>?
+        var earlyAcknowledged = false
+    }
+
     private let expectedPackage: String
     private let trustedRPKStore: any TrustedRPKStore
     private let clock: any BlueBandClock
@@ -38,9 +48,9 @@ public actor InterconnectSession {
     private var identity: ThirdPartyAppIdentity?
     private var recentIDs: [String] = []
     private var recentIDSet: Set<String> = []
-    private var deliveryTasks: [String: Task<Void, Never>] = [:]
-    private var deliveryWaiters: [String: CheckedContinuation<String, Swift.Error>] = [:]
-    private var earlyAcknowledgements: Set<String> = []
+    private var pendingDeliveries: [String: PendingDelivery] = [:]
+    private var generation: UInt64 = 0
+    private var isTerminal = false
 
     public init(
         expectedPackage: String,
@@ -75,13 +85,16 @@ public actor InterconnectSession {
                 try await sendCommand(ThirdPartyAppCodec.phoneMessage(identity: identity, content: try ack.encoded()))
                 if remember(envelope.id) { eventContinuation.yield(.received(envelope)) }
             case .ack:
-                if let task = deliveryTasks.removeValue(forKey: envelope.id) {
-                    task.cancel()
-                    let waiter = deliveryWaiters.removeValue(forKey: envelope.id)
+                guard var pending = pendingDeliveries[envelope.id] else { return }
+                if pending.timeoutTask != nil {
+                    pendingDeliveries.removeValue(forKey: envelope.id)
+                    pending.timeoutTask?.cancel()
+                    pending.transmitTask?.cancel()
                     eventContinuation.yield(.acknowledged(envelope.id))
-                    waiter?.resume(returning: envelope.id)
-                } else if deliveryWaiters[envelope.id] != nil {
-                    earlyAcknowledgements.insert(envelope.id)
+                    pending.waiter?.resume(returning: envelope.id)
+                } else {
+                    pending.earlyAcknowledged = true
+                    pendingDeliveries[envelope.id] = pending
                 }
             }
         }
@@ -89,56 +102,104 @@ public actor InterconnectSession {
 
     @discardableResult
     public func send(topic: String, body: [String: JSONValue]) async throws -> String {
-        guard let identity else { throw Error.notReady }
+        guard !isTerminal, let identity else { throw Error.notReady }
+        let currentGeneration = generation
         let envelope = ApplicationEnvelope.message(id: idGenerator(), source: .ios, topic: topic, body: body)
-        try await sendCommand(ThirdPartyAppCodec.phoneMessage(identity: identity, content: try envelope.encoded()))
-        eventContinuation.yield(.sent(envelope))
+        let command = ThirdPartyAppCodec.phoneMessage(identity: identity, content: try envelope.encoded())
         let id = envelope.id
-        startDeliveryTimeout(for: id)
+        let token = UUID()
+        try reserve(id: id, token: token, generation: currentGeneration)
+        do {
+            try await sendCommand(command)
+        } catch {
+            guard isCurrent(id: id, token: token, generation: currentGeneration) else {
+                throw InterconnectDeliveryError.disconnected
+            }
+            removeDelivery(id: id, token: token)
+            throw error
+        }
+        guard isCurrent(id: id, token: token, generation: currentGeneration) else {
+            throw InterconnectDeliveryError.disconnected
+        }
+        finishSuccessfulTransmission(id: id, token: token, envelope: envelope)
         return id
     }
 
     @discardableResult
     public func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
-        guard let identity else { throw Error.notReady }
+        guard !isTerminal, let identity else { throw Error.notReady }
+        let currentGeneration = generation
         let envelope = ApplicationEnvelope.message(id: idGenerator(), source: .ios, topic: topic, body: body)
         let command = ThirdPartyAppCodec.phoneMessage(identity: identity, content: try envelope.encoded())
         let id = envelope.id
-        return try await withCheckedThrowingContinuation { continuation in
-            deliveryWaiters[id] = continuation
-            Task { await transmitAwaited(command, envelope: envelope) }
+        let token = UUID()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                do {
+                    try reserve(
+                        id: id,
+                        token: token,
+                        generation: currentGeneration,
+                        waiter: continuation
+                    )
+                    let transmitTask = Task {
+                        await self.transmitAwaited(
+                            command,
+                            envelope: envelope,
+                            token: token,
+                            generation: currentGeneration
+                        )
+                    }
+                    guard var pending = pendingDeliveries[id], pending.token == token else {
+                        transmitTask.cancel()
+                        return
+                    }
+                    pending.transmitTask = transmitTask
+                    pendingDeliveries[id] = pending
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelDelivery(id: id, token: token) }
         }
     }
 
     public func disconnect() async {
-        let disconnectedIdentity = identity
-        identity = nil
-        deliveryTasks.values.forEach { $0.cancel() }
-        deliveryTasks.removeAll()
-        earlyAcknowledgements.removeAll()
-        let waiters = Array(deliveryWaiters.values)
-        deliveryWaiters.removeAll()
-        waiters.forEach { $0.resume(throwing: InterconnectDeliveryError.disconnected) }
-        recentIDs.removeAll()
-        recentIDSet.removeAll()
-        eventContinuation.yield(.disconnected)
-        eventContinuation.finish()
+        guard !isTerminal else { return }
+        let disconnectedIdentity = terminate()
         if let disconnectedIdentity {
             try? await sendCommand(ThirdPartyAppCodec.status(identity: disconnectedIdentity, connected: false))
         }
     }
 
+    func transportDisconnected() {
+        guard !isTerminal else { return }
+        _ = terminate()
+    }
+
     private func accept(_ requestedIdentity: ThirdPartyAppIdentity) async throws {
+        guard !isTerminal else { throw Error.notReady }
+        let currentGeneration = generation
         guard requestedIdentity.packageName == expectedPackage else { throw Error.unexpectedPackage }
         if let trusted = try await trustedRPKStore.trustedRPKFingerprint() {
+            try ensureAcceptIsCurrent(currentGeneration)
             guard SessionCrypto.constantTimeEqual(trusted, requestedIdentity.fingerprint) else {
                 eventContinuation.yield(.trustRejected)
                 throw Error.fingerprintMismatch
             }
         } else {
+            try ensureAcceptIsCurrent(currentGeneration)
             try await trustedRPKStore.saveTrustedRPKFingerprint(requestedIdentity.fingerprint)
+            try ensureAcceptIsCurrent(currentGeneration)
         }
         try await sendCommand(ThirdPartyAppCodec.status(identity: requestedIdentity, connected: true))
+        try ensureAcceptIsCurrent(currentGeneration)
         identity = requestedIdentity
         eventContinuation.yield(.connected)
     }
@@ -150,47 +211,128 @@ public actor InterconnectSession {
         return true
     }
 
-    private func transmitAwaited(_ command: BandCommand, envelope: ApplicationEnvelope) async {
+    private func transmitAwaited(
+        _ command: BandCommand,
+        envelope: ApplicationEnvelope,
+        token: UUID,
+        generation currentGeneration: UInt64
+    ) async {
         let id = envelope.id
-        guard deliveryWaiters[id] != nil else { return }
+        guard isCurrent(id: id, token: token, generation: currentGeneration) else { return }
         do {
             try await sendCommand(command)
         } catch {
-            deliveryTasks.removeValue(forKey: id)?.cancel()
-            earlyAcknowledgements.remove(id)
-            guard let waiter = deliveryWaiters.removeValue(forKey: id) else { return }
-            waiter.resume(throwing: error)
+            guard isCurrent(id: id, token: token, generation: currentGeneration),
+                  let pending = removeDelivery(id: id, token: token) else { return }
+            pending.timeoutTask?.cancel()
+            pending.waiter?.resume(throwing: error)
             eventContinuation.yield(.failed(id))
             return
         }
-        guard deliveryWaiters[id] != nil else { return }
-        eventContinuation.yield(.sent(envelope))
-        if earlyAcknowledgements.remove(id) != nil {
-            let waiter = deliveryWaiters.removeValue(forKey: id)
-            eventContinuation.yield(.acknowledged(id))
-            waiter?.resume(returning: id)
-        } else {
-            startDeliveryTimeout(for: id)
-        }
+        guard isCurrent(id: id, token: token, generation: currentGeneration) else { return }
+        finishSuccessfulTransmission(id: id, token: token, envelope: envelope)
     }
 
-    private func startDeliveryTimeout(for id: String) {
+    private func startDeliveryTimeout(for id: String, token: UUID, generation: UInt64) {
         let clock = clock
-        deliveryTasks[id]?.cancel()
-        deliveryTasks[id] = Task { [weak self, clock] in
+        let timeoutTask = Task { [weak self, clock] in
             do {
                 try await clock.sleep(for: .seconds(5))
                 guard !Task.isCancelled else { return }
-                await self?.deliveryTimedOut(id)
+                await self?.deliveryTimedOut(id, token: token, generation: generation)
             } catch {}
+        }
+        guard var pending = pendingDeliveries[id], pending.token == token else {
+            timeoutTask.cancel()
+            return
+        }
+        pending.timeoutTask?.cancel()
+        pending.timeoutTask = timeoutTask
+        pendingDeliveries[id] = pending
+    }
+
+    private func deliveryTimedOut(_ id: String, token: UUID, generation: UInt64) {
+        guard isCurrent(id: id, token: token, generation: generation),
+              let pending = removeDelivery(id: id, token: token) else { return }
+        pending.waiter?.resume(throwing: InterconnectDeliveryError.timeout(id))
+        eventContinuation.yield(.failed(id))
+    }
+
+    private func reserve(
+        id: String,
+        token: UUID,
+        generation: UInt64,
+        waiter: CheckedContinuation<String, Swift.Error>? = nil
+    ) throws {
+        guard !isTerminal, self.generation == generation else {
+            throw InterconnectDeliveryError.disconnected
+        }
+        guard pendingDeliveries[id] == nil else {
+            throw InterconnectDeliveryError.identifierCollision(id)
+        }
+        pendingDeliveries[id] = PendingDelivery(
+            token: token,
+            generation: generation,
+            waiter: waiter
+        )
+    }
+
+    private func finishSuccessfulTransmission(id: String, token: UUID, envelope: ApplicationEnvelope) {
+        guard var pending = pendingDeliveries[id], pending.token == token,
+              !isTerminal, pending.generation == generation else { return }
+        pending.transmitTask = nil
+        pendingDeliveries[id] = pending
+        eventContinuation.yield(.sent(envelope))
+        if pending.earlyAcknowledged {
+            pendingDeliveries.removeValue(forKey: id)
+            pending.timeoutTask?.cancel()
+            eventContinuation.yield(.acknowledged(id))
+            pending.waiter?.resume(returning: id)
+        } else {
+            startDeliveryTimeout(for: id, token: token, generation: pending.generation)
         }
     }
 
-    private func deliveryTimedOut(_ id: String) {
-        guard deliveryTasks.removeValue(forKey: id) != nil else { return }
-        deliveryWaiters.removeValue(forKey: id)?.resume(
-            throwing: InterconnectDeliveryError.timeout(id)
-        )
-        eventContinuation.yield(.failed(id))
+    private func cancelDelivery(id: String, token: UUID) {
+        guard let pending = removeDelivery(id: id, token: token) else { return }
+        pending.transmitTask?.cancel()
+        pending.timeoutTask?.cancel()
+        pending.waiter?.resume(throwing: CancellationError())
+    }
+
+    @discardableResult
+    private func removeDelivery(id: String, token: UUID) -> PendingDelivery? {
+        guard let pending = pendingDeliveries[id], pending.token == token else { return nil }
+        pendingDeliveries.removeValue(forKey: id)
+        return pending
+    }
+
+    private func isCurrent(id: String, token: UUID, generation: UInt64) -> Bool {
+        guard !isTerminal, self.generation == generation,
+              let pending = pendingDeliveries[id] else { return false }
+        return pending.token == token && pending.generation == generation
+    }
+
+    private func ensureAcceptIsCurrent(_ generation: UInt64) throws {
+        guard !isTerminal, self.generation == generation else { throw Error.notReady }
+    }
+
+    private func terminate() -> ThirdPartyAppIdentity? {
+        isTerminal = true
+        generation &+= 1
+        let disconnectedIdentity = identity
+        identity = nil
+        let deliveries = Array(pendingDeliveries.values)
+        pendingDeliveries.removeAll()
+        deliveries.forEach {
+            $0.transmitTask?.cancel()
+            $0.timeoutTask?.cancel()
+            $0.waiter?.resume(throwing: InterconnectDeliveryError.disconnected)
+        }
+        recentIDs.removeAll()
+        recentIDSet.removeAll()
+        eventContinuation.yield(.disconnected)
+        eventContinuation.finish()
+        return disconnectedIdentity
     }
 }

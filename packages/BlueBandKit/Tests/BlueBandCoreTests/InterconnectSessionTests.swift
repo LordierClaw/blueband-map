@@ -423,6 +423,238 @@ final class InterconnectSessionTests: XCTestCase {
         XCTAssertEqual(remainingEvents, [.disconnected])
     }
 
+    func testCancellationBeforeAwaitedSendRegistrationThrowsCancellationWithoutDeliveryEvents() async throws {
+        let sender = ControllableCommandSender()
+        let gate = ManualGate()
+        let clock = ImmediateRecordingClock()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            clock: clock,
+            idGenerator: { "i-cancel-before" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let completed = expectation(description: "cancelled send completes before transmission")
+        let result = Task<Result<String, Swift.Error>, Never> {
+            await gate.wait()
+            defer { completed.fulfill() }
+            do {
+                return .success(try await session.sendAwaitingAcknowledgement(topic: "system.echo", body: [:]))
+            } catch {
+                return .failure(error)
+            }
+        }
+        await gate.waitUntilBlocked()
+        result.cancel()
+        await gate.release()
+        await fulfillment(of: [completed], timeout: 0.1)
+        await sender.releasePhone(with: .success(()))
+        let outcome = await result.value
+        await session.disconnect()
+
+        guard case let .failure(error) = outcome else {
+            return XCTFail("Expected cancellation")
+        }
+        var remainingEvents: [InterconnectEvent] = []
+        while let event = await events.next() { remainingEvents.append(event) }
+        let phoneCount = await sender.phoneSendCount()
+        let timeoutDuration = await clock.lastDuration()
+        XCTAssertTrue(error is CancellationError)
+        XCTAssertEqual(phoneCount, 0)
+        XCTAssertNil(timeoutDuration)
+        XCTAssertEqual(remainingEvents, [.disconnected])
+    }
+
+    func testCancellationWhileTransmitIsSuspendedRemovesDeliveryAndLateCompletionIsInert() async throws {
+        let sender = ControllableCommandSender()
+        let clock = ImmediateRecordingClock()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            clock: clock,
+            idGenerator: { "i-cancel-suspended" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let completed = expectation(description: "cancelled suspended send completes promptly")
+        let result = Task<Result<String, Swift.Error>, Never> {
+            defer { completed.fulfill() }
+            do {
+                return .success(try await session.sendAwaitingAcknowledgement(topic: "system.echo", body: [:]))
+            } catch {
+                return .failure(error)
+            }
+        }
+        let outgoing = await sender.waitForPhoneCommand()
+        let envelope = try decodePhoneEnvelope(outgoing)
+        result.cancel()
+        await fulfillment(of: [completed], timeout: 0.1)
+        await sender.releasePhone(with: .success(()))
+        let outcome = await result.value
+
+        let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+        await session.disconnect()
+
+        guard case let .failure(error) = outcome else {
+            return XCTFail("Expected cancellation")
+        }
+        var remainingEvents: [InterconnectEvent] = []
+        while let event = await events.next() { remainingEvents.append(event) }
+        let timeoutDuration = await clock.lastDuration()
+        XCTAssertTrue(error is CancellationError)
+        XCTAssertNil(timeoutDuration)
+        XCTAssertEqual(remainingEvents, [.disconnected])
+    }
+
+    func testBlockedLegacySendCannotBecomeSentAfterTerminalDisconnect() async throws {
+        let sender = ControllableCommandSender()
+        let clock = ImmediateRecordingClock()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            clock: clock,
+            idGenerator: { "i-legacy-terminal" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let result = Task<Result<String, Swift.Error>, Never> {
+            do {
+                return .success(try await session.send(topic: "system.echo", body: [:]))
+            } catch {
+                return .failure(error)
+            }
+        }
+        _ = await sender.waitForPhoneCommand()
+        await session.disconnect()
+        await sender.releasePhone(with: .success(()))
+        let outcome = await result.value
+
+        guard case let .failure(error) = outcome else {
+            return XCTFail("Expected terminal send failure")
+        }
+        var remainingEvents: [InterconnectEvent] = []
+        while let event = await events.next() { remainingEvents.append(event) }
+        let timeoutDuration = await clock.lastDuration()
+        XCTAssertEqual(error as? InterconnectDeliveryError, .disconnected)
+        XCTAssertNil(timeoutDuration)
+        XCTAssertEqual(remainingEvents, [.disconnected])
+    }
+
+    func testBlockedHandshakeCannotRestoreReadyStateAfterTerminalDisconnect() async throws {
+        let sender = ControllableCommandSender(suspendConnectedStatus: true)
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        let accept = Task<Result<Void, Swift.Error>, Never> {
+            do {
+                try await session.receive(.statusRequest(identity))
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+        _ = await sender.waitForConnectedStatusCommand()
+        await session.disconnect()
+        await sender.releaseConnectedStatus()
+        let outcome = await accept.value
+
+        guard case let .failure(error) = outcome else {
+            return XCTFail("Expected terminal handshake failure")
+        }
+        var remainingEvents: [InterconnectEvent] = []
+        while let event = await events.next() { remainingEvents.append(event) }
+        XCTAssertEqual(error as? InterconnectSession.Error, .notReady)
+        XCTAssertEqual(remainingEvents, [.disconnected])
+    }
+
+    func testAwaitedIdentifierCollisionRejectsSecondAndKeepsFirstCorrelated() async throws {
+        let sender = ControllableCommandSender()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            idGenerator: { "i-collision" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let first = Task {
+            try await session.sendAwaitingAcknowledgement(topic: "first", body: [:])
+        }
+        let outgoing = await sender.waitForPhoneCommand()
+        let envelope = try decodePhoneEnvelope(outgoing)
+        do {
+            _ = try await session.sendAwaitingAcknowledgement(topic: "second", body: [:])
+            XCTFail("Expected identifier collision")
+        } catch {
+            XCTAssertEqual(error as? InterconnectDeliveryError, .identifierCollision("i-collision"))
+        }
+        let phoneCount = await sender.phoneSendCount()
+        XCTAssertEqual(phoneCount, 1)
+
+        await sender.releasePhone(with: .success(()))
+        let sent = await events.next()
+        XCTAssertEqual(sent, .sent(envelope))
+        let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+        let returnedID = try await first.value
+        let acknowledged = await events.next()
+        XCTAssertEqual(returnedID, "i-collision")
+        XCTAssertEqual(acknowledged, .acknowledged("i-collision"))
+    }
+
+    func testBlockedLegacyIdentifierReservationRejectsAwaitedCollisionAndKeepsLegacyCorrelated() async throws {
+        let sender = ControllableCommandSender()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            idGenerator: { "i-cross-collision" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let legacy = Task {
+            try await session.send(topic: "legacy", body: [:])
+        }
+        let outgoing = await sender.waitForPhoneCommand()
+        let envelope = try decodePhoneEnvelope(outgoing)
+        do {
+            _ = try await session.sendAwaitingAcknowledgement(topic: "awaited", body: [:])
+            XCTFail("Expected identifier collision")
+        } catch {
+            XCTAssertEqual(error as? InterconnectDeliveryError, .identifierCollision("i-cross-collision"))
+        }
+        let phoneCount = await sender.phoneSendCount()
+        XCTAssertEqual(phoneCount, 1)
+
+        await sender.releasePhone(with: .success(()))
+        let returnedID = try await legacy.value
+        let sent = await events.next()
+        XCTAssertEqual(returnedID, "i-cross-collision")
+        XCTAssertEqual(sent, .sent(envelope))
+        let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+        let acknowledged = await events.next()
+        XCTAssertEqual(acknowledged, .acknowledged("i-cross-collision"))
+    }
+
     private func makeSession(
         recorder: CommandRecorder,
         trust: MemoryTrustStore,
@@ -506,22 +738,37 @@ private actor FailingCommandRecorder {
 }
 
 private actor ControllableCommandSender {
+    private let suspendConnectedStatus: Bool
     private let suspendDisconnectStatus: Bool
     private var statusCount = 0
+    private var phoneCount = 0
     private var phoneCommand: BandCommand?
+    private var connectedStatusCommand: BandCommand?
     private var disconnectStatusCommand: BandCommand?
     private var phoneContinuation: CheckedContinuation<Void, Swift.Error>?
+    private var connectedStatusContinuation: CheckedContinuation<Void, Never>?
     private var disconnectStatusContinuation: CheckedContinuation<Void, Never>?
     private var phoneWaiters: [CheckedContinuation<BandCommand, Never>] = []
+    private var connectedStatusWaiters: [CheckedContinuation<BandCommand, Never>] = []
     private var disconnectStatusWaiters: [CheckedContinuation<BandCommand, Never>] = []
 
-    init(suspendDisconnectStatus: Bool = false) {
+    init(suspendConnectedStatus: Bool = false, suspendDisconnectStatus: Bool = false) {
+        self.suspendConnectedStatus = suspendConnectedStatus
         self.suspendDisconnectStatus = suspendDisconnectStatus
     }
 
     func send(_ command: BandCommand) async throws {
         if command.subtype == 7 {
             statusCount += 1
+            if suspendConnectedStatus, statusCount == 1 {
+                connectedStatusCommand = command
+                connectedStatusWaiters.forEach { $0.resume(returning: command) }
+                connectedStatusWaiters.removeAll()
+                await withCheckedContinuation { continuation in
+                    connectedStatusContinuation = continuation
+                }
+                return
+            }
             guard suspendDisconnectStatus, statusCount > 1 else { return }
             disconnectStatusCommand = command
             disconnectStatusWaiters.forEach { $0.resume(returning: command) }
@@ -532,6 +779,8 @@ private actor ControllableCommandSender {
             return
         }
         guard command.subtype == 8 else { return }
+        phoneCount += 1
+        guard phoneCount == 1 else { throw TestSendError.rejected }
         phoneCommand = command
         try await withCheckedThrowingContinuation { continuation in
             phoneContinuation = continuation
@@ -550,6 +799,13 @@ private actor ControllableCommandSender {
         return await withCheckedContinuation { disconnectStatusWaiters.append($0) }
     }
 
+    func waitForConnectedStatusCommand() async -> BandCommand {
+        if let connectedStatusCommand { return connectedStatusCommand }
+        return await withCheckedContinuation { connectedStatusWaiters.append($0) }
+    }
+
+    func phoneSendCount() -> Int { phoneCount }
+
     func releasePhone(with result: Result<Void, TestSendError>) {
         guard let continuation = phoneContinuation else { return }
         phoneContinuation = nil
@@ -562,6 +818,34 @@ private actor ControllableCommandSender {
     func releaseDisconnectStatus() {
         disconnectStatusContinuation?.resume()
         disconnectStatusContinuation = nil
+    }
+
+    func releaseConnectedStatus() {
+        connectedStatusContinuation?.resume()
+        connectedStatusContinuation = nil
+    }
+}
+
+private actor ManualGate {
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            waiter = continuation
+            blockedWaiters.forEach { $0.resume() }
+            blockedWaiters.removeAll()
+        }
+    }
+
+    func waitUntilBlocked() async {
+        if waiter != nil { return }
+        await withCheckedContinuation { blockedWaiters.append($0) }
+    }
+
+    func release() {
+        waiter?.resume()
+        waiter = nil
     }
 }
 
