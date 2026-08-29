@@ -4,6 +4,12 @@ struct RememberedBand: Equatable, Sendable {
     let id: UUID
     let name: String
     let lastConnectedAt: Date
+
+    init(id: UUID, name: String, lastConnectedAt: Date = .distantPast) {
+        self.id = id
+        self.name = name
+        self.lastConnectedAt = lastConnectedAt
+    }
 }
 
 protocol RememberedBandStoreProtocol: Sendable {
