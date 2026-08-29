@@ -86,10 +86,48 @@ final class MapAssetTransferPlanTests: XCTestCase {
 
         let steps = try MapAssetTransferPlan.make(asset: asset)
 
-        let chunkByteCount = try steps.dropFirst().dropLast().reduce(into: 0) { count, step in
-            count += try XCTUnwrap(Data(base64Encoded: try string("data", in: step.body))).count
+        var expectedOffset = 0
+        var reconstructed = Data()
+        reconstructed.reserveCapacity(asset.byteCount)
+
+        for (index, step) in steps.enumerated() {
+            let envelope = ApplicationEnvelope.message(
+                id: envelopeID,
+                source: .ios,
+                topic: step.topic,
+                body: step.body
+            )
+            XCTAssertLessThanOrEqual(try envelope.encoded().count, ApplicationEnvelope.maximumEncodedSize)
+
+            switch step.topic {
+            case "map.asset.begin":
+                XCTAssertEqual(index, 0)
+                XCTAssertEqual(step.body, [
+                    "asset": .string(asset.id),
+                    "bytes": .number(Double(asset.byteCount)),
+                    "mime": .string(asset.mimeType),
+                    "sha256": .string(asset.sha256),
+                    "width": .number(Double(asset.width)),
+                    "height": .number(Double(asset.height)),
+                ])
+            case "map.asset.chunk":
+                XCTAssertNotEqual(index, 0)
+                XCTAssertNotEqual(index, steps.index(before: steps.endIndex))
+                XCTAssertEqual(step.body["asset"], .string(asset.id))
+                XCTAssertEqual(step.body["offset"], .number(Double(expectedOffset)))
+                let chunk = try XCTUnwrap(Data(base64Encoded: try string("data", in: step.body)))
+                expectedOffset += chunk.count
+                reconstructed.append(chunk)
+            case "map.asset.end":
+                XCTAssertEqual(index, steps.index(before: steps.endIndex))
+                XCTAssertEqual(step.body, ["asset": .string(asset.id)])
+            default:
+                XCTFail("Unexpected transfer topic \(step.topic)")
+            }
         }
-        XCTAssertEqual(chunkByteCount, MapAsset.maximumPNGBytes)
+
+        XCTAssertEqual(expectedOffset, asset.byteCount)
+        XCTAssertEqual(reconstructed, asset.data)
     }
 
     func testMakeHandlesMapAssetBackedByNonZeroIndexDataSlice() throws {
