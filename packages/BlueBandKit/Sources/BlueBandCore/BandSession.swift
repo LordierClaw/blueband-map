@@ -99,6 +99,12 @@ public actor BandSession {
         return try await interconnect.send(topic: topic, body: body)
     }
 
+    @discardableResult
+    public func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
+        guard let interconnect else { throw BandSessionError.notConnected }
+        return try await interconnect.sendAwaitingAcknowledgement(topic: topic, body: body)
+    }
+
     public func disconnect() async {
         currentState = .disconnecting
         receiverTask?.cancel()

@@ -12,6 +12,11 @@ public enum InterconnectEvent: Equatable, Sendable {
     case trustRejected
 }
 
+public enum InterconnectDeliveryError: Swift.Error, Equatable, Sendable {
+    case timeout(String)
+    case disconnected
+}
+
 public actor InterconnectSession {
     public enum Error: Swift.Error, Equatable {
         case notReady
@@ -34,6 +39,7 @@ public actor InterconnectSession {
     private var recentIDs: [String] = []
     private var recentIDSet: Set<String> = []
     private var deliveryTasks: [String: Task<Void, Never>] = [:]
+    private var deliveryWaiters: [String: CheckedContinuation<String, Swift.Error>] = [:]
 
     public init(
         expectedPackage: String,
@@ -68,9 +74,12 @@ public actor InterconnectSession {
                 try await sendCommand(ThirdPartyAppCodec.phoneMessage(identity: identity, content: try ack.encoded()))
                 if remember(envelope.id) { eventContinuation.yield(.received(envelope)) }
             case .ack:
-                if let task = deliveryTasks.removeValue(forKey: envelope.id) {
-                    task.cancel()
+                let task = deliveryTasks.removeValue(forKey: envelope.id)
+                let waiter = deliveryWaiters.removeValue(forKey: envelope.id)
+                if task != nil || waiter != nil {
+                    task?.cancel()
                     eventContinuation.yield(.acknowledged(envelope.id))
+                    waiter?.resume(returning: envelope.id)
                 }
             }
         }
@@ -83,16 +92,20 @@ public actor InterconnectSession {
         try await sendCommand(ThirdPartyAppCodec.phoneMessage(identity: identity, content: try envelope.encoded()))
         eventContinuation.yield(.sent(envelope))
         let id = envelope.id
-        let clock = clock
-        deliveryTasks[id]?.cancel()
-        deliveryTasks[id] = Task { [weak self, clock] in
-            do {
-                try await clock.sleep(for: .seconds(5))
-                guard !Task.isCancelled else { return }
-                await self?.deliveryTimedOut(id)
-            } catch {}
-        }
+        startDeliveryTimeout(for: id)
         return id
+    }
+
+    @discardableResult
+    public func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
+        guard let identity else { throw Error.notReady }
+        let envelope = ApplicationEnvelope.message(id: idGenerator(), source: .ios, topic: topic, body: body)
+        let command = ThirdPartyAppCodec.phoneMessage(identity: identity, content: try envelope.encoded())
+        let id = envelope.id
+        return try await withCheckedThrowingContinuation { continuation in
+            deliveryWaiters[id] = continuation
+            Task { await transmitAwaited(command, envelope: envelope) }
+        }
     }
 
     public func disconnect() async {
@@ -101,6 +114,8 @@ public actor InterconnectSession {
         }
         deliveryTasks.values.forEach { $0.cancel() }
         deliveryTasks.removeAll()
+        deliveryWaiters.values.forEach { $0.resume(throwing: InterconnectDeliveryError.disconnected) }
+        deliveryWaiters.removeAll()
         identity = nil
         recentIDs.removeAll()
         recentIDSet.removeAll()
@@ -130,8 +145,40 @@ public actor InterconnectSession {
         return true
     }
 
+    private func transmitAwaited(_ command: BandCommand, envelope: ApplicationEnvelope) async {
+        let id = envelope.id
+        guard deliveryWaiters[id] != nil else { return }
+        do {
+            try await sendCommand(command)
+        } catch {
+            deliveryTasks.removeValue(forKey: id)?.cancel()
+            guard let waiter = deliveryWaiters.removeValue(forKey: id) else { return }
+            waiter.resume(throwing: error)
+            eventContinuation.yield(.failed(id))
+            return
+        }
+        guard deliveryWaiters[id] != nil else { return }
+        eventContinuation.yield(.sent(envelope))
+        startDeliveryTimeout(for: id)
+    }
+
+    private func startDeliveryTimeout(for id: String) {
+        let clock = clock
+        deliveryTasks[id]?.cancel()
+        deliveryTasks[id] = Task { [weak self, clock] in
+            do {
+                try await clock.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                await self?.deliveryTimedOut(id)
+            } catch {}
+        }
+    }
+
     private func deliveryTimedOut(_ id: String) {
         guard deliveryTasks.removeValue(forKey: id) != nil else { return }
+        deliveryWaiters.removeValue(forKey: id)?.resume(
+            throwing: InterconnectDeliveryError.timeout(id)
+        )
         eventContinuation.yield(.failed(id))
     }
 }
