@@ -1,10 +1,12 @@
 import Foundation
 
-struct SPPReassembler {
+public struct SPPReassembler: Sendable {
     private static let maximumRetainedBytes = Int(UInt16.max) + SPPFrame.headerLength
     private var buffer = Data()
 
-    mutating func append(_ bytes: Data) -> [SPPFrame] {
+    public init() {}
+
+    public mutating func append(_ bytes: Data) -> [SPPFrame] {
         buffer.append(bytes)
         buffer = Data(buffer)
         var frames: [SPPFrame] = []

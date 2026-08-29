@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "BlueBandProtocol", targets: ["BlueBandProtocol"]),
         .library(name: "BlueBandCrypto", targets: ["BlueBandCrypto"]),
         .library(name: "BlueBandCryptoCommonCrypto", targets: ["BlueBandCryptoCommonCrypto"]),
+        .library(name: "BlueBandCore", targets: ["BlueBandCore"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.1"),
@@ -29,6 +30,10 @@ let package = Package(
             name: "BlueBandCryptoCommonCrypto",
             dependencies: ["BlueBandCrypto"]
         ),
+        .target(
+            name: "BlueBandCore",
+            dependencies: ["BlueBandProtocol", "BlueBandCrypto"]
+        ),
         .testTarget(
             name: "BlueBandProtocolTests",
             dependencies: ["BlueBandProtocol"]
@@ -40,6 +45,10 @@ let package = Package(
                 "BlueBandProtocol",
                 "CryptoSwift",
             ]
+        ),
+        .testTarget(
+            name: "BlueBandCoreTests",
+            dependencies: ["BlueBandCore", "BlueBandProtocol", "BlueBandCrypto", "CryptoSwift"]
         ),
     ],
     swiftLanguageModes: [.v5]

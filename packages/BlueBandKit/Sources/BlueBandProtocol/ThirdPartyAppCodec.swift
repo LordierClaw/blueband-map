@@ -1,24 +1,29 @@
 import Foundation
 
-struct ThirdPartyAppIdentity: Equatable, Sendable {
-    let packageName: String
-    let fingerprint: Data
+public struct ThirdPartyAppIdentity: Equatable, Sendable {
+    public let packageName: String
+    public let fingerprint: Data
+
+    public init(packageName: String, fingerprint: Data) {
+        self.packageName = packageName
+        self.fingerprint = fingerprint
+    }
 }
 
-enum ThirdPartyAppPacket: Equatable, Sendable {
+public enum ThirdPartyAppPacket: Equatable, Sendable {
     case statusRequest(ThirdPartyAppIdentity)
     case wearMessage(identity: ThirdPartyAppIdentity, content: Data)
 }
 
-enum ThirdPartyAppCodec {
-    enum Error: Swift.Error, Equatable {
+public enum ThirdPartyAppCodec {
+    public enum Error: Swift.Error, Equatable {
         case unexpectedCommand
         case missingField
         case invalidPackage
         case invalidFingerprint
     }
 
-    static func decode(_ command: BandCommand) throws -> ThirdPartyAppPacket {
+    public static func decode(_ command: BandCommand) throws -> ThirdPartyAppPacket {
         guard command.type == 20, command.bodyField == 22, let body = command.body else {
             throw Error.unexpectedCommand
         }
@@ -40,7 +45,7 @@ enum ThirdPartyAppCodec {
         }
     }
 
-    static func status(identity: ThirdPartyAppIdentity, connected: Bool) -> BandCommand {
+    public static func status(identity: ThirdPartyAppIdentity, connected: Bool) -> BandCommand {
         var phoneStatus = ProtoWriter()
         phoneStatus.putBytes(field: 1, value: encodeIdentity(identity))
         phoneStatus.putVarint(field: 2, value: connected ? 1 : 2)
@@ -50,7 +55,7 @@ enum ThirdPartyAppCodec {
         return BandCommand(type: 20, subtype: 7, bodyField: 22, body: thirdPartyApp.data)
     }
 
-    static func phoneMessage(identity: ThirdPartyAppIdentity, content: Data) -> BandCommand {
+    public static func phoneMessage(identity: ThirdPartyAppIdentity, content: Data) -> BandCommand {
         var message = ProtoWriter()
         message.putBytes(field: 1, value: encodeIdentity(identity))
         message.putBytes(field: 2, value: content)

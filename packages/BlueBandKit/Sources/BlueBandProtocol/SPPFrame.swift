@@ -1,13 +1,13 @@
 import Foundation
 
-enum SPPPacketType: UInt8, Sendable {
+public enum SPPPacketType: UInt8, Sendable {
     case ack = 1
     case sessionConfig = 2
     case data = 3
 }
 
-struct SPPFrame: Equatable, Sendable {
-    enum Error: Swift.Error, Equatable {
+public struct SPPFrame: Equatable, Sendable {
+    public enum Error: Swift.Error, Equatable {
         case invalidMagic
         case invalidLength
         case invalidCRC
@@ -15,13 +15,19 @@ struct SPPFrame: Equatable, Sendable {
         case payloadTooLarge
     }
 
-    static let headerLength = 8
+    public static let headerLength = 8
 
-    let packetType: SPPPacketType
-    let sequence: UInt8
-    let payload: Data
+    public let packetType: SPPPacketType
+    public let sequence: UInt8
+    public let payload: Data
 
-    func encode() throws -> Data {
+    public init(packetType: SPPPacketType, sequence: UInt8, payload: Data) {
+        self.packetType = packetType
+        self.sequence = sequence
+        self.payload = payload
+    }
+
+    public func encode() throws -> Data {
         guard payload.count <= Int(UInt16.max) else {
             throw Error.payloadTooLarge
         }
@@ -42,7 +48,7 @@ struct SPPFrame: Equatable, Sendable {
         return output
     }
 
-    static func decode(_ data: Data) throws -> SPPFrame {
+    public static func decode(_ data: Data) throws -> SPPFrame {
         guard data.count >= headerLength else {
             throw Error.invalidLength
         }
