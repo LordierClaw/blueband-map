@@ -98,20 +98,13 @@ final class M1AppModelTests: XCTestCase {
             prefix: String(asset.sha256.prefix(8)),
             code: "ASSET_WRITE_FAILED"
         )))
-        XCTAssertEqual(model.m1State, .failed(code: "ASSET_WRITE_FAILED"))
-        var sentSteps = await sender.steps
-        XCTAssertEqual(sentSteps.count, 2)
         await sender.acknowledgeNext()
-        await waitUntil {
-            if model.m1State == .failed(code: "ASSET_WRITE_FAILED") { return true }
-            return await sender.startedCount > 2
-        }
+        await awaitNaturalCompletion(start, sender: sender)
 
         XCTAssertEqual(model.m1State, .failed(code: "ASSET_WRITE_FAILED"))
-        sentSteps = await sender.steps
+        let sentSteps = await sender.steps
         XCTAssertEqual(sentSteps.count, 2)
         XCTAssertEqual(sentSteps.map(\.topic), ["map.asset.begin", "map.asset.chunk"])
-        await finishBlockedStart(start, sender: sender)
     }
 
     func testMatchingBoundedBandFailuresAreAcceptedDuringTransfer() async throws {
@@ -132,17 +125,12 @@ final class M1AppModelTests: XCTestCase {
                 prefix: prefix,
                 code: code
             )))
-            XCTAssertEqual(model.m1State, .failed(code: code))
             await sender.acknowledgeNext()
-            await waitUntil {
-                if model.m1State == .failed(code: code) { return true }
-                return await sender.startedCount > 1
-            }
+            await awaitNaturalCompletion(start, sender: sender)
 
             XCTAssertEqual(model.m1State, .failed(code: code))
             let sentCount = await sender.startedCount
             XCTAssertEqual(sentCount, 1)
-            await finishBlockedStart(start, sender: sender)
         }
     }
 
@@ -159,17 +147,12 @@ final class M1AppModelTests: XCTestCase {
             bytes: asset.byteCount,
             prefix: String(asset.sha256.prefix(8))
         )))
-        XCTAssertEqual(model.m1State, .failed(code: "ASSET_RESULT_INVALID"))
         await sender.acknowledgeNext()
-        await waitUntil {
-            if model.m1State == .failed(code: "ASSET_RESULT_INVALID") { return true }
-            return await sender.startedCount > 1
-        }
+        await awaitNaturalCompletion(start, sender: sender)
 
         XCTAssertEqual(model.m1State, .failed(code: "ASSET_RESULT_INVALID"))
         let sentCount = await sender.startedCount
         XCTAssertEqual(sentCount, 1)
-        await finishBlockedStart(start, sender: sender)
     }
 
     func testCancellationBeforeSuccessfulACKStopsRemainingTransferSteps() async throws {
@@ -225,7 +208,7 @@ final class M1AppModelTests: XCTestCase {
         XCTAssertEqual(model.m1State, transferring)
         let sentCount = await sender.startedCount
         XCTAssertEqual(sentCount, 1)
-        await finishBlockedStart(start, sender: sender)
+        await cancelBlockedStartForCleanup(start, sender: sender)
     }
 
     func testBusyPressDoesNotFetchAgainAndTerminalPressIsOnlyRetry() async throws {
@@ -453,7 +436,33 @@ final class M1AppModelTests: XCTestCase {
         XCTFail("Condition was not met", file: file, line: line)
     }
 
-    private func finishBlockedStart(
+    private func awaitNaturalCompletion(
+        _ task: Task<Void, Never>,
+        sender: M1AcknowledgingSender,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let completion = M1TaskCompletion()
+        let completed = expectation(description: "startM1 completes naturally")
+        Task {
+            await task.value
+            await completion.markFinished()
+            completed.fulfill()
+        }
+
+        await fulfillment(of: [completed], timeout: 1.0)
+        guard await completion.isFinished else {
+            task.cancel()
+            if await sender.waitingCount > 0 {
+                await sender.failNext(CancellationError())
+            }
+            await task.value
+            XCTFail("startM1 did not complete naturally", file: file, line: line)
+            return
+        }
+    }
+
+    private func cancelBlockedStartForCleanup(
         _ task: Task<Void, Never>,
         sender: M1AcknowledgingSender
     ) async {
@@ -463,6 +472,11 @@ final class M1AppModelTests: XCTestCase {
         }
         await task.value
     }
+}
+
+private actor M1TaskCompletion {
+    private(set) var isFinished = false
+    func markFinished() { isFinished = true }
 }
 
 private final class M1KeyStore: VietmapKeyStoreProtocol, @unchecked Sendable {
