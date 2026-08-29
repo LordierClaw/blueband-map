@@ -82,6 +82,152 @@ final class M1AppModelTests: XCTestCase {
         ))
     }
 
+    func testBandWriteFailureBeforeChunkACKStopsRemainingTransferSteps() async throws {
+        let asset = try makeAsset(byteCount: 700)
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(provider: M1Provider(result: .success(asset)), sender: sender)
+        let start = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+        await sender.acknowledgeNext()
+        await waitUntil { await sender.startedCount == 2 }
+
+        model.consume(.received(resultEnvelope(
+            asset: asset.id,
+            status: "error",
+            bytes: 0,
+            prefix: String(asset.sha256.prefix(8)),
+            code: "ASSET_WRITE_FAILED"
+        )))
+        XCTAssertEqual(model.m1State, .failed(code: "ASSET_WRITE_FAILED"))
+        var sentSteps = await sender.steps
+        XCTAssertEqual(sentSteps.count, 2)
+        await sender.acknowledgeNext()
+        await waitUntil {
+            if model.m1State == .failed(code: "ASSET_WRITE_FAILED") { return true }
+            return await sender.startedCount > 2
+        }
+
+        XCTAssertEqual(model.m1State, .failed(code: "ASSET_WRITE_FAILED"))
+        sentSteps = await sender.steps
+        XCTAssertEqual(sentSteps.count, 2)
+        XCTAssertEqual(sentSteps.map(\.topic), ["map.asset.begin", "map.asset.chunk"])
+        await finishBlockedStart(start, sender: sender)
+    }
+
+    func testMatchingBoundedBandFailuresAreAcceptedDuringTransfer() async throws {
+        for (code, prefix) in [
+            ("ASSET_BEGIN_INVALID", ""),
+            ("ASSET_OFFSET_INVALID", String(try makeAsset().sha256.prefix(8))),
+        ] {
+            let asset = try makeAsset()
+            let sender = M1AcknowledgingSender()
+            let model = readyModel(provider: M1Provider(result: .success(asset)), sender: sender)
+            let start = Task { await model.startM1() }
+            await waitUntil { await sender.startedCount == 1 }
+
+            model.consume(.received(resultEnvelope(
+                asset: asset.id,
+                status: "error",
+                bytes: 0,
+                prefix: prefix,
+                code: code
+            )))
+            XCTAssertEqual(model.m1State, .failed(code: code))
+            await sender.acknowledgeNext()
+            await waitUntil {
+                if model.m1State == .failed(code: code) { return true }
+                return await sender.startedCount > 1
+            }
+
+            XCTAssertEqual(model.m1State, .failed(code: code))
+            let sentCount = await sender.startedCount
+            XCTAssertEqual(sentCount, 1)
+            await finishBlockedStart(start, sender: sender)
+        }
+    }
+
+    func testMatchingOKDuringTransferFailsInvalidAndNeverDisplaysOrSendsNextStep() async throws {
+        let asset = try makeAsset()
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(provider: M1Provider(result: .success(asset)), sender: sender)
+        let start = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+
+        model.consume(.received(resultEnvelope(
+            asset: asset.id,
+            status: "ok",
+            bytes: asset.byteCount,
+            prefix: String(asset.sha256.prefix(8))
+        )))
+        XCTAssertEqual(model.m1State, .failed(code: "ASSET_RESULT_INVALID"))
+        await sender.acknowledgeNext()
+        await waitUntil {
+            if model.m1State == .failed(code: "ASSET_RESULT_INVALID") { return true }
+            return await sender.startedCount > 1
+        }
+
+        XCTAssertEqual(model.m1State, .failed(code: "ASSET_RESULT_INVALID"))
+        let sentCount = await sender.startedCount
+        XCTAssertEqual(sentCount, 1)
+        await finishBlockedStart(start, sender: sender)
+    }
+
+    func testCancellationBeforeSuccessfulACKStopsRemainingTransferSteps() async throws {
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(
+            provider: M1Provider(result: .success(try makeAsset())),
+            sender: sender
+        )
+        let start = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+
+        start.cancel()
+        await sender.acknowledgeNext()
+        await waitUntil {
+            if model.m1State == .failed(code: "TRANSFER_CANCELLED") { return true }
+            return await sender.startedCount > 1
+        }
+        await start.value
+
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_CANCELLED"))
+        let sentCount = await sender.startedCount
+        XCTAssertEqual(sentCount, 1)
+    }
+
+    func testMalformedAndMismatchedResultsRemainIgnoredDuringTransfer() async throws {
+        let asset = try makeAsset()
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(provider: M1Provider(result: .success(asset)), sender: sender)
+        let start = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+        let transferring = model.m1State
+
+        model.consume(.received(resultEnvelope(
+            asset: "m1-0000000000000000",
+            status: "error",
+            bytes: 0,
+            prefix: "",
+            code: "ASSET_BEGIN_INVALID"
+        )))
+        model.consume(.received(.message(
+            id: "b-malformed-transfer",
+            source: .band,
+            topic: "map.asset.result",
+            body: [
+                "asset": .string(asset.id),
+                "status": .string("error"),
+                "bytes": .string("0"),
+                "sha256Prefix": .string(""),
+                "code": .string("ASSET_BEGIN_INVALID"),
+            ]
+        )))
+
+        XCTAssertEqual(model.m1State, transferring)
+        let sentCount = await sender.startedCount
+        XCTAssertEqual(sentCount, 1)
+        await finishBlockedStart(start, sender: sender)
+    }
+
     func testBusyPressDoesNotFetchAgainAndTerminalPressIsOnlyRetry() async throws {
         let asset = try makeAsset()
         let provider = M1Provider(result: .success(asset))
@@ -306,6 +452,17 @@ final class M1AppModelTests: XCTestCase {
         }
         XCTFail("Condition was not met", file: file, line: line)
     }
+
+    private func finishBlockedStart(
+        _ task: Task<Void, Never>,
+        sender: M1AcknowledgingSender
+    ) async {
+        task.cancel()
+        if await sender.waitingCount > 0 {
+            await sender.failNext(CancellationError())
+        }
+        await task.value
+    }
 }
 
 private final class M1KeyStore: VietmapKeyStoreProtocol, @unchecked Sendable {
@@ -351,6 +508,7 @@ private actor M1AcknowledgingSender: M1SessionSending {
     private(set) var maximumInFlight = 0
     private var waiters: [CheckedContinuation<Void, any Swift.Error>] = []
     var startedCount: Int { steps.count }
+    var waitingCount: Int { waiters.count }
 
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws {
         steps.append(MapTransferStep(topic: topic, body: body))

@@ -70,9 +70,17 @@ final class AppModel: ObservableObject {
     private var pendingM1Asset: PendingM1Asset?
 
     private struct PendingM1Asset: Sendable {
+        enum Phase: Sendable {
+            case transferring(awaitingStep: Int)
+            case waitingForBand
+        }
+
+        // The Band result has no run token; this token only rejects stale local continuations.
+        let runToken: UUID
         let id: String
         let hashPrefix: String
         let byteCount: Int
+        var phase: Phase
     }
 
     init(
@@ -309,10 +317,14 @@ final class AppModel: ObservableObject {
             asset = try await staticMapProvider.fetch(M1Configuration.request, serviceKey: serviceKey)
         } catch {
             guard currentM1Attempt == attempt else { return }
-            failM1(providerCode(for: error))
+            failM1(Task.isCancelled ? "TRANSFER_CANCELLED" : providerCode(for: error))
             return
         }
         guard currentM1Attempt == attempt else { return }
+        guard !Task.isCancelled else {
+            failM1("TRANSFER_CANCELLED")
+            return
+        }
 
         let steps: [MapTransferStep]
         do {
@@ -323,27 +335,56 @@ final class AppModel: ObservableObject {
         }
 
         let expected = PendingM1Asset(
+            runToken: attempt,
             id: asset.id,
             hashPrefix: String(asset.sha256.prefix(8)),
-            byteCount: asset.byteCount
+            byteCount: asset.byteCount,
+            phase: .transferring(awaitingStep: 0)
         )
+        pendingM1Asset = expected
         m1State = .transferring(completed: 0, total: steps.count)
         do {
             for (index, step) in steps.enumerated() {
+                guard currentM1Attempt == attempt,
+                      var pending = pendingM1Asset,
+                      pending.runToken == attempt else {
+                    return
+                }
+                guard !Task.isCancelled else {
+                    failM1("TRANSFER_CANCELLED")
+                    return
+                }
+                pending.phase = .transferring(awaitingStep: index)
+                pendingM1Asset = pending
                 try await m1Session.sendAwaitingAcknowledgement(topic: step.topic, body: step.body)
-                guard currentM1Attempt == attempt else { return }
+                guard currentM1Attempt == attempt,
+                      let current = pendingM1Asset,
+                      current.runToken == attempt,
+                      case let .transferring(awaitingStep) = current.phase,
+                      awaitingStep == index,
+                      case .transferring = m1State else {
+                    return
+                }
+                guard !Task.isCancelled else {
+                    failM1("TRANSFER_CANCELLED")
+                    return
+                }
                 m1State = .transferring(completed: index + 1, total: steps.count)
             }
         } catch {
             guard currentM1Attempt == attempt else { return }
-            failM1(transferCode(for: error))
+            failM1(Task.isCancelled ? "TRANSFER_CANCELLED" : transferCode(for: error))
             return
         }
 
-        guard currentM1Attempt == attempt else { return }
-        pendingM1Asset = expected
-        currentM1Attempt = nil
-        m1State = .waitingForBand(assetID: expected.id, hashPrefix: expected.hashPrefix)
+        guard currentM1Attempt == attempt,
+              var pending = pendingM1Asset,
+              pending.runToken == attempt else {
+            return
+        }
+        pending.phase = .waitingForBand
+        pendingM1Asset = pending
+        m1State = .waitingForBand(assetID: pending.id, hashPrefix: pending.hashPrefix)
     }
 
     func clearEvents() { events = [] }
@@ -453,13 +494,22 @@ final class AppModel: ObservableObject {
         guard envelope.src == .band,
               envelope.type == .message,
               envelope.topic == "map.asset.result",
-              case let .waitingForBand(assetID, hashPrefix) = m1State,
               let expected = pendingM1Asset,
-              expected.id == assetID,
-              expected.hashPrefix == hashPrefix,
+              currentM1Attempt == expected.runToken,
               let body = envelope.body,
               case let .string(receivedAsset)? = body["asset"],
               receivedAsset == expected.id else {
+            return
+        }
+
+        let isTransferring: Bool
+        switch (m1State, expected.phase) {
+        case (.transferring, .transferring):
+            isTransferring = true
+        case let (.waitingForBand(assetID, hashPrefix), .waitingForBand)
+            where assetID == expected.id && hashPrefix == expected.hashPrefix:
+            isTransferring = false
+        default:
             return
         }
 
@@ -470,7 +520,7 @@ final class AppModel: ObservableObject {
               rawBytes >= 0,
               rawBytes <= Double(MapAsset.maximumPNGBytes),
               case let .string(receivedPrefix)? = body["sha256Prefix"],
-              isHashPrefix(receivedPrefix) else {
+              isResultHashPrefix(receivedPrefix) else {
             return
         }
 
@@ -487,9 +537,18 @@ final class AppModel: ObservableObject {
                 failM1("ASSET_RESULT_INVALID")
                 return
             }
+            guard !isTransferring else {
+                failM1("ASSET_RESULT_INVALID")
+                return
+            }
+            currentM1Attempt = nil
             pendingM1Asset = nil
             m1State = .displayed(assetID: expected.id, hashPrefix: expected.hashPrefix)
         case "error":
+            guard Int(rawBytes) <= expected.byteCount,
+                  receivedPrefix.isEmpty || receivedPrefix == expected.hashPrefix else {
+                return
+            }
             guard case let .string(code)? = body["code"], isAssetCode(code) else {
                 failM1("ASSET_RESULT_INVALID")
                 return
@@ -498,6 +557,10 @@ final class AppModel: ObservableObject {
         default:
             return
         }
+    }
+
+    private func isResultHashPrefix(_ value: String) -> Bool {
+        value.isEmpty || isHashPrefix(value)
     }
 
     private func isHashPrefix(_ value: String) -> Bool {
