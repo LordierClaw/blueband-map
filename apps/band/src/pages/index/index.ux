@@ -6,27 +6,37 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.1.0</text>
+      <text class="version">RPK 0.2.0</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
       <text class="title small">BLUEBAND MAP</text>
       <text class="online">IOS CONNECTED</text>
-      <text class="log">{{ logText }}</text>
-      <input class="button" type="button" value="ECHO PING" @click="sendPing" />
-      <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-      <text class="version">RPK 0.1.0 • ENV V1</text>
+      <text class="map-ready" if="{{ mapReady }}">M1 MAP READY</text>
+      <text class="map-hash" if="{{ mapReady }}">SHA256 {{ mapHashPrefix }}</text>
+      <image class="map" if="{{ mapReady }}" src="{{ mapPath }}" object-fit="contain" @complete="mapComplete" @error="mapError" />
+      <div class="diagnostics" if="{{ showDiagnostics }}">
+        <text class="log">{{ logText }}</text>
+        <input class="button" type="button" value="ECHO PING" @click="sendPing" />
+        <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
+        <text class="version">RPK 0.2.0 • ENV V1</text>
+      </div>
     </div>
   </div>
 </template>
 
 <script>
 import interconnect from "@system.interconnect"
+import file from "@system.file"
+import crypto from "@system.crypto"
 
 export default {
   private: {
     MAX_ENVELOPE_BYTES: 512,
     MAX_RECENT_IDS: 64,
+    MAX_ASSET_BYTES: 200 * 1024,
+    MAP_WIDTH: 212,
+    MAP_HEIGHT: 360,
     connection: null,
     waiting: true,
     connected: false,
@@ -35,6 +45,13 @@ export default {
     logText: "Echo ready.",
     logRows: [],
     recentIDs: [],
+    inFlightIDs: [],
+    preparingAssetID: "",
+    activeTransfer: null,
+    mapReady: false,
+    mapPath: "",
+    mapHashPrefix: "",
+    showDiagnostics: true,
     nextID: 1
   },
 
@@ -89,6 +106,8 @@ export default {
     this.connected = true
     this.logRows = []
     this.recentIDs = []
+    this.inFlightIDs = []
+    this.preparingAssetID = ""
     this.logText = "Echo ready."
   },
 
@@ -153,14 +172,242 @@ export default {
       return
     }
 
-    this.sendEnvelope({ v: 1, id: message.id, src: "band", type: "ack" })
-    if (this.recentIDs.indexOf(message.id) >= 0) return
-    this.recentIDs.push(message.id)
-    if (this.recentIDs.length > this.MAX_RECENT_IDS) this.recentIDs.shift()
+    if (this.recentIDs.indexOf(message.id) >= 0) {
+      this.sendACK(message.id)
+      return
+    }
+    if (this.inFlightIDs.indexOf(message.id) >= 0) return
+    if (message.topic.indexOf("map.asset.") === 0) {
+      this.inFlightIDs.push(message.id)
+      this.receiveAssetMessage(message)
+      return
+    }
     if (message.topic === "system.echo") {
       var text = typeof message.body.text === "string" ? message.body.text : "(object)"
       this.appendRow(message.id, "IOS > " + text, false)
     }
+    this.rememberSuccess(message.id)
+    this.sendACK(message.id)
+  },
+
+  receiveAssetMessage(message) {
+    if (message.topic === "map.asset.begin") this.beginAsset(message)
+    else if (message.topic === "map.asset.chunk") this.writeAssetChunk(message)
+    else if (message.topic === "map.asset.end") this.endAsset(message)
+    else this.failAsset(message, "ASSET_TOPIC_INVALID")
+  },
+
+  validInteger(value) {
+    return typeof value === "number" && isFinite(value) && Math.floor(value) === value
+  },
+
+  validBeginBody(body) {
+    return typeof body.asset === "string" && /^m1-[0-9a-f]{16}$/.test(body.asset) &&
+      this.validInteger(body.bytes) && body.bytes > 0 && body.bytes <= this.MAX_ASSET_BYTES &&
+      this.validInteger(body.width) && body.width === this.MAP_WIDTH &&
+      this.validInteger(body.height) && body.height === this.MAP_HEIGHT &&
+      body.mime === "image/png" && typeof body.sha256 === "string" &&
+      /^[0-9a-f]{64}$/.test(body.sha256)
+  },
+
+  beginAsset(message) {
+    var page = this
+    var body = message.body
+    if (!this.validBeginBody(body)) {
+      this.failAsset(message, "ASSET_BEGIN_INVALID")
+      return
+    }
+    if (this.activeTransfer || this.preparingAssetID) {
+      this.failAsset(message, "ASSET_BUSY")
+      return
+    }
+    this.preparingAssetID = message.id
+    var transfer = {
+      asset: body.asset,
+      bytes: body.bytes,
+      width: body.width,
+      height: body.height,
+      mime: body.mime,
+      sha256: body.sha256,
+      uri: "internal://files/" + body.asset + ".png",
+      receivedBytes: 0
+    }
+    var activate = function () {
+      page.preparingAssetID = ""
+      page.activeTransfer = transfer
+      page.mapReady = false
+      page.showDiagnostics = true
+      page.succeedAsset(message.id)
+    }
+    try {
+      file.access({
+        uri: transfer.uri,
+        success: function () {
+          try {
+            file.delete({
+              uri: transfer.uri,
+              success: activate,
+              fail: function () {
+                page.preparingAssetID = ""
+                page.failAsset(message, "ASSET_DELETE_FAILED")
+              }
+            })
+          } catch (error) {
+            page.preparingAssetID = ""
+            page.failAsset(message, "ASSET_DELETE_FAILED")
+          }
+        },
+        fail: activate
+      })
+    } catch (error) {
+      this.preparingAssetID = ""
+      this.failAsset(message, "ASSET_PREPARE_FAILED")
+    }
+  },
+
+  decodeBase64(value) {
+    if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return null
+    var binary
+    try { binary = crypto.atob(value) } catch (error) { return null }
+    if (typeof binary !== "string" || binary.length === 0) return null
+    var buffer = new Uint8Array(binary.length)
+    for (var index = 0; index < binary.length; index = index + 1) {
+      var code = binary.charCodeAt(index)
+      if (code < 0 || code > 255) return null
+      buffer[index] = code
+    }
+    return buffer
+  },
+
+  writeAssetChunk(message) {
+    var page = this
+    var transfer = this.activeTransfer
+    var body = message.body
+    if (!transfer) {
+      this.failAsset(message, "ASSET_NO_TRANSFER")
+      return
+    }
+    if (body.asset !== transfer.asset) {
+      this.failAsset(message, "ASSET_MISMATCH")
+      return
+    }
+    if (!this.validInteger(body.offset) || body.offset !== transfer.receivedBytes) {
+      this.failAsset(message, "ASSET_OFFSET_INVALID")
+      return
+    }
+    var buffer = this.decodeBase64(body.data)
+    if (!buffer) {
+      this.failAsset(message, "ASSET_BASE64_INVALID")
+      return
+    }
+    if (transfer.receivedBytes + buffer.length > transfer.bytes) {
+      this.failAsset(message, "ASSET_OVERFLOW")
+      return
+    }
+    try {
+      file.writeArrayBuffer({
+        uri: transfer.uri,
+        buffer: buffer,
+        position: body.offset,
+        success: function () {
+          transfer.receivedBytes = transfer.receivedBytes + buffer.length
+          page.succeedAsset(message.id)
+        },
+        fail: function () { page.failAsset(message, "ASSET_WRITE_FAILED") }
+      })
+    } catch (error) {
+      this.failAsset(message, "ASSET_WRITE_FAILED")
+    }
+  },
+
+  endAsset(message) {
+    var transfer = this.activeTransfer
+    if (!transfer) {
+      this.failAsset(message, "ASSET_NO_TRANSFER")
+      return
+    }
+    if (message.body.asset !== transfer.asset) {
+      this.failAsset(message, "ASSET_MISMATCH")
+      return
+    }
+    if (transfer.receivedBytes !== transfer.bytes) {
+      this.failAsset(message, "ASSET_LENGTH_MISMATCH", true)
+      return
+    }
+    var digest
+    try {
+      digest = crypto.hashDigest({ uri: transfer.uri, algo: "SHA256" })
+    } catch (error) {
+      this.failAsset(message, "ASSET_HASH_FAILED", true)
+      return
+    }
+    if (typeof digest !== "string" || digest.toLowerCase() !== transfer.sha256) {
+      this.failAsset(message, "ASSET_DIGEST_MISMATCH", true)
+      return
+    }
+    var asset = transfer.asset
+    var bytes = transfer.bytes
+    var prefix = transfer.sha256.slice(0, 8)
+    this.mapPath = transfer.uri
+    this.mapHashPrefix = prefix
+    this.mapReady = true
+    this.showDiagnostics = false
+    this.activeTransfer = null
+    this.succeedAsset(message.id)
+    this.sendAssetResult(asset, "ok", bytes, prefix)
+  },
+
+  removeInFlight(id) {
+    var index = this.inFlightIDs.indexOf(id)
+    if (index >= 0) this.inFlightIDs.splice(index, 1)
+  },
+
+  rememberSuccess(id) {
+    this.recentIDs.push(id)
+    if (this.recentIDs.length > this.MAX_RECENT_IDS) this.recentIDs.shift()
+  },
+
+  succeedAsset(id) {
+    this.removeInFlight(id)
+    this.rememberSuccess(id)
+    this.sendACK(id)
+  },
+
+  failAsset(message, code, discardTransfer) {
+    var transfer = this.activeTransfer
+    this.removeInFlight(message.id)
+    if (discardTransfer && transfer) {
+      this.activeTransfer = null
+      this.deleteBestEffort(transfer.uri)
+    }
+    var asset = typeof message.body.asset === "string" ? message.body.asset : (transfer ? transfer.asset : "")
+    var bytes = transfer ? transfer.receivedBytes : 0
+    var prefix = transfer ? transfer.sha256.slice(0, 8) : ""
+    this.sendAssetResult(asset, "error", bytes, prefix, code)
+  },
+
+  deleteBestEffort(uri) {
+    try { file.delete({ uri: uri, success: function () {}, fail: function () {} }) } catch (error) {}
+  },
+
+  sendACK(id) {
+    this.sendEnvelope({ v: 1, id: id, src: "band", type: "ack" })
+  },
+
+  sendAssetResult(asset, status, bytes, prefix, code) {
+    var body = { asset: asset, status: status, bytes: bytes, sha256Prefix: prefix }
+    if (code) body.code = code
+    var id = "b-" + Date.now() + "-" + this.nextID
+    this.nextID = this.nextID + 1
+    this.sendEnvelope({
+      v: 1,
+      id: id,
+      src: "band",
+      type: "message",
+      topic: "map.asset.result",
+      body: body
+    })
   },
 
   sendEnvelope(message) {
@@ -217,6 +464,16 @@ export default {
   clearEvents() {
     this.logRows = []
     this.logText = "Echo ready."
+  },
+
+  mapComplete() {
+    this.statusText = "M1 MAP READY"
+  },
+
+  mapError() {
+    this.mapReady = false
+    this.showDiagnostics = true
+    this.logText = "Map image display failed."
   }
 }
 </script>
@@ -224,6 +481,7 @@ export default {
 <style>
 .page { width: 212px; height: 520px; background-color: #07162b; }
 .waiting, .connected { width: 212px; height: 520px; padding-top: 54px; flex-direction: column; align-items: center; }
+.connected { padding-top: 18px; }
 .mark { width: 72px; height: 72px; border-radius: 18px; justify-content: center; align-items: center; background-color: #168cff; }
 .mark-text { font-size: 46px; font-weight: bold; color: #ffffff; }
 .title { margin-top: 18px; font-size: 25px; font-weight: bold; color: #ffffff; }
@@ -232,6 +490,10 @@ export default {
 .detail { margin-top: 14px; width: 180px; height: 76px; font-size: 15px; lines: 4; text-align: center; color: #a9bdd6; }
 .check, .button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
+.map-ready { margin-top: 8px; font-size: 16px; font-weight: bold; color: #5dffb0; }
+.map-hash { margin-top: 3px; font-size: 12px; color: #a9bdd6; }
+.map { margin-top: 8px; width: 212px; height: 360px; }
+.diagnostics { width: 212px; flex-direction: column; align-items: center; }
 .log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }
 .clear { margin-top: 10px; width: 184px; height: 40px; border-radius: 20px; font-size: 14px; color: #a9bdd6; background-color: #1f3652; }
 </style>

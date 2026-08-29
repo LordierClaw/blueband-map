@@ -1,12 +1,16 @@
 {
   "package": "dev.lordierclaw.bluebandmap.band",
   "name": "BlueBandMap",
-  "versionName": "0.1.0",
-  "versionCode": 1,
+  "versionName": "0.2.0",
+  "versionCode": 2,
   "minPlatformVersion": 1000,
   "icon": "/common/icon.png",
   "deviceTypeList": ["watch"],
-  "features": [{ "name": "system.interconnect" }],
+  "features": [
+    { "name": "system.interconnect" },
+    { "name": "system.file" },
+    { "name": "system.crypto" }
+  ],
   "config": { "logLevel": "off", "designWidth": 212 },
   "router": {
     "entry": "pages/index",
