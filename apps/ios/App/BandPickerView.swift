@@ -13,12 +13,12 @@ struct BandPickerView: View {
                 Section {
                     ForEach(model.pickerCandidates) { candidate in
                         Button {
-                            Task { await select(candidate) }
+                            beginSelection(candidate)
                         } label: {
                             candidateRow(candidate)
                         }
                         .buttonStyle(.plain)
-                        .disabled(isSelecting)
+                        .disabled(candidateActionsDisabled)
                     }
 
                     if model.pickerCandidates.isEmpty {
@@ -34,10 +34,10 @@ struct BandPickerView: View {
                 Section {
                     HStack {
                         Button("Quét lại") { Task { await model.scan() } }
-                            .disabled(model.sessionState != .idle)
+                            .disabled(isSelecting || model.sessionState != .idle)
                         Spacer()
                         Button("Dừng") { Task { await model.stopScan() } }
-                            .disabled(model.sessionState != .scanning)
+                            .disabled(isSelecting || model.sessionState != .scanning)
                     }
                     Button("Đóng") {
                         Task {
@@ -45,11 +45,18 @@ struct BandPickerView: View {
                             dismiss()
                         }
                     }
+                    .disabled(isSelecting)
+                }
+
+                if let error = model.errorMessage {
+                    Section("Lỗi an toàn") {
+                        Text(error).foregroundStyle(.red)
+                    }
                 }
             }
             .navigationTitle("Chọn band")
             .navigationBarTitleDisplayMode(.inline)
-            .interactiveDismissDisabled(model.sessionState == .scanning)
+            .interactiveDismissDisabled(model.sessionState == .scanning || isSelecting)
             .task {
                 if model.sessionState == .idle { await model.scan() }
             }
@@ -74,11 +81,18 @@ struct BandPickerView: View {
                 .foregroundStyle(.secondary)
         }
         .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel(candidate))
+        .accessibilityHint("Chạm hai lần để kết nối")
+    }
+
+    private func beginSelection(_ candidate: BandCandidate) {
+        guard !isSelecting else { return }
+        isSelecting = true
+        Task { await select(candidate) }
     }
 
     private func select(_ candidate: BandCandidate) async {
-        guard !isSelecting else { return }
-        isSelecting = true
         defer { isSelecting = false }
         await model.connect(to: candidate)
         if model.sessionState != .idle && model.sessionState != .scanning {
@@ -89,5 +103,15 @@ struct BandPickerView: View {
     private func shortenedUUID(_ id: UUID) -> String {
         let value = id.uuidString
         return "\(value.prefix(4))…\(value.suffix(4))"
+    }
+
+    private var candidateActionsDisabled: Bool {
+        isSelecting || (model.sessionState != .idle && model.sessionState != .scanning)
+    }
+
+    private func accessibilityLabel(_ candidate: BandCandidate) -> String {
+        let rememberedStatus = model.rememberedBand?.id == candidate.id ? "Đã nhớ" : "Chưa nhớ"
+        let signalStatus = candidate.rssi.map { "RSSI \($0) dBm" } ?? "Đã biết bởi iOS"
+        return "\(candidate.name), \(rememberedStatus), \(signalStatus), UUID \(shortenedUUID(candidate.id))"
     }
 }

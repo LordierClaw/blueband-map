@@ -63,8 +63,17 @@ enum BandCandidateOrdering {
         let names = [lhs, rhs]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .sorted(by: nameComesBefore)
+            .sorted { lhs, rhs in
+                let lhsIsFallback = isGeneratedFallback(lhs, id: id)
+                let rhsIsFallback = isGeneratedFallback(rhs, id: id)
+                if lhsIsFallback != rhsIsFallback { return !lhsIsFallback }
+                return nameComesBefore(lhs, rhs)
+            }
         return names.first ?? "BLE \(id.uuidString.prefix(8))"
+    }
+
+    private static func isGeneratedFallback(_ name: String, id: UUID) -> Bool {
+        name == "BLE \(id.uuidString.prefix(8))"
     }
 
     private static func comesBefore(_ lhs: BandCandidate, _ rhs: BandCandidate) -> Bool {

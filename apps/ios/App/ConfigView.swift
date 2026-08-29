@@ -12,6 +12,11 @@ struct ConfigView: View {
                 tileMapKeySection
                 serviceKeySection
                 rememberedBandSection
+                if let error = model.errorMessage {
+                    Section("Lỗi an toàn") {
+                        Text(error).foregroundStyle(.red)
+                    }
+                }
             }
             .navigationTitle("Cấu hình")
             .navigationBarTitleDisplayMode(.inline)

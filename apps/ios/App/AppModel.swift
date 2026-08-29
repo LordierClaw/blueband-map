@@ -141,22 +141,49 @@ final class AppModel: ObservableObject {
         scanGeneration += 1
         let generation = scanGeneration
         sessionState = .scanning
-        let stream = await central.scan()
-        let timeout = Task { [central, scanDuration] in
-            try? await Task.sleep(for: scanDuration)
+        let timeout = Task { @MainActor [weak self, scanDuration] in
+            do { try await Task.sleep(for: scanDuration) }
+            catch { return }
             guard !Task.isCancelled else { return }
-            await central.stopScan()
+            await self?.stopScan(generation: generation)
         }
-        defer { timeout.cancel() }
-        do {
-            for try await batch in stream where generation == scanGeneration {
-                candidates = batch
+
+        await withTaskCancellationHandler {
+            defer { timeout.cancel() }
+            do {
+                let stream = await central.scan()
+                for try await batch in stream {
+                    guard generation == scanGeneration, !Task.isCancelled else { break }
+                    candidates = batch
+                }
+            } catch {
+                if generation == scanGeneration, !Task.isCancelled {
+                    errorMessage = safeMessage(for: error)
+                }
             }
-        } catch { errorMessage = safeMessage(for: error) }
-        if sessionState == .scanning { sessionState = .idle }
+
+            if Task.isCancelled {
+                await stopScan(generation: generation)
+                return
+            }
+
+            if generation == scanGeneration, sessionState == .scanning {
+                sessionState = .idle
+            }
+        } onCancel: {
+            timeout.cancel()
+            Task { @MainActor [weak self] in
+                await self?.stopScan(generation: generation)
+            }
+        }
     }
 
     func stopScan(clear: Bool = false) async {
+        await stopScan(generation: scanGeneration, clear: clear)
+    }
+
+    private func stopScan(generation: Int, clear: Bool = false) async {
+        guard generation == scanGeneration else { return }
         scanGeneration += 1
         await central.stopScan()
         if clear { candidates = [] }
@@ -166,13 +193,23 @@ final class AppModel: ObservableObject {
     func connect(to candidate: BandCandidate) async {
         guard sessionState == .idle || sessionState == .scanning else { return }
         errorMessage = nil
+        let key: AuthKey
         do {
-            guard let key = try keyStore.load() else {
+            guard let loadedKey = try keyStore.load() else {
                 errorMessage = "Hãy lưu AuthKey trước khi kết nối."
-                sessionState = .idle
                 return
             }
-            await central.stopScan()
+            key = loadedKey
+        } catch {
+            errorMessage = "Không đọc được AuthKey trong Keychain."
+            return
+        }
+
+        if sessionState == .scanning {
+            await stopScan()
+        }
+
+        do {
             sessionState = .connecting
             try await session.connect(candidate: candidate, authKey: key)
             sessionState = .readingDeviceProof

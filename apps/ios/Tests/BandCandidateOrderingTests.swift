@@ -85,6 +85,19 @@ final class BandCandidateOrderingTests: XCTestCase {
         XCTAssertEqual(ordered.single?.rssi, -88)
     }
 
+    func testAdvertisedXiaomiNameBeatsGeneratedFallbackForDuplicatePeripheralID() {
+        let duplicateID = uuid("45000000-0000-0000-0000-000000000000")
+        let fallback = "BLE \(duplicateID.uuidString.prefix(8))"
+
+        let ordered = BandCandidateOrdering.order([
+            candidate(duplicateID, fallback, -35),
+            candidate(duplicateID, "Xiaomi Smart Band 10", -60),
+        ], remembered: nil)
+
+        XCTAssertEqual(ordered.single?.name, "Xiaomi Smart Band 10")
+        XCTAssertEqual(ordered.single?.rssi, -35)
+    }
+
     func testWithoutRememberedCandidateOrdersAllCandidatesNormally() {
         let strongestID = uuid("50000000-0000-0000-0000-000000000000")
         let ordered = BandCandidateOrdering.order([
