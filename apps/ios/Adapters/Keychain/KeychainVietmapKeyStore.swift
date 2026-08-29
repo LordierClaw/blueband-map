@@ -40,20 +40,22 @@ struct KeychainVietmapKeyStore: VietmapKeyStoreProtocol, Sendable {
         guard status == errSecSuccess else { throw StoreError.unexpectedStatus(status) }
         guard let data = result as? Data,
               let value = String(data: data, encoding: .utf8),
-              !value.isEmpty else {
+              let validated = Self.validatedValue(value, requiresCanonicalForm: true) else {
             throw StoreError.invalidStoredValue
         }
-        return value
+        return validated
     }
 
     func save(_ value: String, kind: VietmapKeyKind) throws {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty, normalized.utf8.count <= 512 else {
+        guard let normalized = Self.validatedValue(value, requiresCanonicalForm: false) else {
             throw StoreError.invalidValue
         }
 
         let data = Data(normalized.utf8)
-        let attributes: [CFString: Any] = [kSecValueData: data]
+        let attributes: [CFString: Any] = [
+            kSecValueData: data,
+            kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
         let updateStatus = client.update(
             baseQuery(kind) as CFDictionary,
             attributes: attributes as CFDictionary
@@ -86,5 +88,21 @@ struct KeychainVietmapKeyStore: VietmapKeyStoreProtocol, Sendable {
             kSecAttrService: service,
             kSecAttrAccount: account,
         ]
+    }
+
+    private static func validatedValue(
+        _ value: String,
+        requiresCanonicalForm: Bool
+    ) -> String? {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty,
+              normalized.utf8.count <= 512,
+              !normalized.unicodeScalars.contains(where: { scalar in
+                  scalar.value <= 0x1F || scalar.value == 0x7F
+              }),
+              !requiresCanonicalForm || value == normalized else {
+            return nil
+        }
+        return normalized
     }
 }

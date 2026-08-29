@@ -5,10 +5,14 @@ struct RememberedBand: Equatable, Sendable {
     let name: String
     let lastConnectedAt: Date
 
-    init(id: UUID, name: String, lastConnectedAt: Date = .distantPast) {
+    init(id: UUID, name: String, lastConnectedAt: Date) {
         self.id = id
         self.name = name
         self.lastConnectedAt = lastConnectedAt
+    }
+
+    init(id: UUID, name: String) {
+        self.init(id: id, name: name, lastConnectedAt: Date())
     }
 }
 

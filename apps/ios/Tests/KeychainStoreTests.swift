@@ -55,10 +55,14 @@ final class KeychainStoreTests: XCTestCase {
         XCTAssertEqual(client.updateQueries.count, 1)
         assertVietmapQuery(client.updateQueries[0], account: "vietmap-service-key")
         XCTAssertEqual(client.updatedAttributes[0][kSecValueData] as? Data, Data("updated-value".utf8))
+        XCTAssertEqual(
+            client.updatedAttributes[0][kSecAttrAccessible] as? String,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String
+        )
     }
 
     func testVietmapSaveRejectsInvalidValuesBeforeCallingKeychain() {
-        for value in ["", " \n\t ", String(repeating: "é", count: 257)] {
+        for value in ["", " \n\t ", String(repeating: "a", count: 513), "value\u{0000}"] {
             let client = FakeKeychainClient()
             let store = KeychainVietmapKeyStore(client: client)
 
@@ -125,9 +129,9 @@ final class KeychainStoreTests: XCTestCase {
         client.copyStatus = errSecSuccess
         let store = KeychainVietmapKeyStore(client: client)
 
-        client.copyResult = Data("tile-value".utf8)
+        client.copyResult = Data("tile-value".utf8) as CFData
         XCTAssertEqual(try store.load(.tileMap), "tile-value")
-        client.copyResult = Data("service-value".utf8)
+        client.copyResult = Data("service-value".utf8) as CFData
         XCTAssertEqual(try store.load(.service), "service-value")
 
         assertVietmapLoadQuery(client.copyQueries[0], account: "vietmap-tilemap-key")
@@ -136,15 +140,33 @@ final class KeychainStoreTests: XCTestCase {
 
     func testVietmapLoadRejectsEmptyAndNonUTF8StoredValues() {
         for data in [Data(), Data([0xFF])] {
-            let client = FakeKeychainClient()
-            client.copyStatus = errSecSuccess
-            client.copyResult = data
-            let store = KeychainVietmapKeyStore(client: client)
-
-            XCTAssertThrowsError(try store.load(.tileMap)) { error in
-                XCTAssertEqual(error as? KeychainVietmapKeyStore.StoreError, .invalidStoredValue)
-            }
+            assertVietmapLoadRejects(data as CFData)
         }
+    }
+
+    func testVietmapLoadRejectsWhitespaceOnlyStoredValue() {
+        assertVietmapLoadRejects(Data(" \n\t ".utf8) as CFData)
+    }
+
+    func testVietmapLoadRejectsStoredValueAt513UTF8Bytes() {
+        assertVietmapLoadRejects(Data(String(repeating: "a", count: 513).utf8) as CFData)
+    }
+
+    func testVietmapLoadRejectsStoredValueContainingASCIIControl() {
+        assertVietmapLoadRejects(Data([0x61, 0x00, 0x62]) as CFData)
+    }
+
+    func testVietmapLoadRejectsNoncanonicalLeadingOrTrailingWhitespace() {
+        assertVietmapLoadRejects(Data(" leading".utf8) as CFData)
+        assertVietmapLoadRejects(Data("trailing ".utf8) as CFData)
+    }
+
+    func testVietmapLoadRejectsNilSuccessfulCopyResult() {
+        assertVietmapLoadRejects(nil)
+    }
+
+    func testVietmapLoadRejectsNonDataSuccessfulCopyResult() {
+        assertVietmapLoadRejects(NSNumber(value: 7))
     }
 
     private func assertVietmapQuery(
@@ -168,6 +190,26 @@ final class KeychainStoreTests: XCTestCase {
         XCTAssertEqual(query[kSecReturnData] as? Bool, true, file: file, line: line)
         XCTAssertEqual(query[kSecMatchLimit] as? String, kSecMatchLimitOne as String, file: file, line: line)
     }
+
+    private func assertVietmapLoadRejects(
+        _ copyResult: CFTypeRef?,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let client = FakeKeychainClient()
+        client.copyStatus = errSecSuccess
+        client.copyResult = copyResult
+        let store = KeychainVietmapKeyStore(client: client)
+
+        XCTAssertThrowsError(try store.load(.tileMap), file: file, line: line) { error in
+            XCTAssertEqual(
+                error as? KeychainVietmapKeyStore.StoreError,
+                .invalidStoredValue,
+                file: file,
+                line: line
+            )
+        }
+    }
 }
 
 private final class FakeKeychainClient: KeychainClient, @unchecked Sendable {
@@ -175,7 +217,7 @@ private final class FakeKeychainClient: KeychainClient, @unchecked Sendable {
     var copyStatus: OSStatus = errSecItemNotFound
     var addStatus: OSStatus = errSecSuccess
     var deleteStatus: OSStatus = errSecSuccess
-    var copyResult: Data?
+    var copyResult: CFTypeRef?
     var copyQueries: [[CFString: Any]] = []
     var addedItems: [[CFString: Any]] = []
     var updateQueries: [[CFString: Any]] = []
@@ -185,7 +227,7 @@ private final class FakeKeychainClient: KeychainClient, @unchecked Sendable {
 
     func copyMatching(_ query: CFDictionary, result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
         if let query = query as? [CFString: Any] { copyQueries.append(query) }
-        if copyStatus == errSecSuccess, let copyResult { result?.pointee = copyResult as CFData }
+        if copyStatus == errSecSuccess { result?.pointee = copyResult }
         return copyStatus
     }
 

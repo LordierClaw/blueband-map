@@ -3,7 +3,7 @@ import XCTest
 @testable import BlueBandMap
 
 final class RememberedBandStoreTests: XCTestCase {
-    func testInitializerPreservesExplicitDateAndProvidesCompatibilityDefault() {
+    func testInitializersPreserveExplicitDateAndCompatibilityInitializerRecordsCurrentDate() {
         let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let connectedAt = Date(timeIntervalSince1970: 1_788_000_000)
 
@@ -12,10 +12,13 @@ final class RememberedBandStoreTests: XCTestCase {
         XCTAssertEqual(explicit.name, "Explicit Date Band")
         XCTAssertEqual(explicit.lastConnectedAt, connectedAt)
 
+        let before = Date()
         let compatible = RememberedBand(id: id, name: "Compatibility Band")
+        let after = Date()
         XCTAssertEqual(compatible.id, id)
         XCTAssertEqual(compatible.name, "Compatibility Band")
-        XCTAssertEqual(compatible.lastConnectedAt, .distantPast)
+        XCTAssertGreaterThanOrEqual(compatible.lastConnectedAt, before)
+        XCTAssertLessThanOrEqual(compatible.lastConnectedAt, after)
     }
 
     func testSaveLoadAndForgetAreConfinedToOwnKeys() throws {
