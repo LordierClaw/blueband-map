@@ -3,6 +3,17 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class MapAssetTests: XCTestCase {
+    func testPNGAcceptsValidNonZeroIndexDataSlice() throws {
+        let prefixedData = Data([0xff]) + pngData(width: 212, height: 360)
+        let slice = prefixedData.dropFirst()
+
+        XCTAssertNotEqual(slice.startIndex, 0)
+        let asset = try MapAsset.png(data: slice, expectedWidth: 212, expectedHeight: 360)
+
+        XCTAssertEqual(asset.width, 212)
+        XCTAssertEqual(asset.height, 360)
+    }
+
     func testPNGIdentifiesDimensionsContentAndStableDigest() throws {
         let data = pngData(width: 212, height: 360)
 
@@ -12,9 +23,11 @@ final class MapAssetTests: XCTestCase {
         XCTAssertEqual(first.mimeType, "image/png")
         XCTAssertEqual(first.width, 212)
         XCTAssertEqual(first.height, 360)
+        XCTAssertEqual(first.data, data)
         XCTAssertEqual(first.byteCount, data.count)
         XCTAssertNotNil(first.sha256.range(of: "^[0-9a-f]{64}$", options: .regularExpression))
-        XCTAssertEqual(first.id, "m1-" + String(first.sha256.prefix(16)))
+        XCTAssertEqual(first.sha256, "aa2a20ba1a365b558af3f4f3ca630e2336866f910a2b3ac23dac000b64f84c8f")
+        XCTAssertEqual(first.id, "m1-aa2a20ba1a365b55")
         XCTAssertEqual(second.sha256, first.sha256)
         XCTAssertEqual(second.id, first.id)
     }
@@ -23,7 +36,32 @@ final class MapAssetTests: XCTestCase {
         var data = pngData(width: 212, height: 360)
         data[0] = 0
 
-        XCTAssertThrowsError(try MapAsset.png(data: data, expectedWidth: 212, expectedHeight: 360))
+        XCTAssertThrowsError(try MapAsset.png(data: data, expectedWidth: 212, expectedHeight: 360)) { error in
+            XCTAssertEqual(error as? MapAsset.Error, .invalidPNG)
+        }
+    }
+
+    func testPNGRejectsTruncatedHeaderAsInvalidPNG() {
+        XCTAssertThrowsError(try MapAsset.png(data: Data([137]), expectedWidth: 212, expectedHeight: 360)) { error in
+            XCTAssertEqual(error as? MapAsset.Error, .invalidPNG)
+        }
+    }
+
+    func testPNGRejectsIncorrectIHDRLengthAsInvalidPNG() {
+        var data = pngData(width: 212, height: 360)
+        data[11] = 12
+
+        XCTAssertThrowsError(try MapAsset.png(data: data, expectedWidth: 212, expectedHeight: 360)) { error in
+            XCTAssertEqual(error as? MapAsset.Error, .invalidPNG)
+        }
+    }
+
+    func testPNGRejectsTruncatedIHDRPayloadAsInvalidPNG() {
+        let data = pngData(width: 212, height: 360).prefix(28)
+
+        XCTAssertThrowsError(try MapAsset.png(data: data, expectedWidth: 212, expectedHeight: 360)) { error in
+            XCTAssertEqual(error as? MapAsset.Error, .invalidPNG)
+        }
     }
 
     func testPNGRejectsWrongDimensions() {
@@ -46,6 +84,16 @@ final class MapAssetTests: XCTestCase {
         XCTAssertThrowsError(try MapAsset.png(data: data, expectedWidth: 212, expectedHeight: 360)) { error in
             XCTAssertEqual(error as? MapAsset.Error, .tooLarge)
         }
+    }
+
+    func testPNGAcceptsDataAtMaximumSize() throws {
+        var data = pngData(width: 212, height: 360)
+        data.append(Data(repeating: 0, count: MapAsset.maximumPNGBytes - data.count))
+
+        let asset = try MapAsset.png(data: data, expectedWidth: 212, expectedHeight: 360)
+
+        XCTAssertEqual(asset.byteCount, MapAsset.maximumPNGBytes)
+        XCTAssertEqual(asset.data, data)
     }
 }
 

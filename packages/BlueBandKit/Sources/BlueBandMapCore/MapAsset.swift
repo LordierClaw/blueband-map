@@ -5,6 +5,7 @@ public struct MapAsset: Equatable, Sendable {
     public enum Error: Swift.Error, Equatable {
         case empty
         case tooLarge
+        case invalidPNG
         case wrongDimensions
     }
 
@@ -36,7 +37,12 @@ public struct MapAsset: Equatable, Sendable {
             throw Error.tooLarge
         }
 
-        let dimensions = try PNGInspector.dimensions(of: data)
+        let dimensions: (width: Int, height: Int)
+        do {
+            dimensions = try PNGInspector.dimensions(of: data)
+        } catch {
+            throw Error.invalidPNG
+        }
         guard dimensions.width == expectedWidth, dimensions.height == expectedHeight else {
             throw Error.wrongDimensions
         }
