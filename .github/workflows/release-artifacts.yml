@@ -1,0 +1,57 @@
+name: Unsigned release artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20.19.5
+          cache: npm
+          cache-dependency-path: apps/band/package-lock.json
+      - name: Install pinned XcodeGen
+        env:
+          XCODEGEN_VERSION: 2.46.0
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          curl -fsSL "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" -o "$RUNNER_TEMP/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: Build unsigned iOS app
+        run: |
+          (cd apps/ios && xcodegen generate)
+          xcodebuild -project apps/ios/BlueBandMap.xcodeproj -scheme BlueBandMap -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          scripts/verify-ios-artifact.sh "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/BlueBandMap.app"
+          mkdir -p artifacts/Payload
+          ditto "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/BlueBandMap.app" artifacts/Payload/BlueBandMap.app
+          (cd artifacts && zip -qry BlueBandMap-unsigned.ipa Payload)
+          rm -rf artifacts/Payload
+      - name: Build verified Band 10 RPK
+        working-directory: apps/band
+        run: npm ci && npm run build
+      - name: Assemble hashes, manifest, notices, and dependency inventories
+        run: |
+          cp apps/band/dist/*.rpk artifacts/
+          cp LICENSE THIRD_PARTY_NOTICES.md artifacts/
+          swift package --package-path packages/BlueBandKit show-dependencies --format json > artifacts/swift-dependencies.json
+          (cd apps/band && npm ls --all --json > ../../artifacts/npm-dependencies.json) || true
+          scripts/release-manifest.sh artifacts "$GITHUB_SHA"
+          (cd artifacts && shasum -a 256 BlueBandMap-unsigned.ipa *.rpk > SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BlueBandMap-unsigned-${{ github.sha }}
+          path: artifacts
+          retention-days: 7
+          if-no-files-found: error

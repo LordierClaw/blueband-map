@@ -1,0 +1,11 @@
+services:
+  swift:
+    volumes:
+      - ./.ci-cache/swift-build:/workspace/packages/BlueBandKit/.build
+      - ./.ci-cache/swift-cache:/root/.cache
+  node-rpk:
+    volumes:
+      - ./.ci-cache/npm:/root/.npm
+  node-lab:
+    volumes:
+      - ./.ci-cache/npm:/root/.npm

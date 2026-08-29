@@ -1,0 +1,31 @@
+version: 2
+updates:
+  - package-ecosystem: swift
+    directory: /packages/BlueBandKit
+    schedule: { interval: weekly }
+    groups:
+      routine-swift:
+        patterns: ['*']
+        exclude-patterns: ['swift-crypto', 'CryptoSwift']
+        update-types: ['minor', 'patch']
+  - package-ecosystem: npm
+    directory: /apps/band
+    schedule: { interval: weekly }
+    groups:
+      routine-rpk:
+        patterns: ['*']
+        exclude-patterns: ['aiot-toolkit', '@aiot-toolkit/jsc']
+        update-types: ['minor', 'patch']
+  - package-ecosystem: npm
+    directory: /tools/protocol-lab
+    schedule: { interval: weekly }
+    groups:
+      routine-lab:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

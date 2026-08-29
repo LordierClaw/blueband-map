@@ -50,6 +50,10 @@ let package = Package(
             name: "BlueBandCoreTests",
             dependencies: ["BlueBandCore", "BlueBandProtocol", "BlueBandCrypto", "CryptoSwift"]
         ),
+        .testTarget(
+            name: "BlueBandCryptoCommonCryptoTests",
+            dependencies: ["BlueBandCryptoCommonCrypto"]
+        ),
     ],
     swiftLanguageModes: [.v5]
 )

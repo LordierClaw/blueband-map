@@ -1,0 +1,45 @@
+name: iOS checks
+
+on:
+  push:
+    paths: ['apps/ios/**', 'packages/BlueBandKit/**', '.github/workflows/ios-checks.yml', 'scripts/verify-ios-artifact.sh']
+  pull_request:
+    paths: ['apps/ios/**', 'packages/BlueBandKit/**', '.github/workflows/ios-checks.yml', 'scripts/verify-ios-artifact.sh']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install pinned XcodeGen
+        env:
+          XCODEGEN_VERSION: 2.46.0
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          curl -fsSL "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip" -o "$RUNNER_TEMP/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: Test portable package and CommonCrypto boundary
+        run: swift test --package-path packages/BlueBandKit
+      - name: Generate Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+      - name: Test on an available iPhone simulator
+        run: |
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for devices in data["devices"].values() for d in devices if d["isAvailable"] and d["name"].startswith("iPhone")))')
+          xcodebuild -project apps/ios/BlueBandMap.xcodeproj -scheme BlueBandMap -configuration Debug -destination "platform=iOS Simulator,id=$device" CODE_SIGNING_ALLOWED=NO test
+      - name: Build and inspect unsigned arm64 device app
+        run: |
+          xcodebuild -project apps/ios/BlueBandMap.xcodeproj -scheme BlueBandMap -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          scripts/verify-ios-artifact.sh "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/BlueBandMap.app"

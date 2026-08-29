@@ -1,0 +1,37 @@
+name: Linux checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/cache@v5
+        with:
+          path: .ci-cache
+          key: linux-${{ hashFiles('compose.yaml', 'packages/BlueBandKit/Package.resolved', 'apps/band/package-lock.json', 'tools/protocol-lab/package-lock.json') }}
+      - name: Run Linux-capable suites
+        run: docker compose -f compose.yaml -f compose.ci.yaml run --rm swift swift test && docker compose -f compose.yaml -f compose.ci.yaml run --rm node-rpk bash -lc 'npm ci && npm test' && docker compose -f compose.yaml -f compose.ci.yaml run --rm node-lab bash -lc 'npm ci && npm test'
+      - name: Static and secret-safe checks
+        run: make test-ios-metadata && make lint
+      - name: Gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.0
+          GITLEAKS_SHA256: 79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
+        run: |
+          curl -fsSLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          ./gitleaks git --redact --no-banner .
