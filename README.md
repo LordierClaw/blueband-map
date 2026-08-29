@@ -26,9 +26,36 @@ Portable Swift, RPK, and protocol-lab checks run locally. Public GitHub Actions 
 
 Never commit an AuthKey, raw capture, Apple credential, provisioning profile, or private RPK signing key. See [SECURITY.md](SECURITY.md).
 
-## Design
+Focused commands:
+
+```bash
+make test-swift
+make test-rpk
+make test-lab
+make test-ios-metadata
+make lint
+```
+
+The repository intentionally does not support macOS virtualization on non-Apple hardware or paid hosted Macs. See [macOS options](docs/development/macos-options.md).
+
+## Engineering handbook
+
+- [Architecture overview](docs/architecture/overview.md)
+- [Module boundaries](docs/architecture/module-boundaries.md)
+- [Runtime state machine](docs/architecture/runtime-state-machine.md)
+- [Xiaomi SPP v2](docs/protocol/xiaomi-spp-v2.md)
+- [Authentication](docs/protocol/authentication.md)
+- [ThirdPartyApp bridge](docs/protocol/third-party-app.md)
+- [Application envelope v1](docs/protocol/application-envelope-v1.md)
+- [Threat model](docs/security/threat-model.md)
+- [Ubuntu setup](docs/development/ubuntu-setup.md)
+- [Unsigned free-Apple-ID sideload](docs/release/unsigned-ios-sideload.md)
+- [Band 10 hardware acceptance](docs/testing/hardware-acceptance.md)
+
+## Design records
 
 - [Approved foundation design](docs/superpowers/specs/2026-08-29-blueband-map-foundation-design.md)
 - [Implementation plan](docs/superpowers/plans/2026-08-29-blueband-map-foundation.md)
+- [Architecture decisions](docs/adr/)
 
 Licensed under Apache-2.0.

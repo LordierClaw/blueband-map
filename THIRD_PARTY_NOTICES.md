@@ -13,3 +13,11 @@ Apple's Apache-2.0-licensed Swift Crypto package supplies CryptoKit-compatible H
 ## CryptoSwift 1.10.0
 
 CryptoSwift is used only by `BlueBandCryptoTests` as an independent Linux AES block provider. It is not linked into the iOS application. CryptoSwift requires retention of its license and the following acknowledgement: This product includes software developed by Marcin Krzyzanowski (https://krzyzanowskim.com/).
+
+## Xiaomi Vela toolkit
+
+`aiot-toolkit` 2.0.5 and `@aiot-toolkit/jsc` 1.0.3 are development-only tools used to compile and verify the Band 10 RPK. Their transitive dependency tree is locked in `apps/band/package-lock.json`; it is not linked into the iOS application.
+
+## XcodeGen 2.46.0 and Gitleaks 8.30.0
+
+CI downloads checksum-pinned release binaries for project generation and secret scanning. Neither binary is distributed inside BlueBandMap runtime artifacts.
