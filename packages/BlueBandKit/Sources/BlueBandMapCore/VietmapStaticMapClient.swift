@@ -63,8 +63,15 @@ public struct VietmapStaticMapClient: StaticMapProviding, Sendable {
             height: request.height
         )
 
+        guard isValidBoundary else {
+            throw VietmapStaticMapError.invalidRequest
+        }
+
         let key = serviceKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty, key.utf8.count <= 512 else {
+        guard !key.isEmpty,
+              key.utf8.count <= 512,
+              !key.utf8.contains(where: { $0 <= 31 || $0 == 127 }),
+              !key.contains("--\(boundary)") else {
             throw VietmapStaticMapError.missingServiceKey
         }
 
@@ -89,7 +96,13 @@ public struct VietmapStaticMapClient: StaticMapProviding, Sendable {
         guard response.statusCode == 200 else {
             throw VietmapStaticMapError.httpStatus(response.statusCode)
         }
-        guard response.header(named: "Content-Type")?.lowercased().hasPrefix("image/png") == true else {
+        guard let contentType = response.header(named: "Content-Type") else {
+            throw VietmapStaticMapError.wrongContentType
+        }
+        let mediaType = String(
+            contentType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard mediaType.caseInsensitiveCompare("image/png") == .orderedSame else {
             throw VietmapStaticMapError.wrongContentType
         }
         return try MapAsset.png(
@@ -113,5 +126,20 @@ public struct VietmapStaticMapClient: StaticMapProviding, Sendable {
 
     private func decimal(_ value: Double) -> String {
         String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), value)
+    }
+
+    private var isValidBoundary: Bool {
+        (1...70).contains(boundary.utf8.count) && boundary.utf8.allSatisfy(Self.isTokenByte)
+    }
+
+    private static func isTokenByte(_ byte: UInt8) -> Bool {
+        switch byte {
+        case 48...57, 65...90, 97...122:
+            true
+        case 33, 35, 36, 37, 38, 39, 42, 43, 45, 46, 94, 95, 96, 124, 126:
+            true
+        default:
+            false
+        }
     }
 }

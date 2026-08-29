@@ -63,6 +63,34 @@ final class VietmapStaticMapClientTests: XCTestCase {
         XCTAssertFalse(body.contains(" \tservice-test-key"))
     }
 
+    func testRejectsInvalidMultipartBoundariesWithoutExecutingTransport() async {
+        let invalidBoundaries = [
+            "",
+            "blue\rband",
+            "blue\nband",
+            "blue\"band",
+            "blue band",
+            "blue/band",
+            "blue;band",
+            "blue[band",
+            "blue💙band",
+            String(repeating: "b", count: 71),
+        ]
+
+        for boundary in invalidBoundaries {
+            let transport = QueueHTTPTransport(responses: [])
+            let client = VietmapStaticMapClient(transport: transport, boundary: boundary)
+
+            await XCTAssertThrowsErrorAsync(
+                try await client.fetch(validRequest(), serviceKey: "service-test-key")
+            ) { error in
+                XCTAssertEqual(error as? VietmapStaticMapError, .invalidRequest)
+            }
+            let requestCount = await transport.requests().count
+            XCTAssertEqual(requestCount, 0)
+        }
+    }
+
     func testRejectsEmptyAndWhitespaceServiceKeysWithoutExecutingTransport() async {
         for serviceKey in ["", "   \t\r\n"] {
             let transport = QueueHTTPTransport(responses: [])
@@ -86,6 +114,44 @@ final class VietmapStaticMapClientTests: XCTestCase {
 
         await XCTAssertThrowsErrorAsync(
             try await client.fetch(validRequest(), serviceKey: serviceKey)
+        ) { error in
+            XCTAssertEqual(error as? VietmapStaticMapError, .missingServiceKey)
+        }
+        let requestCount = await transport.requests().count
+        XCTAssertEqual(requestCount, 0)
+    }
+
+    func testRejectsServiceKeysContainingASCIIControlsWithoutExecutingTransport() async {
+        let invalidServiceKeys = [
+            "service\r\nInjected: value",
+            "service\u{0000}key",
+            "service\u{001f}key",
+            "service\u{007f}key",
+        ]
+
+        for serviceKey in invalidServiceKeys {
+            let transport = QueueHTTPTransport(responses: [])
+            let client = VietmapStaticMapClient(transport: transport, boundary: "blueband-boundary")
+
+            await XCTAssertThrowsErrorAsync(
+                try await client.fetch(validRequest(), serviceKey: serviceKey)
+            ) { error in
+                XCTAssertEqual(error as? VietmapStaticMapError, .missingServiceKey)
+            }
+            let requestCount = await transport.requests().count
+            XCTAssertEqual(requestCount, 0)
+        }
+    }
+
+    func testRejectsServiceKeyContainingActiveDelimiterWithoutExecutingTransport() async {
+        let transport = QueueHTTPTransport(responses: [])
+        let client = VietmapStaticMapClient(transport: transport, boundary: "blueband-boundary")
+
+        await XCTAssertThrowsErrorAsync(
+            try await client.fetch(
+                validRequest(),
+                serviceKey: "service--blueband-boundaryinjected"
+            )
         ) { error in
             XCTAssertEqual(error as? VietmapStaticMapError, .missingServiceKey)
         }
@@ -140,12 +206,33 @@ final class VietmapStaticMapClientTests: XCTestCase {
         }
     }
 
+    func testRejectsContentTypesWithImagePNGPrefixOnly() async {
+        for contentType in ["image/png-malware", "image/pngfoo", "image/png+custom"] {
+            let transport = QueueHTTPTransport(responses: [
+                MapHTTPResponse(
+                    statusCode: 200,
+                    headers: ["Content-Type": contentType],
+                    body: makePNG(width: 212, height: 360)
+                ),
+            ])
+            let client = VietmapStaticMapClient(transport: transport)
+
+            await XCTAssertThrowsErrorAsync(
+                try await client.fetch(validRequest(), serviceKey: "service-test-key")
+            ) { error in
+                XCTAssertEqual(error as? VietmapStaticMapError, .wrongContentType)
+            }
+            let requestCount = await transport.requests().count
+            XCTAssertEqual(requestCount, 1)
+        }
+    }
+
     func testAcceptsImagePNGContentTypeCaseInsensitivelyWithParameters() async throws {
         let png = makePNG(width: 212, height: 360)
         let transport = QueueHTTPTransport(responses: [
             MapHTTPResponse(
                 statusCode: 200,
-                headers: ["cOnTeNt-TyPe": "ImAgE/PnG; charset=binary"],
+                headers: ["cOnTeNt-TyPe": " \tImAgE/PnG\r\n ; charset=binary"],
                 body: png
             ),
         ])
@@ -203,6 +290,37 @@ final class VietmapStaticMapClientTests: XCTestCase {
         }
         let requestCount = await transport.requests().count
         XCTAssertEqual(requestCount, 0)
+    }
+
+    func testFetchRejectsNonFiniteCoordinatesWithoutExecutingTransport() async {
+        let coordinates: [(Double, Double)] = [
+            (.nan, 106.675859),
+            (.infinity, 106.675859),
+            (-.infinity, 106.675859),
+            (10.759157, .nan),
+            (10.759157, .infinity),
+            (10.759157, -.infinity),
+        ]
+
+        for (latitude, longitude) in coordinates {
+            let transport = QueueHTTPTransport(responses: [])
+            let client = VietmapStaticMapClient(transport: transport)
+            let request = StaticMapRequest(
+                latitude: latitude,
+                longitude: longitude,
+                zoom: 17,
+                width: 212,
+                height: 360
+            )
+
+            await XCTAssertThrowsErrorAsync(
+                try await client.fetch(request, serviceKey: "service-test-key")
+            ) { error in
+                XCTAssertEqual(error as? VietmapStaticMapError, .invalidRequest)
+            }
+            let requestCount = await transport.requests().count
+            XCTAssertEqual(requestCount, 0)
+        }
     }
 }
 
