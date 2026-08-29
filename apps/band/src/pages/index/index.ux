@@ -38,6 +38,8 @@ export default {
     MAP_WIDTH: 212,
     MAP_HEIGHT: 360,
     connection: null,
+    destroyed: false,
+    acceptingMessages: false,
     waiting: true,
     connected: false,
     statusText: "PAGE READY",
@@ -64,23 +66,47 @@ export default {
   },
 
   onReady() {
+    this.destroyed = false
+    this.acceptingMessages = false
+    this.connected = false
     try {
       this.connection = interconnect.instance()
-      var page = this
-      this.connection.onopen = function () {
-        page.statusText = "IOS LINK OPEN"
-        page.detailText = "Press CHECK CONNECTION."
-      }
-      this.connection.onclose = function () { page.lock("IOS LINK CLOSED") }
-      this.connection.onerror = function () { page.lock("IOS LINK ERROR") }
-      this.connection.onmessage = function (event) { page.receiveMessage(event) }
+      this.bindConnectionHandlers(this.connection)
     } catch (error) {
       this.statusText = "INTERCONNECT ERROR"
       this.detailText = "Unable to start the system bridge."
     }
   },
 
+  bindConnectionHandlers(connection) {
+    if (!this.ownsConnection(connection)) return
+    var page = this
+    var epoch = this.lifecycleEpoch
+    connection.onopen = function () {
+      if (!page.ownsConnectionEpoch(connection, epoch)) return
+      page.statusText = "IOS LINK OPEN"
+      page.detailText = "Press CHECK CONNECTION."
+    }
+    connection.onclose = function () {
+      if (!page.ownsConnectionEpoch(connection, epoch) || (!page.connected && !page.acceptingMessages)) return
+      page.lock("IOS LINK CLOSED")
+    }
+    connection.onerror = function () {
+      if (!page.ownsConnectionEpoch(connection, epoch) || (!page.connected && !page.acceptingMessages)) return
+      page.lock("IOS LINK ERROR")
+    }
+    connection.onmessage = function (event) {
+      if (!page.ownsConnectionEpoch(connection, epoch)) return
+      page.receiveMessage(event)
+    }
+  },
+
   onDestroy() {
+    if (this.destroyed) return
+    this.destroyed = true
+    this.acceptingMessages = false
+    this.connected = false
+    this.waiting = true
     this.resetMapLifecycle()
     if (!this.connection) return
     this.connection.onopen = null
@@ -90,41 +116,60 @@ export default {
   },
 
   checkConnection() {
+    if (this.destroyed) return
     if (!this.connection) {
       this.statusText = "NO INTERCONNECT API"
       return
     }
     var page = this
-    this.connection.getReadyState({
+    var ownedConnection = this.connection
+    var epoch = this.lifecycleEpoch
+    ownedConnection.getReadyState({
       success: function (result) {
-        if (result.status === 1) page.unlock()
+        if (!page.ownsConnectionEpoch(ownedConnection, epoch)) return
+        if (result.status === 1) page.unlock(ownedConnection)
         else {
           page.statusText = "IOS NOT CONNECTED"
           page.detailText = "Ready state: " + result.status
         }
       },
       fail: function (result, code) {
+        if (!page.ownsConnectionEpoch(ownedConnection, epoch)) return
         page.statusText = "CHECK FAILED"
         page.detailText = "Error code: " + code
       }
     })
   },
 
-  unlock() {
+  unlock(connection) {
+    var ownedConnection = connection || this.connection
+    if (!this.ownsConnection(ownedConnection)) return
     var newSession = !this.connected
     this.waiting = false
     this.connected = true
+    this.acceptingMessages = true
+    this.bindConnectionHandlers(ownedConnection)
     this.logRows = []
     if (newSession) this.recentIDs = []
     this.logText = "Echo ready."
   },
 
   lock(reason) {
-    this.resetMapLifecycle()
+    if (this.destroyed) return
+    this.acceptingMessages = false
     this.connected = false
+    this.resetMapLifecycle()
     this.waiting = true
     this.statusText = reason
     this.detailText = "Reconnect on iPhone, then check again."
+  },
+
+  ownsConnection(connection) {
+    return !this.destroyed && !!connection && this.connection === connection
+  },
+
+  ownsConnectionEpoch(connection, epoch) {
+    return this.ownsConnection(connection) && this.lifecycleEpoch === epoch
   },
 
   resetMapLifecycle() {
@@ -197,6 +242,7 @@ export default {
   },
 
   receiveMessage(event) {
+    if (this.destroyed || !this.connected || !this.acceptingMessages) return
     var message = event
     if (event && event.data !== undefined) message = event.data
     if (typeof message === "string") {
@@ -568,9 +614,15 @@ export default {
   sendEnvelope(message) {
     if (!this.connected || !this.connection || !this.validEnvelope(message, "band")) return
     var page = this
-    this.connection.send({
+    var ownedConnection = this.connection
+    var epoch = this.lifecycleEpoch
+    ownedConnection.send({
       data: message,
-      fail: function () { page.lock("SEND FAILED") }
+      fail: function () {
+        if (!page.ownsConnectionEpoch(ownedConnection, epoch) ||
+          !page.connected || !page.acceptingMessages) return
+        page.lock("SEND FAILED")
+      }
     })
   },
 

@@ -537,11 +537,14 @@ test("lifecycle teardown makes pending access, delete and write callbacks inert 
       assert.equal(page.mapReady, false)
 
       controlled = false
-      page.unlock()
+      const liveHarness = lifecycle === "onDestroy" ? await readyHarness(file) : null
+      const livePage = liveHarness ? liveHarness.page : page
+      const liveSent = liveHarness ? liveHarness.sent : sent
+      if (lifecycle === "lock") livePage.unlock()
       const freshID = `${lifecycle}-${stage}-fresh`
-      page.receiveMessage({ data: envelope(freshID, "map.asset.begin", beginBody({ bytes: 4 })) })
-      assert.equal(page.activeTransfer.asset, ASSET)
-      assert.equal(sent.filter(message => message.type === "ack" && message.id === freshID).length, 1)
+      livePage.receiveMessage({ data: envelope(freshID, "map.asset.begin", beginBody({ bytes: 4 })) })
+      assert.equal(livePage.activeTransfer.asset, ASSET)
+      assert.equal(liveSent.filter(message => message.type === "ack" && message.id === freshID).length, 1)
     }
   }
 })
@@ -755,4 +758,161 @@ test("repeated readiness while connected preserves dedup side effects until a re
   page.unlock()
   page.receiveMessage({ data: echo })
   assert.equal(page.logRows.length, 1, "new interconnect session may clear dedup history")
+})
+
+test("delayed readiness callbacks after lock or destroy are lifecycle-inert", async () => {
+  for (const lifecycle of ["lock", "onDestroy"]) {
+    for (const outcome of ["success", "fail"]) {
+      const readyCallbacks = []
+      const sent = []
+      const connection = {
+        send(options) { sent.push(options.data) },
+        getReadyState(options) { readyCallbacks.push(options) }
+      }
+      const page = await loadPage(connection, memoryFile(), fakeCrypto())
+      page.unlock()
+      page.checkConnection()
+      assert.equal(readyCallbacks.length, 1)
+      const epoch = page.lifecycleEpoch
+      if (lifecycle === "lock") page.lock("IOS LINK CLOSED")
+      else page.onDestroy()
+      const status = page.statusText
+      assert.equal(page.lifecycleEpoch, epoch + 1)
+      if (outcome === "success") readyCallbacks[0].success({ status: 1 })
+      else readyCallbacks[0].fail({}, 99)
+      assert.equal(page.connected, false)
+      assert.equal(page.acceptingMessages, false)
+      assert.equal(page.statusText, status)
+      assert.equal(sent.length, 0)
+    }
+  }
+})
+
+test("queued asset and echo messages after lock or destroy have no side effects", async () => {
+  for (const lifecycle of ["lock", "onDestroy"]) {
+    const sent = []
+    const file = memoryFile()
+    const connection = { send(options) { sent.push(options.data) } }
+    const page = await loadPage(connection, file, fakeCrypto())
+    page.unlock()
+    if (lifecycle === "lock") page.lock("IOS LINK CLOSED")
+    else page.onDestroy()
+    const snapshot = {
+      accesses: file.accesses.length,
+      writes: file.writes.length,
+      deletes: file.deletes.length,
+      sent: sent.length,
+      logRows: page.logRows.length,
+      statusText: page.statusText,
+      epoch: page.lifecycleEpoch
+    }
+    page.receiveMessage({ data: envelope(`${lifecycle}-begin`, "map.asset.begin", beginBody({ bytes: 4 })) })
+    page.receiveMessage({ data: envelope(`${lifecycle}-chunk`, "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
+    page.receiveMessage({ data: envelope(`${lifecycle}-echo`, "system.echo", { text: "QUEUED" }) })
+    assert.deepEqual({
+      accesses: file.accesses.length,
+      writes: file.writes.length,
+      deletes: file.deletes.length,
+      sent: sent.length,
+      logRows: page.logRows.length,
+      statusText: page.statusText,
+      epoch: page.lifecycleEpoch
+    }, snapshot)
+    assert.equal(page.activeTransfer, null)
+    assert.equal(page.activeMapOperationID, "")
+  }
+})
+
+test("stale interconnect handlers are inert and a new live page can unlock", async () => {
+  const oldSent = []
+  const oldConnection = {
+    send(options) { oldSent.push(options.data) },
+    getReadyState({ success }) { success({ status: 1 }) }
+  }
+  const oldPage = await loadPage(oldConnection, memoryFile(), fakeCrypto())
+  const staleHandlers = {
+    open: oldConnection.onopen,
+    close: oldConnection.onclose,
+    error: oldConnection.onerror,
+    message: oldConnection.onmessage
+  }
+  oldPage.onDestroy()
+  const oldStatus = oldPage.statusText
+  const oldEpoch = oldPage.lifecycleEpoch
+  staleHandlers.open()
+  staleHandlers.close()
+  staleHandlers.error()
+  staleHandlers.message({ data: envelope("stale-echo", "system.echo", { text: "STALE" }) })
+  assert.equal(oldPage.statusText, oldStatus)
+  assert.equal(oldPage.lifecycleEpoch, oldEpoch)
+  assert.equal(oldSent.length, 0)
+
+  const sent = []
+  const connection = {
+    send(options) { sent.push(options.data) },
+    getReadyState({ success }) { success({ status: 1 }) }
+  }
+  const page = await loadPage(connection, memoryFile(), fakeCrypto())
+  page.receiveMessage({ data: envelope("before-unlock", "system.echo", { text: "EARLY" }) })
+  assert.equal(sent.length, 0)
+  assert.equal(page.acceptingMessages, false)
+  page.checkConnection()
+  assert.equal(page.connected, true)
+  assert.equal(page.acceptingMessages, true)
+  page.receiveMessage({ data: envelope("live-echo", "system.echo", { text: "LIVE" }) })
+  assert.deepEqual(sent.at(-1), { v: 1, id: "live-echo", src: "band", type: "ack" })
+})
+
+test("pre-lock interconnect handlers cannot mutate a reopened lifecycle", async () => {
+  const connection = { send() {} }
+  const page = await loadPage(connection, memoryFile(), fakeCrypto())
+  const stale = {
+    open: connection.onopen,
+    close: connection.onclose,
+    error: connection.onerror,
+    message: connection.onmessage
+  }
+  page.unlock()
+  page.lock("IOS LINK CLOSED")
+  const lockedStatus = page.statusText
+  stale.open()
+  stale.error()
+  stale.message({ data: envelope("locked-stale", "system.echo", { text: "STALE" }) })
+  assert.equal(page.statusText, lockedStatus)
+  assert.equal(page.logRows.length, 0)
+
+  page.unlock()
+  const reopenedEpoch = page.lifecycleEpoch
+  stale.close()
+  stale.message({ data: envelope("reopened-stale", "system.echo", { text: "STALE" }) })
+  assert.equal(page.connected, true)
+  assert.equal(page.lifecycleEpoch, reopenedEpoch)
+  assert.equal(page.logRows.length, 0)
+
+  connection.onclose()
+  assert.equal(page.connected, false)
+  assert.equal(page.lifecycleEpoch, reopenedEpoch + 1)
+})
+
+test("send failure callbacks lock only the lifecycle that issued them", async () => {
+  const sends = []
+  const connection = { send(options) { sends.push(options) } }
+  const page = await loadPage(connection, memoryFile(), fakeCrypto())
+  page.unlock()
+  page.receiveMessage({ data: envelope("old-send", "system.echo", { text: "OLD" }) })
+  assert.equal(sends.length, 1)
+  page.lock("IOS LINK CLOSED")
+  const lockedStatus = page.statusText
+  const lockedEpoch = page.lifecycleEpoch
+  sends[0].fail()
+  assert.equal(page.statusText, lockedStatus)
+  assert.equal(page.lifecycleEpoch, lockedEpoch)
+
+  page.unlock()
+  page.receiveMessage({ data: envelope("current-send", "system.echo", { text: "CURRENT" }) })
+  sends.at(-1).fail()
+  assert.equal(page.statusText, "SEND FAILED")
+  assert.equal(page.connected, false)
+  assert.equal(page.acceptingMessages, false)
+  assert.equal(page.lifecycleEpoch, lockedEpoch + 1)
 })
