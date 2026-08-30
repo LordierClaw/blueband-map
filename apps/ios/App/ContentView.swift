@@ -122,9 +122,7 @@ struct ContentView: View {
                 LabeledContent("Tổng thời gian", value: "\(metrics.totalMilliseconds) ms")
                 LabeledContent("ACK p95", value: metrics.ackP95Milliseconds.map { "\($0) ms" } ?? "—")
                 if let export = model.lastH1ExportURL {
-                    ShareLink(item: H1LogExport(url: export)) {
-                        Text("Export log H1")
-                    }
+                    H1LogExportLink(url: export)
                 } else {
                     Button("Export log H1") {}
                         .disabled(true)

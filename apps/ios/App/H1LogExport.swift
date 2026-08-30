@@ -1,5 +1,6 @@
 import CoreTransferable
 import Foundation
+import SwiftUI
 import UniformTypeIdentifiers
 
 struct H1LogExport: Transferable {
@@ -11,5 +12,15 @@ struct H1LogExport: Transferable {
             exporting: { export in SentTransferredFile(export.url) },
             importing: { received in H1LogExport(url: received.file) }
         )
+    }
+}
+
+struct H1LogExportLink: View {
+    let url: URL
+
+    var body: some View {
+        ShareLink(item: H1LogExport(url: url)) {
+            Text("Export log H1")
+        }
     }
 }
