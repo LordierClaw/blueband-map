@@ -101,7 +101,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "displayed")
     }
 
-    func testCurrentResultUsingLegacyBooleanSchemaFailsInvalid() async throws {
+    func testCurrentResultUsingLegacyBooleanSchemaFailsSchemaInvalid() async throws {
         let asset = try makeAsset(kind: .vector)
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: asset)
@@ -125,9 +125,62 @@ final class H1RenderCoordinatorTests: XCTestCase {
         await start.value
 
         XCTAssertEqual(coordinator.state, .failed(
-            mode: .vectorSynthetic8, code: "ASSET_RESULT_INVALID"
+            mode: .vectorSynthetic8, code: "RESULT_SCHEMA_INVALID"
         ))
-        XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "ASSET_RESULT_INVALID")
+        XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "RESULT_SCHEMA_INVALID")
+    }
+
+    func testSuccessfulResultWhileTransferIsInProgressFailsEarly() async throws {
+        let asset = try makeAsset(kind: .vector)
+        let sender = H1TestSender()
+        let provider = H1TestProvider(asset: asset)
+        let coordinator = makeCoordinator(sender: sender, provider: provider)
+        let start = Task { await coordinator.start(mode: .vectorSynthetic8) }
+
+        await waitUntil { await sender.startedCount == 1 }
+        coordinator.consume(readyEnvelope(runID: run1, sceneID: scene1, renderer: "vector"))
+        await sender.acknowledgeNext()
+        await waitUntil { await sender.startedCount == 2 }
+        coordinator.consume(resultEnvelope(
+            runID: run1, sceneID: scene1, renderer: "vector", success: true,
+            bytes: asset.byteCount, primitives: asset.primitives
+        ))
+        await sender.failNext(CancellationError())
+        await start.value
+
+        XCTAssertEqual(coordinator.state, .failed(
+            mode: .vectorSynthetic8, code: "RESULT_EARLY"
+        ))
+        XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "RESULT_EARLY")
+    }
+
+    func testCurrentResultWithMismatchedMetadataFailsMetadataInvalid() async throws {
+        let asset = try makeAsset(kind: .vector)
+        let sender = H1TestSender()
+        let provider = H1TestProvider(asset: asset)
+        let coordinator = makeCoordinator(sender: sender, provider: provider)
+        let start = Task { await coordinator.start(mode: .vectorSynthetic8) }
+
+        await waitUntil { await sender.startedCount == 1 }
+        coordinator.consume(readyEnvelope(runID: run1, sceneID: scene1, renderer: "vector"))
+        await sender.acknowledgeNext()
+        let plan = try RenderTransferPlan.make(asset: asset, runID: run1, sceneID: scene1)
+        for index in 0..<plan.count {
+            await waitUntil { await sender.startedCount == index + 2 }
+            if index == plan.count - 1 {
+                coordinator.consume(resultEnvelope(
+                    runID: run1, sceneID: scene1, renderer: "vector", success: true,
+                    bytes: asset.byteCount + 1, primitives: asset.primitives
+                ))
+            }
+            await sender.acknowledgeNext()
+        }
+        await start.value
+
+        XCTAssertEqual(coordinator.state, .failed(
+            mode: .vectorSynthetic8, code: "RESULT_METADATA_INVALID"
+        ))
+        XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "RESULT_METADATA_INVALID")
     }
 
     func testStaleResultIsIgnoredAndVectorFailureNeverInvokesRaster() async throws {

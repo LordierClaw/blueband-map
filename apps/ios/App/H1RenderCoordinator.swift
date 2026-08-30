@@ -402,11 +402,13 @@ final class H1RenderCoordinator {
 
     private func consumeResult(_ body: [String: JSONValue], pending: PendingTransfer) {
         guard let result = parseResult(body, pending: pending) else {
-            if string(body, key: "runId") == pending.runID { finish(code: "ASSET_RESULT_INVALID", requiresReconnect: true) }
+            if string(body, key: "runId") == pending.runID {
+                finish(code: "RESULT_SCHEMA_INVALID", requiresReconnect: true)
+            }
             return
         }
         if result.success && pending.phase == .transferring {
-            finish(code: "ASSET_RESULT_INVALID", requiresReconnect: true)
+            finish(code: "RESULT_EARLY", requiresReconnect: true)
         } else if pending.phase == .awaitingFinalAcknowledgement {
             self.pending?.bufferedResult = result
         } else if pending.phase == .waitingForBand, let token = operationToken {
@@ -423,7 +425,7 @@ final class H1RenderCoordinator {
               result.bytes == pending.asset.byteCount,
               result.primitives == pending.asset.primitives,
               result.hashPrefix == nil || result.hashPrefix == String(pending.asset.sha256.prefix(8)) else {
-            finishOwned(code: "ASSET_RESULT_INVALID", token: token, requiresReconnect: true)
+            finishOwned(code: "RESULT_METADATA_INVALID", token: token, requiresReconnect: true)
             return
         }
         if result.success {
@@ -437,11 +439,11 @@ final class H1RenderCoordinator {
             finishRun("displayed")
         } else {
             guard let code = result.errorCode, isSafeCode(code) else {
-                finishOwned(code: "ASSET_RESULT_INVALID", token: token, requiresReconnect: true)
+                finishOwned(code: "RESULT_SCHEMA_INVALID", token: token, requiresReconnect: true)
                 return
             }
             guard code.hasPrefix("ASSET_") else {
-                finishOwned(code: "ASSET_RESULT_INVALID", token: token, requiresReconnect: true)
+                finishOwned(code: "RESULT_SCHEMA_INVALID", token: token, requiresReconnect: true)
                 return
             }
             finishOwned(code: code, token: token, requiresReconnect: false)
