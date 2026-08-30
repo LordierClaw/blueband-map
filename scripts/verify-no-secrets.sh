@@ -13,7 +13,7 @@ auth_assignment_pattern="(auth[_-]?key|AUTH_KEY)[[:space:]]*[:=][[:space:]]*[\"'
 
 while IFS= read -r tracked_path; do
   case "$tracked_path" in
-    .env|*.p12|*.mobileprovision|*.pem|*.key|captures/raw/*|local/*|sign/*)
+    .env|*.p12|*.mobileprovision|*.pem|*.key|captures/raw/*|local/*|sign/*|artifacts/*)
       printf 'forbidden tracked secret path: %s\n' "$tracked_path" >&2
       failed=1
       ;;

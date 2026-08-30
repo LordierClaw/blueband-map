@@ -10,6 +10,7 @@ node_modules/
 local/
 captures/raw/
 sign/
+artifacts/
 *.p12
 *.mobileprovision
 *.pem

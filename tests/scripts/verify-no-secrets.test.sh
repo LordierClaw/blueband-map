@@ -23,3 +23,14 @@ if grep -q '00112233445566778899aabbccddeeff' <<<"$output"; then
   echo 'secret gate printed matched secret content' >&2
   exit 1
 fi
+
+printf 'binary-placeholder\n' >"$fixture_root/test.rpk"
+mkdir -p "$fixture_root/artifacts/m1/build"
+mv "$fixture_root/test.rpk" "$fixture_root/artifacts/m1/build/test.rpk"
+git -C "$fixture_root" add -f artifacts/m1/build/test.rpk
+set +e
+artifact_output=$("$project_root/scripts/verify-no-secrets.sh" "$fixture_root" 2>&1)
+artifact_status=$?
+set -e
+test "$artifact_status" -ne 0
+grep -q 'artifacts/m1/build/test.rpk' <<<"$artifact_output"

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor bootstrap test test-swift test-rpk test-lab test-ios-metadata lint clean
+.PHONY: help doctor bootstrap test test-swift test-rpk test-lab test-ios-metadata test-handoff lint clean
 
 help:
 	@echo "BlueBand Map development targets"
@@ -10,6 +10,7 @@ help:
 	@echo "  make test-swift   Test portable Swift packages"
 	@echo "  make test-rpk     Test and build the Band 10 RPK"
 	@echo "  make test-lab     Test the protocol laboratory"
+	@echo "  make test-handoff Test immutable POC handoff packaging"
 	@echo "  make lint         Run local static checks"
 	@echo "  make clean        Remove explicit generated project paths"
 
@@ -19,7 +20,7 @@ doctor:
 bootstrap:
 	docker compose pull swift node-rpk node-lab
 
-test: test-swift test-rpk test-lab test-ios-metadata
+test: test-swift test-rpk test-lab test-ios-metadata test-handoff
 
 test-swift:
 	docker compose run --rm swift swift test
@@ -32,6 +33,9 @@ test-lab:
 
 test-ios-metadata:
 	bash tools/ios/test-project-metadata.sh
+
+test-handoff:
+	bash tests/scripts/prepare-poc-handoff.test.sh
 
 lint:
 	bash -n scripts/*.sh tests/scripts/*.sh tools/ios/*.sh
