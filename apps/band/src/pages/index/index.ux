@@ -12,9 +12,14 @@
     <div class="connected" if="{{ connected }}">
       <text class="title small">BLUEBAND MAP</text>
       <text class="online">IOS CONNECTED</text>
-      <text class="map-ready" if="{{ mapReady }}">M1 MAP READY</text>
+      <text class="map-ready" if="{{ mapReady && mapRenderer === 'raster' }}">M1 MAP READY</text>
+      <text class="map-ready vector-ready" if="{{ mapReady && mapRenderer === 'vector' }}">H1 VECTOR READY</text>
       <text class="map-hash" if="{{ mapReady }}">SHA256 {{ mapHashPrefix }}</text>
-      <image class="map" for="{{ renderItems }}" src="{{ $item.path }}" @complete="mapComplete($item.token)" @error="mapError($item.token)" />
+      <image class="map" if="{{ mapRenderer === 'raster' }}" for="{{ renderItems }}" src="{{ $item.path }}" @complete="mapComplete($item.token)" @error="mapError($item.token)" />
+      <div class="vector-map" if="{{ vectorReady }}">
+        <div class="vector-segment" for="{{ vectorSegments }}" style="{{ $item.style }}"></div>
+        <div class="vector-current" if="{{ vectorCurrentStyle }}" style="{{ vectorCurrentStyle }}"></div>
+      </div>
       <div class="diagnostics" if="{{ showDiagnostics }}">
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
@@ -30,6 +35,7 @@ import interconnect from "@system.interconnect"
 import file from "@system.file"
 import crypto from "@system.crypto"
 import renderProtocol from "../../common/render-protocol.js"
+import vectorScene from "../../common/vector-scene.js"
 
 export default {
   private: {
@@ -58,7 +64,11 @@ export default {
     mapReady: false,
     mapPath: "",
     mapHashPrefix: "",
+    mapRenderer: "",
     renderItems: [],
+    vectorReady: false,
+    vectorSegments: [],
+    vectorCurrentStyle: "",
     pendingPublication: null,
     preparedRender: null,
     confirmedMap: null,
@@ -192,12 +202,27 @@ export default {
       this.mapPath = this.confirmedMap.uri
       this.mapHashPrefix = this.confirmedMap.sha256Prefix
       this.mapReady = true
-      this.renderItems = [{ path: this.confirmedMap.uri, token: this.confirmedMap.token }]
+      this.mapRenderer = this.confirmedMap.renderer || "raster"
+      if (this.mapRenderer === "vector") {
+        this.vectorReady = true
+        this.vectorSegments = this.confirmedMap.vectorSegments || []
+        this.vectorCurrentStyle = this.confirmedMap.vectorCurrentStyle || ""
+        this.renderItems = []
+      } else {
+        this.vectorReady = false
+        this.vectorSegments = []
+        this.vectorCurrentStyle = ""
+        this.renderItems = [{ path: this.confirmedMap.uri, token: this.confirmedMap.token }]
+      }
     } else {
       this.mapPath = ""
       this.mapHashPrefix = ""
+      this.mapRenderer = ""
       this.mapReady = false
       this.renderItems = []
+      this.vectorReady = false
+      this.vectorSegments = []
+      this.vectorCurrentStyle = ""
       this.showDiagnostics = true
     }
     if (shouldDelete) this.deleteBestEffort(cleanupURI)
@@ -311,6 +336,7 @@ export default {
       return
     }
     this.preparedRender = result.prepared
+    this.preparedRender.preparedAt = Date.now()
     this.sendEnvelope({
       v: 1,
       id: this.nextBandMessageID(),
@@ -386,6 +412,7 @@ export default {
   beginAsset(message) {
     var page = this
     var body = message.body
+    var h1 = this.isH1BeginBody(body)
     var epoch = this.lifecycleEpoch
     if (!this.validBeginBody(body)) {
       this.failAsset(message, "ASSET_BEGIN_INVALID")
@@ -403,13 +430,18 @@ export default {
       mime: body.mime,
       sha256: body.sha256,
       run: body.run,
-      renderer: this.isH1BeginBody(body) ? body.renderer : "raster",
-      format: this.isH1BeginBody(body) ? body.format : "image/png",
-      formatVersion: this.isH1BeginBody(body) ? body.formatVersion : 0,
-      primitives: this.isH1BeginBody(body) ? body.primitives : 0,
-      scene: this.isH1BeginBody(body) ? body.scene : "",
-      uri: "internal://files/" + body.asset + (this.isH1BeginBody(body) && body.renderer === "vector" ? ".bbmv" : ".png"),
-      receivedBytes: 0
+      h1: h1,
+      renderer: h1 ? body.renderer : "raster",
+      format: h1 ? body.format : "image/png",
+      formatVersion: h1 ? body.formatVersion : 0,
+      primitives: h1 ? body.primitives : 0,
+      scene: h1 ? body.scene : "",
+      preparedAt: h1 && this.preparedRender ? this.preparedRender.preparedAt : 0,
+      startedAt: Date.now(),
+      uri: "internal://files/" + body.asset + (h1 && body.renderer === "vector" ? ".bbmv" : ".png"),
+      receivedBytes: 0,
+      validatedAt: 0,
+      renderStartedAt: 0
     }
     var activate = function () {
       if (!page.ownsMapOperation(message.id, epoch)) return
@@ -418,7 +450,11 @@ export default {
       page.mapReady = false
       page.mapPath = ""
       page.mapHashPrefix = ""
+      page.mapRenderer = ""
       page.renderItems = []
+      page.vectorReady = false
+      page.vectorSegments = []
+      page.vectorCurrentStyle = ""
       page.showDiagnostics = true
       page.succeedAsset(message.id)
     }
@@ -567,15 +603,24 @@ export default {
       this.failAsset(message, "ASSET_DIGEST_MISMATCH")
       return
     }
-    if (transfer.renderer === "vector") this.preparedRender = null
     var asset = transfer.asset
     var bytes = transfer.bytes
     var prefix = transfer.sha256.slice(0, 8)
+    transfer.validatedAt = Date.now()
+    if (transfer.renderer === "vector") {
+      transfer.renderStartedAt = Date.now()
+      this.readVectorAsset(message, transfer)
+      return
+    }
     var token = "render-" + this.lifecycleEpoch + "-" + this.nextRenderToken
     this.nextRenderToken = this.nextRenderToken + 1
     this.mapPath = transfer.uri
     this.mapHashPrefix = prefix
     this.mapReady = true
+    this.mapRenderer = "raster"
+    this.vectorReady = false
+    this.vectorSegments = []
+    this.vectorCurrentStyle = ""
     this.renderItems = [{ path: transfer.uri, token: token }]
     this.showDiagnostics = false
     this.pendingPublication = {
@@ -586,10 +631,135 @@ export default {
       uri: transfer.uri,
       operationID: message.id,
       token: token,
-      epoch: this.lifecycleEpoch
+      epoch: this.lifecycleEpoch,
+      h1: transfer.h1,
+      renderer: transfer.renderer,
+      formatVersion: transfer.formatVersion,
+      primitives: transfer.primitives,
+      scene: transfer.scene,
+      preparedAt: transfer.preparedAt,
+      transferStartedAt: transfer.startedAt,
+      validatedAt: transfer.validatedAt,
+      renderStartedAt: Date.now()
     }
     this.activeTransfer = null
     this.holdSuccessfulAsset(message.id)
+  },
+
+  readVectorAsset(message, transfer) {
+    var page = this
+    var epoch = this.lifecycleEpoch
+    var readStartedAt = Date.now()
+    var failRead = function () {
+      if (page.ownsMapOperation(message.id, epoch) && page.activeTransfer === transfer) {
+        page.failAsset(message, "ASSET_VECTOR_READ_FAILED")
+      }
+    }
+    try {
+      file.readArrayBuffer({
+        uri: transfer.uri,
+        position: 0,
+        length: transfer.bytes,
+        success: function (result) {
+          if (!page.ownsMapOperation(message.id, epoch) || page.activeTransfer !== transfer) return
+          var buffer = result && result.buffer !== undefined ? result.buffer : result
+          var decoded = vectorScene.decodeBBMV(buffer)
+          if (!decoded.ok || decoded.scene.segments.length !== transfer.primitives) {
+            page.failAsset(message, decoded.ok ? "ASSET_VECTOR_COUNT" : "ASSET_VECTOR_" + decoded.code.toUpperCase())
+            return
+          }
+          var segments = vectorScene.sceneToNativeSegments(decoded.scene)
+          var marker = vectorScene.sceneToNativeMarker(decoded.scene)
+          if (!marker || segments.length > vectorScene.LIMITS.maximumSegments) {
+            page.failAsset(message, "ASSET_VECTOR_RENDER")
+            return
+          }
+          page.completeVectorPublication(message, transfer, segments, marker.style, Date.now() - readStartedAt)
+          buffer = null
+        },
+        fail: failRead
+      })
+    } catch (error) {
+      failRead()
+    }
+  },
+
+  completeVectorPublication(message, transfer, segments, markerStyle, renderMs) {
+    var prefix = transfer.sha256.slice(0, 8)
+    var token = "vector-" + this.lifecycleEpoch + "-" + this.nextRenderToken
+    this.nextRenderToken = this.nextRenderToken + 1
+    this.unconfirmedURI = transfer.uri
+    this.unconfirmedTouched = true
+    this.mapPath = ""
+    this.mapHashPrefix = prefix
+    this.mapRenderer = "vector"
+    this.mapReady = true
+    this.vectorReady = true
+    this.vectorSegments = segments
+    this.vectorCurrentStyle = markerStyle
+    this.renderItems = []
+    this.showDiagnostics = false
+    this.pendingPublication = {
+      asset: transfer.asset,
+      run: transfer.run,
+      bytes: transfer.bytes,
+      sha256Prefix: prefix,
+      uri: transfer.uri,
+      operationID: message.id,
+      token: token,
+      epoch: this.lifecycleEpoch,
+      h1: true,
+      renderer: "vector",
+      formatVersion: transfer.formatVersion,
+      primitives: transfer.primitives,
+      scene: transfer.scene,
+      vectorSegments: segments,
+      vectorCurrentStyle: markerStyle,
+      preparedAt: transfer.preparedAt,
+      transferStartedAt: transfer.startedAt,
+      validatedAt: transfer.validatedAt,
+      renderStartedAt: transfer.renderStartedAt,
+      renderMs: renderMs
+    }
+    this.activeTransfer = null
+    this.holdSuccessfulAsset(message.id)
+    var priorMap = this.confirmedMap
+    var page = this
+    var publish = function () { page.publishVector(message.id) }
+    if (priorMap && priorMap.uri !== transfer.uri) {
+      var retiredURI = priorMap.uri
+      this.retiredMapURI = retiredURI
+      if (!this.scheduleDelete(retiredURI, function () {
+        if (page.retiredMapURI === retiredURI) page.retiredMapURI = ""
+        publish()
+      }, function () {
+        if (page.retiredMapURI === retiredURI) page.retiredMapURI = ""
+        publish()
+      })) publish()
+      return
+    }
+    publish()
+  },
+
+  publishVector(operationID) {
+    var publication = this.pendingPublication
+    if (!publication || publication.operationID !== operationID ||
+      this.lifecycleEpoch !== publication.epoch || this.activeMapOperationID !== operationID) return
+    this.pendingPublication = null
+    this.unconfirmedURI = ""
+    this.unconfirmedTouched = false
+    this.confirmedMap = {
+      uri: publication.uri,
+      renderer: "vector",
+      sha256Prefix: publication.sha256Prefix,
+      token: publication.token,
+      vectorSegments: publication.vectorSegments,
+      vectorCurrentStyle: publication.vectorCurrentStyle
+    }
+    this.statusText = "H1 VECTOR READY"
+    if (!this.releaseMapOperation(operationID)) return
+    this.sendRenderResult(publication, true, publication.renderMs, "")
+    this.preparedRender = null
   },
 
   removeInFlight(id) {
@@ -660,21 +830,26 @@ export default {
     var run = transfer.run
     var bytes = transfer.receivedBytes
     var prefix = transfer.sha256.slice(0, 8)
-    if (transfer.renderer === "vector") this.preparedRender = null
+    if (transfer.h1) this.preparedRender = null
     this.activeTransfer = null
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
     this.mapReady = false
     this.mapPath = ""
     this.mapHashPrefix = ""
+    this.mapRenderer = ""
     this.renderItems = []
+    this.vectorReady = false
+    this.vectorSegments = []
+    this.vectorCurrentStyle = ""
     this.showDiagnostics = true
 
     var publish = function () {
       if (!page.ownsMapOperation(message.id, epoch)) return
       if (!page.releaseMapOperation(message.id)) return
       page.removeInFlight(message.id)
-      page.sendAssetResult(asset, run, "error", bytes, prefix, code)
+      if (transfer.h1) page.sendRenderResult(transfer, false, 0, code, bytes, prefix)
+      else page.sendAssetResult(asset, run, "error", bytes, prefix, code)
       page.rememberSuccess(message.id)
       page.sendACK(message.id)
     }
@@ -702,7 +877,11 @@ export default {
     this.mapReady = false
     this.mapPath = ""
     this.mapHashPrefix = ""
+    this.mapRenderer = ""
     this.renderItems = []
+    this.vectorReady = false
+    this.vectorSegments = []
+    this.vectorCurrentStyle = ""
     this.showDiagnostics = true
   },
 
@@ -759,6 +938,48 @@ export default {
       src: "band",
       type: "message",
       topic: "map.asset.result",
+      body: body
+    })
+  },
+
+  sendRenderResult(publication, success, renderMs, errorCode, bytes, prefix) {
+    if (!publication || !publication.h1) return
+    var safeBytes = this.validInteger(bytes === undefined ? publication.bytes : bytes) &&
+      (bytes === undefined ? publication.bytes : bytes) >= 0 &&
+      (bytes === undefined ? publication.bytes : bytes) <= this.MAX_ASSET_BYTES ?
+      (bytes === undefined ? publication.bytes : bytes) : 0
+    var safePrimitives = this.validInteger(publication.primitives) &&
+      publication.primitives >= 0 && publication.primitives <= 40 ? publication.primitives : 0
+    var safeMilliseconds = function (value) {
+      return typeof value === "number" && isFinite(value) && value >= 0 && value <= 60000 ? Math.floor(value) : 0
+    }
+    var start = publication.transferStartedAt || 0
+    var prepared = publication.preparedAt || 0
+    var validated = publication.validatedAt || 0
+    var renderStarted = publication.renderStartedAt || 0
+    var safePrefix = typeof prefix === "string" && /^[0-9a-f]{8}$/.test(prefix) ? prefix : publication.sha256Prefix
+    var body = {
+      runId: renderProtocol.validIdentifier(publication.run) ? publication.run : "",
+      sceneId: renderProtocol.validIdentifier(publication.scene) ? publication.scene : "",
+      renderer: publication.renderer === "vector" ? "vector" : "raster",
+      formatVersion: publication.formatVersion === 1 ? 1 : 0,
+      success: success === true,
+      bytes: safeBytes,
+      primitives: safePrimitives,
+      prepareMs: safeMilliseconds(start - prepared),
+      validateMs: safeMilliseconds(validated - start),
+      renderMs: safeMilliseconds(renderMs || (Date.now() - renderStarted)),
+      sha256Prefix: typeof safePrefix === "string" && /^[0-9a-f]{8}$/.test(safePrefix) ? safePrefix : ""
+    }
+    if (!success && typeof errorCode === "string" && /^ASSET_[A-Z0-9_]{1,40}$/.test(errorCode)) {
+      body.errorCode = errorCode
+    }
+    this.sendEnvelope({
+      v: 1,
+      id: this.nextBandMessageID(),
+      src: "band",
+      type: "message",
+      topic: "render.result",
       body: body
     })
   },
@@ -842,16 +1063,22 @@ export default {
     this.confirmedMap = {
       uri: publication.uri,
       sha256Prefix: publication.sha256Prefix,
-      token: publication.token
+      token: publication.token,
+      renderer: publication.renderer || "raster"
     }
-    this.statusText = "M1 MAP READY"
+    this.statusText = publication.h1 ? "H1 RASTER READY" : "M1 MAP READY"
     var page = this
     var publish = function () {
       if (page.pendingPublication !== publication || page.lifecycleEpoch !== publication.epoch ||
         page.activeMapOperationID !== publication.operationID) return
       page.pendingPublication = null
       if (!page.releaseMapOperation(publication.operationID)) return
-      page.sendAssetResult(publication.asset, publication.run, "ok", publication.bytes, publication.sha256Prefix)
+      if (publication.h1) {
+        page.sendRenderResult(publication, true, Date.now() - publication.renderStartedAt)
+        page.preparedRender = null
+      } else {
+        page.sendAssetResult(publication.asset, publication.run, "ok", publication.bytes, publication.sha256Prefix)
+      }
     }
     if (priorMap && priorMap.uri !== publication.uri) {
       var retiredURI = priorMap.uri
@@ -877,12 +1104,27 @@ export default {
       this.mapPath = this.confirmedMap.uri
       this.mapHashPrefix = this.confirmedMap.sha256Prefix
       this.mapReady = true
-      this.renderItems = [{ path: this.confirmedMap.uri, token: this.confirmedMap.token }]
+      this.mapRenderer = this.confirmedMap.renderer || "raster"
+      if (this.mapRenderer === "vector") {
+        this.vectorReady = true
+        this.vectorSegments = this.confirmedMap.vectorSegments || []
+        this.vectorCurrentStyle = this.confirmedMap.vectorCurrentStyle || ""
+        this.renderItems = []
+      } else {
+        this.vectorReady = false
+        this.vectorSegments = []
+        this.vectorCurrentStyle = ""
+        this.renderItems = [{ path: this.confirmedMap.uri, token: this.confirmedMap.token }]
+      }
     } else {
       this.mapReady = false
       this.mapPath = ""
       this.mapHashPrefix = ""
+      this.mapRenderer = ""
       this.renderItems = []
+      this.vectorReady = false
+      this.vectorSegments = []
+      this.vectorCurrentStyle = ""
     }
     this.showDiagnostics = true
     this.logText = "Map image display failed."
@@ -894,10 +1136,15 @@ export default {
       page.unconfirmedURI = ""
       page.unconfirmedTouched = false
       if (!page.releaseMapOperation(publication.operationID)) return
-      page.sendAssetResult(
-        publication.asset, publication.run, "error", publication.bytes,
-        publication.sha256Prefix, "ASSET_RENDER"
-      )
+      if (publication.h1) {
+        page.sendRenderResult(publication, false, Date.now() - publication.renderStartedAt, "ASSET_RENDER")
+        page.preparedRender = null
+      } else {
+        page.sendAssetResult(
+          publication.asset, publication.run, "error", publication.bytes,
+          publication.sha256Prefix, "ASSET_RENDER"
+        )
+      }
     }
     this.scheduleDelete(publication.uri, publish, publish)
   }
@@ -917,8 +1164,11 @@ export default {
 .check, .button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
 .map-ready { margin-top: 8px; font-size: 16px; font-weight: bold; color: #5dffb0; }
+.vector-ready { color: #7fc8ff; }
 .map-hash { margin-top: 3px; font-size: 12px; color: #a9bdd6; }
 .map { margin-top: 8px; width: 212px; height: 360px; object-fit: contain; }
+.vector-map { margin-top: 8px; width: 212px; height: 360px; position: relative; background-color: #0b2038; }
+.vector-segment, .vector-current { position: absolute; }
 .diagnostics { width: 212px; flex-direction: column; align-items: center; }
 .log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }
 .clear { margin-top: 10px; width: 184px; height: 40px; border-radius: 20px; font-size: 14px; color: #a9bdd6; background-color: #1f3652; }

@@ -10,12 +10,26 @@ const URI_B = `internal://files/${ASSET_B}.png`
 const DIGEST = "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8"
 const RUN = "run-0123456789abcdef"
 const RUN_B = "run-fedcba9876543210"
+const VECTOR_BYTES = Uint8Array.from([
+  0x42, 0x42, 0x4d, 0x56, 1, 0xd4, 0x00, 0x68, 0x01, 1, 0,
+  0x6a, 0x00, 0xb4, 0x00, 0x5a, 0x00, 0, 0x78, 0x00, 0, 0,
+  8, 0, 12, 0, 20, 0, 20, 0, 0
+])
+const VECTOR_DIGEST = createHash("sha256").update(VECTOR_BYTES).digest("hex")
+const VECTOR_ASSET = `h1-${VECTOR_DIGEST.slice(0, 16)}`
+const VECTOR_FORMAT = "application/vnd.blueband.map-vector-v1"
 
 async function loadPage(connection, file, crypto) {
   const ux = await readFile(new URL("../src/pages/index/index.ux", import.meta.url), "utf8")
   const protocolSource = await readFile(new URL("../src/common/render-protocol.js", import.meta.url), "utf8")
+  const vectorSource = await readFile(new URL("../src/common/vector-scene.js", import.meta.url), "utf8")
   const renderProtocol = new Function(
     protocolSource
+      .replace(/export \{[^}]+\}\n/, "")
+      .replace("export default", "return")
+  )()
+  const vectorScene = new Function(
+    vectorSource
       .replace(/export \{[^}]+\}\n/, "")
       .replace("export default", "return")
   )()
@@ -24,9 +38,10 @@ async function loadPage(connection, file, crypto) {
     .replace(/import file from ["']@system\.file["']/, "")
     .replace(/import crypto from ["']@system\.crypto["']/, "")
     .replace(/import renderProtocol from ["']\.\.\/\.\.\/common\/render-protocol\.js["']/, "")
+    .replace(/import vectorScene from ["']\.\.\/\.\.\/common\/vector-scene\.js["']/, "")
     .replace("export default", "return")
-  const component = new Function("interconnect", "file", "crypto", "renderProtocol", script)(
-    { instance() { return connection } }, file, crypto, renderProtocol
+  const component = new Function("interconnect", "file", "crypto", "renderProtocol", "vectorScene", script)(
+    { instance() { return connection } }, file, crypto, renderProtocol, vectorScene
   )
   const page = structuredClone(component.private)
   for (const [name, value] of Object.entries(component)) if (name !== "private") page[name] = value
@@ -168,6 +183,175 @@ test("H1 prepare while an asset is active rejects as busy", async () => {
   assert.equal(sent.find(message => message.topic === "render.reject").body.code, "busy")
 })
 
+test("H1 vector reads BBMV once, publishes native segments, and sends one aggregate result", async () => {
+  const file = memoryFile()
+  const crypto = memoryHashCrypto(file)
+  const { page, sent } = await readyHarness(file, crypto)
+  const prepare = {
+    runId: RUN,
+    sceneId: "scene-0123456789",
+    renderer: "vector",
+    format: VECTOR_FORMAT,
+    formatVersion: 1,
+    width: 212,
+    height: 360,
+    bytes: VECTOR_BYTES.length,
+    sha256: VECTOR_DIGEST,
+    primitives: 1
+  }
+  page.receiveMessage({ data: envelope("vector-prepare", "render.prepare", prepare) })
+  page.receiveMessage({ data: envelope("vector-begin", "map.asset.begin", {
+    asset: VECTOR_ASSET,
+    bytes: VECTOR_BYTES.length,
+    width: 212,
+    height: 360,
+    mime: VECTOR_FORMAT,
+    format: VECTOR_FORMAT,
+    renderer: "vector",
+    formatVersion: 1,
+    sha256: VECTOR_DIGEST,
+    primitives: 1,
+    run: RUN,
+    scene: prepare.sceneId
+  }) })
+  page.receiveMessage({ data: envelope("vector-chunk", "map.asset.chunk", {
+    asset: VECTOR_ASSET, offset: 0,
+    data: Buffer.from(VECTOR_BYTES).toString("base64"), run: RUN
+  }) })
+  page.receiveMessage({ data: envelope("vector-end", "map.asset.end", { asset: VECTOR_ASSET, run: RUN }) })
+
+  assert.equal(file.reads.length, 1)
+  assert.equal(page.mapRenderer, "vector")
+  assert.equal(page.vectorReady, true)
+  assert.equal(page.vectorSegments.length, 1)
+  assert.equal(page.renderItems.length, 0)
+  assert.equal(page.activeMapOperationID, "")
+  assert.equal(sent.filter(message => message.topic === "render.result").length, 1)
+  assert.equal(sent.find(message => message.topic === "render.result").body.success, true)
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 0)
+})
+
+test("H1 vector read failure is an aggregate error and stale callbacks cannot publish", async () => {
+  const reads = []
+  const file = memoryFile()
+  file.readArrayBuffer = options => reads.push(options)
+  const { page, sent } = await readyHarness(file, memoryHashCrypto(file))
+  page.receiveMessage({ data: envelope("vector-prepare", "render.prepare", {
+    runId: RUN, sceneId: "scene-0123456789", renderer: "vector", format: VECTOR_FORMAT,
+    formatVersion: 1, width: 212, height: 360, bytes: VECTOR_BYTES.length,
+    sha256: VECTOR_DIGEST, primitives: 1
+  }) })
+  page.receiveMessage({ data: envelope("vector-begin", "map.asset.begin", {
+    asset: VECTOR_ASSET, bytes: VECTOR_BYTES.length, width: 212, height: 360,
+    mime: VECTOR_FORMAT, format: VECTOR_FORMAT, renderer: "vector", formatVersion: 1,
+    sha256: VECTOR_DIGEST, primitives: 1, run: RUN, scene: "scene-0123456789"
+  }) })
+  page.receiveMessage({ data: envelope("vector-chunk", "map.asset.chunk", {
+    asset: VECTOR_ASSET, offset: 0, data: Buffer.from(VECTOR_BYTES).toString("base64"), run: RUN
+  }) })
+  page.receiveMessage({ data: envelope("vector-end", "map.asset.end", { asset: VECTOR_ASSET, run: RUN }) })
+  assert.equal(reads.length, 1)
+  page.lock("IOS LINK CLOSED")
+  reads[0].success({ buffer: VECTOR_BYTES.buffer })
+  assert.equal(page.vectorReady, false)
+  assert.equal(sent.filter(message => message.topic === "render.result").length, 0)
+})
+
+test("H1 vector read failure releases the transfer with a stable aggregate error", async () => {
+  const reads = []
+  const file = memoryFile()
+  file.readArrayBuffer = options => reads.push(options)
+  const { page, sent } = await readyHarness(file, memoryHashCrypto(file))
+  page.receiveMessage({ data: envelope("vector-prepare", "render.prepare", {
+    runId: RUN, sceneId: "scene-0123456789", renderer: "vector", format: VECTOR_FORMAT,
+    formatVersion: 1, width: 212, height: 360, bytes: VECTOR_BYTES.length,
+    sha256: VECTOR_DIGEST, primitives: 1
+  }) })
+  page.receiveMessage({ data: envelope("vector-begin", "map.asset.begin", {
+    asset: VECTOR_ASSET, bytes: VECTOR_BYTES.length, width: 212, height: 360,
+    mime: VECTOR_FORMAT, format: VECTOR_FORMAT, renderer: "vector", formatVersion: 1,
+    sha256: VECTOR_DIGEST, primitives: 1, run: RUN, scene: "scene-0123456789"
+  }) })
+  page.receiveMessage({ data: envelope("vector-chunk", "map.asset.chunk", {
+    asset: VECTOR_ASSET, offset: 0, data: Buffer.from(VECTOR_BYTES).toString("base64"), run: RUN
+  }) })
+  page.receiveMessage({ data: envelope("vector-end", "map.asset.end", { asset: VECTOR_ASSET, run: RUN }) })
+  reads[0].fail()
+  const result = sent.find(message => message.topic === "render.result")
+  assert.equal(result.body.success, false)
+  assert.equal(result.body.errorCode, "ASSET_VECTOR_READ_FAILED")
+  assert.equal(page.activeMapOperationID, "")
+  assert.equal(page.preparedRender, null)
+})
+
+test("H1 raster uses native image completion but publishes render.result", async () => {
+  const { page, sent } = await readyHarness()
+  const prepare = {
+    runId: RUN, sceneId: "scene-0123456789", renderer: "raster", format: "image/png",
+    formatVersion: 1, width: 212, height: 360, bytes: 4, sha256: DIGEST, primitives: 0
+  }
+  page.receiveMessage({ data: envelope("raster-prepare", "render.prepare", prepare) })
+  page.receiveMessage({ data: envelope("raster-begin", "map.asset.begin", {
+    asset: `h1-${DIGEST.slice(0, 16)}`, bytes: 4, width: 212, height: 360,
+    mime: "image/png", format: "image/png", renderer: "raster", formatVersion: 1,
+    sha256: DIGEST, primitives: 0, run: RUN, scene: prepare.sceneId
+  }) })
+  page.receiveMessage({ data: envelope("raster-chunk", "map.asset.chunk", {
+    asset: `h1-${DIGEST.slice(0, 16)}`, offset: 0, data: "AAECAw==", run: RUN
+  }) })
+  page.receiveMessage({ data: envelope("raster-end", "map.asset.end", {
+    asset: `h1-${DIGEST.slice(0, 16)}`, run: RUN
+  }) })
+  assert.equal(page.mapRenderer, "raster")
+  page.mapComplete(page.pendingPublication.token)
+  const result = sent.find(message => message.topic === "render.result")
+  assert.equal(result.body.success, true)
+  assert.equal(result.body.renderer, "raster")
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 0)
+})
+
+test("H1 renderer replacement retires the previous vector file and leaves one renderer visible", async () => {
+  const file = memoryFile()
+  const crypto = memoryHashCrypto(file)
+  const { page, sent } = await readyHarness(file, crypto)
+  page.receiveMessage({ data: envelope("vector-prepare", "render.prepare", {
+    runId: RUN, sceneId: "scene-0123456789", renderer: "vector", format: VECTOR_FORMAT,
+    formatVersion: 1, width: 212, height: 360, bytes: VECTOR_BYTES.length,
+    sha256: VECTOR_DIGEST, primitives: 1
+  }) })
+  page.receiveMessage({ data: envelope("vector-begin", "map.asset.begin", {
+    asset: VECTOR_ASSET, bytes: VECTOR_BYTES.length, width: 212, height: 360,
+    mime: VECTOR_FORMAT, format: VECTOR_FORMAT, renderer: "vector", formatVersion: 1,
+    sha256: VECTOR_DIGEST, primitives: 1, run: RUN, scene: "scene-0123456789"
+  }) })
+  page.receiveMessage({ data: envelope("vector-chunk", "map.asset.chunk", {
+    asset: VECTOR_ASSET, offset: 0, data: Buffer.from(VECTOR_BYTES).toString("base64"), run: RUN
+  }) })
+  page.receiveMessage({ data: envelope("vector-end", "map.asset.end", { asset: VECTOR_ASSET, run: RUN }) })
+
+  const rasterAsset = `h1-${DIGEST.slice(0, 16)}`
+  page.receiveMessage({ data: envelope("raster-prepare-2", "render.prepare", {
+    runId: RUN_B, sceneId: "scene-fedcba987654", renderer: "raster", format: "image/png",
+    formatVersion: 1, width: 212, height: 360, bytes: 4, sha256: DIGEST, primitives: 0
+  }) })
+  page.receiveMessage({ data: envelope("raster-begin-2", "map.asset.begin", {
+    asset: rasterAsset, bytes: 4, width: 212, height: 360, mime: "image/png",
+    format: "image/png", renderer: "raster", formatVersion: 1, sha256: DIGEST,
+    primitives: 0, run: RUN_B, scene: "scene-fedcba987654"
+  }) })
+  page.receiveMessage({ data: envelope("raster-chunk-2", "map.asset.chunk", {
+    asset: rasterAsset, offset: 0, data: "AAECAw==", run: RUN_B
+  }) })
+  page.receiveMessage({ data: envelope("raster-end-2", "map.asset.end", { asset: rasterAsset, run: RUN_B }) })
+  page.mapComplete(page.pendingPublication.token)
+
+  assert.equal(page.confirmedMap.renderer, "raster")
+  assert.equal(page.vectorReady, false)
+  assert.equal(page.renderItems.length, 1)
+  assert.ok(file.deletes.includes(`internal://files/${VECTOR_ASSET}.bbmv`))
+  assert.equal(sent.filter(message => message.topic === "render.result" && message.body.success).length, 2)
+})
+
 test("rejects missing invalid or changed map run correlation", async () => {
   for (const run of [undefined, "", "UPPER", "run_under", "é", "r".repeat(25)]) {
     const { page, sent } = await readyHarness()
@@ -222,11 +406,13 @@ function memoryFile(initial = new Map()) {
   const storage = new Map(initial)
   const accesses = []
   const writes = []
+  const reads = []
   const deletes = []
   return {
     storage,
     accesses,
     writes,
+    reads,
     deletes,
     access({ uri, success, fail }) { accesses.push(uri); storage.has(uri) ? success() : fail() },
     delete({ uri, success }) { deletes.push(uri); storage.delete(uri); success() },
@@ -238,6 +424,16 @@ function memoryFile(initial = new Map()) {
       combined.set(buffer, position)
       storage.set(uri, combined)
       success()
+    },
+    readArrayBuffer({ uri, position, length, success, fail }) {
+      reads.push(uri)
+      const stored = storage.get(uri)
+      if (!stored) {
+        if (fail) fail()
+        return
+      }
+      const result = stored.slice(position, position + length)
+      success({ buffer: result.buffer })
     }
   }
 }
