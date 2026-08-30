@@ -27,7 +27,7 @@ bootstrap:
 test: test-swift test-rpk test-lab test-ios-metadata test-ci-metadata test-handoff
 
 test-swift:
-	docker compose run --rm swift swift test $(SWIFT_TEST_ARGS)
+	docker compose run --rm -e SWIFT_TEST_ARGS="$(SWIFT_TEST_ARGS)" swift bash -lc 'swift test $${SWIFT_TEST_ARGS}'
 
 test-rpk:
 	docker compose run --rm node-rpk bash -lc 'npm ci && npm test'
