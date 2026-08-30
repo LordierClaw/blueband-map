@@ -134,7 +134,7 @@ Run these with a controlled fixture build and redacted diagnostics. Do not use a
 | Case | Procedure | Expected result | Result |
 |---|---|---|---|
 | Bridge-safe aggregate result | Clean-install the current IPA and RPK, reconnect, then run raster static, raster indexed, and synthetic vector 8 in separate sessions. Export each sanitized H1 log. | Every transferred result contains string `status` equal to `ok` or `error`; no result contains Boolean `success`. A successful publication reaches `displayed` rather than `ASSET_RESULT_INVALID`. | Not run |
-| Stale result schema | With a controlled fixture, inject a current-run `render.result` containing Boolean `success` and no string `status`, then send the valid status-string result. | iOS ignores the stale schema and closes the run only from the exact status-string result. | Not run |
+| Legacy result schema | With a controlled fixture, inject a current-run `render.result` containing Boolean `success` and no string `status`. | iOS terminates that run with `ASSET_RESULT_INVALID`; it does not accept two result schemas or continue the same run. | Not run |
 
 ### Road-test safety
 
