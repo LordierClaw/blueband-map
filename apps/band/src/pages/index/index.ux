@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.1</text>
+      <text class="version">RPK 0.2.2</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -15,7 +15,7 @@
       <text class="map-ready" if="{{ mapReady && mapRenderer === 'raster' }}">M1 MAP READY</text>
       <text class="map-ready vector-ready" if="{{ mapReady && mapRenderer === 'vector' }}">H1 VECTOR READY</text>
       <text class="map-hash" if="{{ mapReady }}">SHA256 {{ mapHashPrefix }}</text>
-      <image class="map" if="{{ mapRenderer === 'raster' }}" for="{{ renderItems }}" src="{{ $item.path }}" @complete="mapComplete($item.token)" @error="mapError($item.token)" />
+      <image class="map" if="{{ mapReady && mapRenderer === 'raster' }}" src="{{ mapPath }}" @complete="mapComplete(mapToken)" @error="mapError(mapToken)" />
       <div class="vector-map" if="{{ vectorReady }}">
         <div class="vector-segment" for="{{ vectorSegments }}" style="{{ $item.style }}"></div>
         <div class="vector-current" if="{{ vectorCurrentStyle }}" style="{{ vectorCurrentStyle }}"></div>
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.1 • ENV V1</text>
+        <text class="version">RPK 0.2.2 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -312,7 +312,7 @@ export default {
     mapPath: "",
     mapHashPrefix: "",
     mapRenderer: "",
-    renderItems: [],
+    mapToken: "",
     vectorReady: false,
     vectorSegments: [],
     vectorCurrentStyle: "",
@@ -454,19 +454,19 @@ export default {
         this.vectorReady = true
         this.vectorSegments = this.confirmedMap.vectorSegments || []
         this.vectorCurrentStyle = this.confirmedMap.vectorCurrentStyle || ""
-        this.renderItems = []
+        this.mapToken = ""
       } else {
         this.vectorReady = false
         this.vectorSegments = []
         this.vectorCurrentStyle = ""
-        this.renderItems = [{ path: this.confirmedMap.uri, token: this.confirmedMap.token }]
+        this.mapToken = this.confirmedMap.token
       }
     } else {
       this.mapPath = ""
       this.mapHashPrefix = ""
       this.mapRenderer = ""
       this.mapReady = false
-      this.renderItems = []
+      this.mapToken = ""
       this.vectorReady = false
       this.vectorSegments = []
       this.vectorCurrentStyle = ""
@@ -698,7 +698,7 @@ export default {
       page.mapPath = ""
       page.mapHashPrefix = ""
       page.mapRenderer = ""
-      page.renderItems = []
+      page.mapToken = ""
       page.vectorReady = false
       page.vectorSegments = []
       page.vectorCurrentStyle = ""
@@ -865,10 +865,10 @@ export default {
     this.mapHashPrefix = prefix
     this.mapReady = true
     this.mapRenderer = "raster"
+    this.mapToken = token
     this.vectorReady = false
     this.vectorSegments = []
     this.vectorCurrentStyle = ""
-    this.renderItems = [{ path: transfer.uri, token: token }]
     this.showDiagnostics = false
     this.pendingPublication = {
       asset: asset,
@@ -940,11 +940,11 @@ export default {
     this.mapPath = ""
     this.mapHashPrefix = prefix
     this.mapRenderer = "vector"
+    this.mapToken = ""
     this.mapReady = true
     this.vectorReady = true
     this.vectorSegments = segments
     this.vectorCurrentStyle = markerStyle
-    this.renderItems = []
     this.showDiagnostics = false
     this.pendingPublication = {
       asset: transfer.asset,
@@ -1085,7 +1085,7 @@ export default {
     this.mapPath = ""
     this.mapHashPrefix = ""
     this.mapRenderer = ""
-    this.renderItems = []
+    this.mapToken = ""
     this.vectorReady = false
     this.vectorSegments = []
     this.vectorCurrentStyle = ""
@@ -1125,7 +1125,7 @@ export default {
     this.mapPath = ""
     this.mapHashPrefix = ""
     this.mapRenderer = ""
-    this.renderItems = []
+    this.mapToken = ""
     this.vectorReady = false
     this.vectorSegments = []
     this.vectorCurrentStyle = ""
@@ -1356,19 +1356,19 @@ export default {
         this.vectorReady = true
         this.vectorSegments = this.confirmedMap.vectorSegments || []
         this.vectorCurrentStyle = this.confirmedMap.vectorCurrentStyle || ""
-        this.renderItems = []
+        this.mapToken = ""
       } else {
         this.vectorReady = false
         this.vectorSegments = []
         this.vectorCurrentStyle = ""
-        this.renderItems = [{ path: this.confirmedMap.uri, token: this.confirmedMap.token }]
+        this.mapToken = this.confirmedMap.token
       }
     } else {
       this.mapReady = false
       this.mapPath = ""
       this.mapHashPrefix = ""
       this.mapRenderer = ""
-      this.renderItems = []
+      this.mapToken = ""
       this.vectorReady = false
       this.vectorSegments = []
       this.vectorCurrentStyle = ""
