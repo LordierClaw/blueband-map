@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.4</text>
+      <text class="version">RPK 0.2.5</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.4 • ENV V1</text>
+        <text class="version">RPK 0.2.5 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -1005,9 +1005,7 @@ export default {
     }
     this.statusText = "H1 VECTOR READY"
     if (!this.releaseMapOperation(operationID)) return
-    this.sendRenderResult(
-      publication, true, publication.renderMs, "", publication.bytes, publication.sha256Prefix
-    )
+    this.sendRenderResult(publication, true, publication.renderMs, "")
     this.preparedRender = null
   },
 
@@ -1191,14 +1189,8 @@ export default {
     })
   },
 
-  sendRenderResult(publication, success, renderMs, errorCode, bytes, prefix) {
+  sendRenderResult(publication, success, renderMs, errorCode) {
     if (!publication || !publication.h1) return
-    var safeBytes = this.validInteger(bytes === undefined ? publication.bytes : bytes) &&
-      (bytes === undefined ? publication.bytes : bytes) >= 0 &&
-      (bytes === undefined ? publication.bytes : bytes) <= this.MAX_ASSET_BYTES ?
-      (bytes === undefined ? publication.bytes : bytes) : 0
-    var safePrimitives = this.validInteger(publication.primitives) &&
-      publication.primitives >= 0 && publication.primitives <= 40 ? publication.primitives : 0
     var safeMilliseconds = function (value) {
       return typeof value === "number" && isFinite(value) && value >= 0 && value <= 60000 ? Math.floor(value) : 0
     }
@@ -1206,19 +1198,18 @@ export default {
     var prepared = publication.preparedAt || 0
     var validated = publication.validatedAt || 0
     var renderStarted = publication.renderStartedAt || 0
-    var safePrefix = typeof prefix === "string" && /^[0-9a-f]{8}$/.test(prefix) ? prefix : publication.sha256Prefix
     var body = {
       runId: renderProtocol.validIdentifier(publication.run) ? publication.run : "",
       sceneId: renderProtocol.validIdentifier(publication.scene) ? publication.scene : "",
       renderer: publication.renderer === "vector" ? "vector" : "raster",
       formatVersion: publication.formatVersion === 1 ? 1 : 0,
       status: success === true ? "ok" : "error",
-      bytes: safeBytes,
-      primitives: safePrimitives,
+      bytes: publication.bytes,
+      primitives: publication.primitives,
       prepareMs: safeMilliseconds(start - prepared),
       validateMs: safeMilliseconds(validated - start),
       renderMs: safeMilliseconds(renderMs || (Date.now() - renderStarted)),
-      sha256Prefix: typeof safePrefix === "string" && /^[0-9a-f]{8}$/.test(safePrefix) ? safePrefix : ""
+      sha256Prefix: publication.sha256Prefix
     }
     if (!success && typeof errorCode === "string" && /^ASSET_[A-Z0-9_]{1,40}$/.test(errorCode)) {
       body.errorCode = errorCode
@@ -1323,10 +1314,7 @@ export default {
       page.pendingPublication = null
       if (!page.releaseMapOperation(publication.operationID)) return
       if (publication.h1) {
-        page.sendRenderResult(
-          publication, true, Date.now() - publication.renderStartedAt, "",
-          publication.bytes, publication.sha256Prefix
-        )
+        page.sendRenderResult(publication, true, Date.now() - publication.renderStartedAt, "")
         page.preparedRender = null
       } else {
         page.sendAssetResult(publication.asset, publication.run, "ok", publication.bytes, publication.sha256Prefix)

@@ -58,9 +58,9 @@ public struct MapboxVectorTile: Equatable, Sendable {
         case coordinateOutOfExtent
     }
 
-    public static let maximumBodyBytes = 512 * 1_024
+    public static let maximumBodyBytes = 3 * 1_024 * 1_024
     public static let maximumLayers = 32
-    public static let maximumFeatures = 4_096
+    public static let maximumFeatures = 40_000
     public static let maximumGeometryCommands = 16_384
     public let layers: [Layer]
 
@@ -99,27 +99,27 @@ public struct MapboxVectorTile: Equatable, Sendable {
             let (field, wireType) = try reader.readKey()
             switch field {
             case 1:
-                guard wireType == 0 else { throw Error.unsupportedWireType(wireType) }
-                _ = try reader.readVarint()
-            case 2:
                 guard wireType == 2 else { throw Error.unsupportedWireType(wireType) }
                 name = try decodeString(reader.readBytes())
-            case 3:
+            case 2:
                 guard wireType == 2 else { throw Error.unsupportedWireType(wireType) }
                 guard featureCount < maximumFeatures else { throw Error.tooManyFeatures }
                 featureData.append(try reader.readBytes())
                 featureCount += 1
-            case 4:
+            case 3:
                 guard wireType == 2 else { throw Error.unsupportedWireType(wireType) }
                 keys.append(try decodeString(reader.readBytes()))
-            case 5:
+            case 4:
                 guard wireType == 2 else { throw Error.unsupportedWireType(wireType) }
                 values.append(try decodeValue(reader.readBytes()))
-            case 15:
+            case 5:
                 guard wireType == 0 else { throw Error.unsupportedWireType(wireType) }
                 let rawExtent = try reader.readVarint()
                 guard rawExtent <= UInt64(Int.max) else { throw Error.invalidExtent }
                 extent = Int(rawExtent)
+            case 15:
+                guard wireType == 0 else { throw Error.unsupportedWireType(wireType) }
+                _ = try reader.readVarint()
             default:
                 try reader.skip(wireType)
             }
@@ -247,7 +247,9 @@ public struct MapboxVectorTile: Equatable, Sendable {
     ) throws -> (Int, Int) {
         let (newX, overflowX) = x.addingReportingOverflow(deltaX)
         let (newY, overflowY) = y.addingReportingOverflow(deltaY)
-        guard !overflowX, !overflowY, (0...extent).contains(newX), (0...extent).contains(newY) else {
+        let bufferedRange = (-extent)...(extent * 2)
+        guard !overflowX, !overflowY,
+              bufferedRange.contains(newX), bufferedRange.contains(newY) else {
             throw Error.coordinateOutOfExtent
         }
         return (newX, newY)

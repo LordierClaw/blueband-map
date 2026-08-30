@@ -65,7 +65,7 @@ public struct VietmapStyleClient: Sendable {
     public func discover(tileMapKey: String) async throws -> VectorTileTemplate {
         let key = try Self.validatedKey(tileMapKey)
         let styleURL = try Self.authorizedURL(
-            "https://maps.vietmap.vn/maps/styles/tm/style.json?apikey={apikey}",
+            "https://maps.vietmap.vn/mt/tm/style.json?apikey={apikey}",
             key: key
         )
         let style = try await fetchJSONObject(styleURL, key: key)

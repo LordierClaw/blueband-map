@@ -176,7 +176,7 @@ public struct RenderRunRecord: Codable, Equatable, Sendable {
 
     public func sanitizedExportData() throws -> Data {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(self)
     }
 

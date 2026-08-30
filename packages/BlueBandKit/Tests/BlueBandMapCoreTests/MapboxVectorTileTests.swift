@@ -3,6 +3,20 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class MapboxVectorTileTests: XCTestCase {
+    func testVietmapPOCTileBudgetFitsTheObservedLegacyTile() {
+        XCTAssertEqual(MapboxVectorTile.maximumBodyBytes, 3 * 1_024 * 1_024)
+        XCTAssertEqual(MapboxVectorTile.maximumFeatures, 40_000)
+    }
+    func testDecodesVietmapXOREncodedTile() throws {
+        let plain = VectorTileFixture.lineTile()
+        let encoded = vietmapXOR(plain)
+
+        XCTAssertThrowsError(try MapboxVectorTile.decode(encoded))
+        let tile = try VietmapVectorTileDecoder.decode(encoded)
+
+        XCTAssertFalse(tile.layers.isEmpty)
+    }
+
     func testDecodesLineGeometryTagsAndZigZagCoordinates() throws {
         let tile = try MapboxVectorTile.decode(VectorTileFixture.lineTile())
         let layer = try XCTUnwrap(tile.layers.first)
@@ -28,7 +42,7 @@ final class MapboxVectorTileTests: XCTestCase {
         }
 
         let outside = VectorTileFixture.lineTile(points: [
-            VectorTileFixture.Point(x: -1, y: 10),
+            VectorTileFixture.Point(x: -4_097, y: 10),
             VectorTileFixture.Point(x: 10, y: 10),
         ])
         XCTAssertThrowsError(try MapboxVectorTile.decode(outside)) { error in
@@ -40,9 +54,9 @@ final class MapboxVectorTileTests: XCTestCase {
         var feature = Data()
         feature.append(contentsOf: [0x18, 0x01])
         var layer = Data()
-        layer.append(contentsOf: [0x12, 0x04])
+        layer.append(contentsOf: [0x0a, 0x04])
         layer.append(contentsOf: Data("road".utf8))
-        layer.append(contentsOf: [0x1a, 0x02, 0x18, 0x01])
+        layer.append(contentsOf: [0x12, 0x02, 0x18, 0x01])
         var tile = Data([0x1a, UInt8(layer.count)])
         tile.append(layer)
         XCTAssertNoThrow(try MapboxVectorTile.decode(tile))
@@ -52,4 +66,12 @@ final class MapboxVectorTileTests: XCTestCase {
             XCTAssertEqual(error as? MapboxVectorTile.Error, .tooManyGeometryCommands)
         }
     }
+}
+
+private func vietmapXOR(_ data: Data) -> Data {
+    let key: [UInt8] = [
+        80, 88, 228, 30, 157, 170, 173, 154, 233, 247, 128, 170, 135, 27, 48, 165,
+        148, 251, 99, 44, 105, 248, 18, 145, 34, 163, 70, 114, 228, 184, 229, 72,
+    ]
+    return Data(data.enumerated().map { index, byte in byte ^ key[index % key.count] })
 }

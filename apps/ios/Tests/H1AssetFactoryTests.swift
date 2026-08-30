@@ -6,8 +6,8 @@ import BlueBandMapCore
 final class H1AssetFactoryTests: XCTestCase {
     private let key = "tile-test-key"
 
-    func testVectorVietmapClampsZ17ToZ15AndAcceptsVietmapTextPlainPBF() async throws {
-        let styleTransport = H1HTTPTransport(responses: [styleResponse(maximumZoom: 15)])
+    func testVectorVietmapClampsZ17ToZ14AndAcceptsLegacyVietmapTile() async throws {
+        let styleTransport = H1HTTPTransport(responses: [styleResponse(maximumZoom: 14)])
         let tileTransport = H1HTTPTransport(responses: [tileResponse(
             contentType: "text/plain; charset=utf-8",
             body: H1VectorTileFixture.centeredLineTile()
@@ -20,7 +20,7 @@ final class H1AssetFactoryTests: XCTestCase {
         XCTAssertGreaterThan(asset.primitives, 0)
         let requests = await tileTransport.recordedRequests
         let request = try XCTUnwrap(requests.first)
-        XCTAssertEqual(request.url.path, "/maps/tiles/vlc-20260824/15/26093/15398.pbf")
+        XCTAssertEqual(request.url.path, "/mt/tile/data-20250529/14/13046/7699")
     }
 
     func testVectorVietmapKeepsExistingVectorMIMEType() async throws {
@@ -43,7 +43,7 @@ final class H1AssetFactoryTests: XCTestCase {
         let tileTransport = H1HTTPTransport(responses: [MapHTTPResponse(
             statusCode: 200,
             headers: [:],
-            body: H1VectorTileFixture.centeredLineTile()
+            body: vietmapXOR(H1VectorTileFixture.centeredLineTile())
         )])
 
         let asset = try await makeFactory(
@@ -117,7 +117,7 @@ final class H1AssetFactoryTests: XCTestCase {
 
     private func styleResponse(maximumZoom: Int, pathExtension: String = "pbf") -> MapHTTPResponse {
         jsonResponse("""
-        {"version":8,"sources":{"vietmap":{"type":"vector","minzoom":0,"maxzoom":\(maximumZoom),"tiles":["https://maps.vietmap.vn/maps/tiles/vlc-20260824/{z}/{x}/{y}.\(pathExtension)?apikey={apikey}"]}},"layers":[{"id":"road","type":"line","source":"vietmap","source-layer":"road"}]}
+        {"version":8,"sources":{"vietmap":{"type":"vector","minzoom":0,"maxzoom":\(maximumZoom),"tiles":["https://maps.vietmap.vn/mt/tile/data-20250529/{z}/{x}/{y}\(pathExtension == "pbf" ? "" : ".\(pathExtension)")?apikey={apikey}"]}},"layers":[{"id":"road","type":"line","source":"vietmap","source-layer":"road"}]}
         """)
     }
 
@@ -130,8 +130,20 @@ final class H1AssetFactoryTests: XCTestCase {
     }
 
     private func tileResponse(contentType: String, body: Data) -> MapHTTPResponse {
-        MapHTTPResponse(statusCode: 200, headers: ["Content-Type": contentType], body: body)
+        MapHTTPResponse(
+            statusCode: 200,
+            headers: ["Content-Type": contentType],
+            body: vietmapXOR(body)
+        )
     }
+}
+
+private func vietmapXOR(_ data: Data) -> Data {
+    let key: [UInt8] = [
+        80, 88, 228, 30, 157, 170, 173, 154, 233, 247, 128, 170, 135, 27, 48, 165,
+        148, 251, 99, 44, 105, 248, 18, 145, 34, 163, 70, 114, 228, 184, 229, 72,
+    ]
+    return Data(data.enumerated().map { index, byte in byte ^ key[index % key.count] })
 }
 
 private struct H1UnusedStaticMapProvider: StaticMapProviding {
@@ -167,12 +179,12 @@ private enum H1VectorTileFixture {
         feature.bytes(field: 4, geometry(points))
 
         var layer = Writer()
-        layer.varint(field: 1, 2)
-        layer.string(field: 2, "road")
-        layer.bytes(field: 3, feature.data)
-        layer.string(field: 4, "class")
-        layer.bytes(field: 5, value.data)
-        layer.varint(field: 15, 4_096)
+        layer.string(field: 1, "road")
+        layer.bytes(field: 2, feature.data)
+        layer.string(field: 3, "class")
+        layer.bytes(field: 4, value.data)
+        layer.varint(field: 5, 4_096)
+        layer.varint(field: 15, 2)
 
         var tile = Writer()
         tile.bytes(field: 3, layer.data)

@@ -104,7 +104,7 @@ struct H1AssetFactory: Sendable {
                 throw Error.tileWrongContentType
             }
             guard !response.body.isEmpty else { throw Error.tileEmpty }
-            let tile = try MapboxVectorTile.decode(response.body)
+            let tile = try VietmapVectorTileDecoder.decode(response.body)
             let scene = try VietmapSceneBuilder.build(
                 tile: tile,
                 latitude: request.latitude,
@@ -158,12 +158,12 @@ struct H1AssetFactory: Sendable {
     }
 
     private static func isVectorTileContentType(_ value: String?, url: URL) -> Bool {
-        let isTrustedPBF = url.scheme?.lowercased() == "https"
+        let isTrustedVectorTile = url.scheme?.lowercased() == "https"
             && url.host?.lowercased() == "maps.vietmap.vn"
             && url.user == nil
             && url.password == nil
-            && url.path.lowercased().hasSuffix(".pbf")
-        guard let value else { return isTrustedPBF }
+            && (url.path.lowercased().hasSuffix(".pbf") || url.path.hasPrefix("/mt/tile/"))
+        guard let value else { return isTrustedVectorTile }
         let mediaType = value
             .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -175,6 +175,6 @@ struct H1AssetFactory: Sendable {
         ].contains(mediaType) {
             return true
         }
-        return mediaType == "text/plain" && isTrustedPBF
+        return mediaType == "text/plain" && isTrustedVectorTile
     }
 }

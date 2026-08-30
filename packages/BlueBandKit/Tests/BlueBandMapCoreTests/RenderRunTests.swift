@@ -31,6 +31,8 @@ final class RenderRunTests: XCTestCase {
         let record = try makeRecord()
         let exported = try record.sanitizedExportData()
         let text = String(decoding: exported, as: UTF8.self)
+        XCTAssertLessThan(exported.count, 1_024)
+        XCTAssertFalse(text.contains("\n"))
 
         for privateValue in [
             "00112233445566778899aabbccddeeff",
