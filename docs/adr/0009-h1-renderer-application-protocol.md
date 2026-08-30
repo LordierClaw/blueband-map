@@ -26,10 +26,12 @@ The renderer format is either `image/png` for raster or `application/vnd.blueban
 4. The Band validates renderer support, format version, dimensions, byte count, primitive count, and available storage.
 5. The Band sends `render.ready` or `render.reject`.
 6. Only `render.ready` admits `map.asset.begin`, `map.asset.chunk`, and `map.asset.end`.
-7. The Band validates and publishes the selected native renderer, then sends one `render.result`.
+7. The Band validates and publishes the selected native renderer, then sends one `render.result` containing `prepareMs`, `validateMs`, `renderMs`, and an eight-character SHA-256 prefix.
 8. The iPhone closes the run on success, rejection, timeout, cancellation, or disconnect.
 
 Semantic messages may arrive before their transport acknowledgement. The iPhone therefore buffers a matching `render.ready`, `render.reject`, or `render.result` until the corresponding send/transfer operation has completed. A different run or scene is stale and ignored.
+
+The result is emitted only after the Band's publication and cleanup callback has completed. The iPhone accepts an error result only when its code is bounded and asset-scoped (`ASSET_*`). A successful result must match the current asset kind, format version, byte count, primitive count, and hash prefix.
 
 ## Stable rejection codes
 

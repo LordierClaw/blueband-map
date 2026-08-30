@@ -19,12 +19,19 @@ struct BlueBandMapApp: App {
         let cipher = CommonCryptoAESBlockCipher()
         let trustStore = KeychainTrustedRPKStore()
         let vietmapKeyStore = KeychainVietmapKeyStore()
+        let vietmapTransport = URLSessionHTTPTransport()
         let session = BandSession(
             central: central,
             authenticator: BandAuthenticator(cipher: cipher),
             cipher: cipher,
             trustedRPKStore: trustStore,
             expectedPackage: BlueBandProduct.rpkPackage
+        )
+        let staticMapProvider = VietmapStaticMapClient(transport: vietmapTransport)
+        let h1AssetFactory = H1AssetFactory(
+            staticMapProvider: staticMapProvider,
+            styleClient: VietmapStyleClient(transport: vietmapTransport),
+            tileTransport: vietmapTransport
         )
         _model = StateObject(wrappedValue: AppModel(
             keyStore: KeychainAuthKeyStore(),
@@ -33,8 +40,10 @@ struct BlueBandMapApp: App {
             trustedRPKStore: trustStore,
             central: central,
             session: session,
-            staticMapProvider: VietmapStaticMapClient(transport: URLSessionHTTPTransport()),
-            m1Session: BandSessionM1Sender(session: session)
+            staticMapProvider: staticMapProvider,
+            m1Session: BandSessionM1Sender(session: session),
+            h1Session: BandSessionH1Sender(session: session),
+            h1AssetProvider: h1AssetFactory.provider
         ))
     }
 

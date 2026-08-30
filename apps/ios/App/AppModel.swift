@@ -54,6 +54,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var events: [EchoEntry] = []
     @Published private(set) var m1State: M1State = .idle
     @Published private(set) var m1RequiresReconnect = false
+    @Published private(set) var h1State: H1State = .idle
+    @Published private(set) var h1RequiresReconnect = false
+    @Published private(set) var lastH1RunRecord: RenderRunRecord?
+    @Published private(set) var lastH1RunDirectory: URL?
+    @Published private(set) var lastH1ExportURL: URL?
     @Published private(set) var errorMessage: String?
 
     private let keyStore: any AuthKeyStoreProtocol
@@ -64,6 +69,8 @@ final class AppModel: ObservableObject {
     private let session: BandSession
     private let staticMapProvider: any StaticMapProviding
     private let m1Session: any M1SessionSending
+    private let h1Coordinator: H1RenderCoordinator
+    private let renderRunStore: FileRenderRunStore
     private let m1Clock: any BlueBandClock
     private let m1ResultTimeout: Duration
     private let m1RunIDGenerator: @Sendable () -> String
@@ -118,9 +125,14 @@ final class AppModel: ObservableObject {
         session: BandSession,
         staticMapProvider: any StaticMapProviding,
         m1Session: any M1SessionSending,
+        h1Session: (any H1SessionSending)? = nil,
+        h1AssetProvider: H1AssetProvider? = nil,
         m1Clock: any BlueBandClock = ContinuousBlueBandClock(),
         m1ResultTimeout: Duration = .seconds(15),
         m1RunIDGenerator: @escaping @Sendable () -> String = AppModel.makeM1RunID,
+        h1Clock: any BlueBandClock = ContinuousBlueBandClock(),
+        h1ResultTimeout: Duration = .seconds(15),
+        renderRunStore: FileRenderRunStore = FileRenderRunStore(),
         scanDuration: Duration = .seconds(15)
     ) {
         self.keyStore = keyStore
@@ -131,9 +143,19 @@ final class AppModel: ObservableObject {
         self.session = session
         self.staticMapProvider = staticMapProvider
         self.m1Session = m1Session
+        self.renderRunStore = renderRunStore
         self.m1Clock = m1Clock
         self.m1ResultTimeout = m1ResultTimeout
         self.m1RunIDGenerator = m1RunIDGenerator
+        let resolvedH1Session = h1Session ?? BandSessionH1Sender(session: session)
+        let resolvedH1Provider = h1AssetProvider
+            ?? H1AssetFactory(staticMapProvider: staticMapProvider).provider
+        self.h1Coordinator = H1RenderCoordinator(
+            session: resolvedH1Session,
+            assetProvider: resolvedH1Provider,
+            clock: h1Clock,
+            resultTimeout: h1ResultTimeout
+        )
         self.scanDuration = scanDuration
         rememberedBand = bandStore.load()
         do { hasSavedKey = try keyStore.load() != nil }
@@ -304,6 +326,8 @@ final class AppModel: ObservableObject {
         guard sessionState != .idle else { return }
         sessionState = .disconnecting
         eventTask?.cancel()
+        h1Coordinator.disconnected()
+        syncH1State()
         if m1Operation != nil || !isM1Terminal {
             terminateM1("TRANSFER_DISCONNECTED", requiresReconnect: true)
         }
@@ -365,6 +389,55 @@ final class AppModel: ObservableObject {
             operationTask.cancel()
         }
         if m1Operation?.token == attempt { m1Operation = nil }
+    }
+
+    func startH1(mode: H1TestMode) async {
+        guard rpkState == .ready else {
+            h1Coordinator.failBeforeStart(mode: mode, code: "RPK_NOT_READY")
+            syncH1State()
+            return
+        }
+        guard !h1RequiresReconnect else {
+            h1Coordinator.failBeforeStart(mode: mode, code: "TRANSFER_RECONNECT_REQUIRED")
+            syncH1State()
+            return
+        }
+
+        let serviceKey = mode.requiresServiceKey ? loadVietmapKey(.service) : nil
+        if mode.requiresServiceKey, serviceKey == nil {
+            h1Coordinator.failBeforeStart(mode: mode, code: "SERVICE_KEY_MISSING")
+            syncH1State()
+            return
+        }
+        let tileMapKey = mode.requiresTileMapKey ? loadVietmapKey(.tileMap) : nil
+        if mode.requiresTileMapKey, tileMapKey == nil {
+            h1Coordinator.failBeforeStart(mode: mode, code: "TILEMAP_KEY_MISSING")
+            syncH1State()
+            return
+        }
+
+        h1State = .fetching(mode: mode)
+        await h1Coordinator.start(
+            mode: mode,
+            serviceKey: serviceKey,
+            tileMapKey: tileMapKey
+        )
+        syncH1State()
+    }
+
+    func cancelH1() {
+        h1Coordinator.cancel()
+        syncH1State()
+    }
+
+    func exportLastH1Run() {
+        guard let record = lastH1RunRecord else { return }
+        do {
+            lastH1ExportURL = try renderRunStore.export(record)
+            errorMessage = nil
+        } catch {
+            errorMessage = "Không export được log POC H1."
+        }
     }
 
     private func performM1(attempt: UUID, runID: String, serviceKey: String) async {
@@ -497,17 +570,43 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func loadVietmapKey(_ kind: VietmapKeyKind) -> String? {
+        do {
+            return try vietmapKeyStore.load(kind)
+        } catch {
+            return nil
+        }
+    }
+
+    private func syncH1State() {
+        h1State = h1Coordinator.state
+        h1RequiresReconnect = h1Coordinator.requiresReconnect
+        guard let record = h1Coordinator.lastRunRecord else { return }
+        guard lastH1RunRecord?.identity.runID != record.identity.runID else { return }
+        lastH1RunRecord = record
+        do {
+            lastH1RunDirectory = try renderRunStore.save(record)
+            lastH1ExportURL = try renderRunStore.export(record)
+        } catch {
+            errorMessage = "Không lưu được log POC H1."
+        }
+    }
+
     func consume(_ event: InterconnectEvent) {
         switch event {
         case .connected:
+            h1Coordinator.reconnected()
             if m1RequiresReconnect && m1ReconnectObservedDisconnect {
                 m1RequiresReconnect = false
                 m1ReconnectObservedDisconnect = false
             }
             rpkState = .ready
             sessionState = .applicationReady
+            syncH1State()
         case .disconnected:
             rpkState = .locked
+            h1Coordinator.disconnected()
+            syncH1State()
             if m1Operation != nil || !isM1Terminal {
                 terminateM1("TRANSFER_DISCONNECTED", requiresReconnect: true)
             }
@@ -515,12 +614,16 @@ final class AppModel: ObservableObject {
         case let .sent(envelope):
             append(envelope, delivery: .sent)
         case let .received(envelope):
+            h1Coordinator.consume(envelope)
+            syncH1State()
             consumeM1Result(envelope)
             append(envelope, delivery: .received)
         case let .acknowledged(id):
             if let index = events.lastIndex(where: { $0.id == id }) { events[index].delivery = .acknowledged }
+            syncH1State()
         case let .failed(id):
             if let index = events.lastIndex(where: { $0.id == id }) { events[index].delivery = .failed }
+            syncH1State()
         case .trustRejected:
             rpkState = .failed("Fingerprint RPK đã thay đổi")
             errorMessage = "Fingerprint RPK đã thay đổi. Chỉ reset trust nếu bạn vừa cài lại RPK tin cậy."

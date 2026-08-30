@@ -45,6 +45,20 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(viewSource.contains("Cần ngắt kết nối và kết nối lại Band"))
     }
 
+    func testH1ExposesIndependentRasterAndVectorModes() {
+        let stateSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/H1State.swift"))
+        let modelSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/AppModel.swift"))
+        let viewSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/ContentView.swift"))
+        let factorySource = try! String(contentsOf: sourceRoot.appendingPathComponent("Adapters/Rendering/H1AssetFactory.swift"))
+
+        XCTAssertTrue(stateSource.contains("case rasterBaseline"))
+        XCTAssertTrue(stateSource.contains("case vectorVietmap"))
+        XCTAssertTrue(modelSource.contains("func startH1(mode: H1TestMode) async"))
+        XCTAssertTrue(viewSource.contains("ForEach(H1TestMode.allCases"))
+        XCTAssertTrue(factorySource.contains("VietmapStyleClient"))
+        XCTAssertTrue(factorySource.contains("MapboxVectorTile.decode"))
+    }
+
     private var sourceRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     }
