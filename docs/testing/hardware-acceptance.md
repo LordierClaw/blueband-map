@@ -48,6 +48,15 @@ The developer supplies:
 8. Maximum permitted Vietmap API calls for the procedure.
 9. Stop conditions and previous known-good recovery path.
 
+### Developer handoff bundle
+
+Every POC ends with both:
+
+- a committed record at `docs/testing/handoffs/<poc>-<short-commit>.md`; and
+- an ignored local bundle at `artifacts/<poc>/<short-commit>/` containing `HANDOFF.md`, `SHA256SUMS` and every IPA/RPK that actually exists.
+
+The handoff summarizes completed work, lists numbered owner test steps and reports the exact path, size and SHA-256 of each available IPA/RPK. A missing artifact must be written as `Không có` with its build boundary; a nonexistent path or fabricated hash is forbidden. Run `scripts/prepare-poc-handoff.sh` to create the local bundle. The bundle identifies artifacts but never upgrades automated evidence to `PASS-HW`.
+
 The tester returns one status:
 
 - `PASS-HW`: every gate condition was observed on the target hardware.
