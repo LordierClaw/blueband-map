@@ -53,6 +53,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var snapshot = BandSnapshot()
     @Published private(set) var events: [EchoEntry] = []
     @Published private(set) var m1State: M1State = .idle
+    @Published private(set) var m1RequiresReconnect = false
     @Published private(set) var errorMessage: String?
 
     private let keyStore: any AuthKeyStoreProtocol
@@ -73,6 +74,7 @@ final class AppModel: ObservableObject {
     private var pendingM1Asset: PendingM1Asset?
     private var m1Operation: M1Operation?
     private var m1ResultTimeoutTask: Task<Void, Never>?
+    private var m1ReconnectObservedDisconnect = false
 
     private struct M1Operation {
         let token: UUID
@@ -289,8 +291,11 @@ final class AppModel: ObservableObject {
         guard sessionState != .idle else { return }
         sessionState = .disconnecting
         eventTask?.cancel()
-        if m1Operation != nil || !isM1Terminal { terminateM1("TRANSFER_DISCONNECTED") }
+        if m1Operation != nil || !isM1Terminal {
+            terminateM1("TRANSFER_DISCONNECTED", requiresReconnect: true)
+        }
         await session.disconnect()
+        if m1RequiresReconnect { m1ReconnectObservedDisconnect = true }
         rpkState = .locked
         sessionState = .idle
     }
@@ -306,6 +311,10 @@ final class AppModel: ObservableObject {
         guard m1Operation == nil, isM1Terminal else { return }
         guard rpkState == .ready else {
             failM1("RPK_NOT_READY")
+            return
+        }
+        guard !m1RequiresReconnect else {
+            failM1("TRANSFER_RECONNECT_REQUIRED")
             return
         }
 
@@ -391,7 +400,7 @@ final class AppModel: ObservableObject {
                     return
                 }
                 guard !Task.isCancelled else {
-                    failOwnedM1("TRANSFER_CANCELLED", attempt: attempt)
+                    failOwnedM1("TRANSFER_CANCELLED", attempt: attempt, requiresReconnect: true)
                     return
                 }
                 pending.phase = .transferring(awaitingStep: index)
@@ -407,14 +416,18 @@ final class AppModel: ObservableObject {
                     return
                 }
                 guard !Task.isCancelled else {
-                    failOwnedM1("TRANSFER_CANCELLED", attempt: attempt)
+                    failOwnedM1("TRANSFER_CANCELLED", attempt: attempt, requiresReconnect: true)
                     return
                 }
                 m1State = .transferring(completed: index + 1, total: steps.count)
             }
         } catch {
             guard currentM1Attempt == attempt else { return }
-            failOwnedM1(Task.isCancelled ? "TRANSFER_CANCELLED" : transferCode(for: error), attempt: attempt)
+            failOwnedM1(
+                Task.isCancelled ? "TRANSFER_CANCELLED" : transferCode(for: error),
+                attempt: attempt,
+                requiresReconnect: true
+            )
             return
         }
 
@@ -466,11 +479,18 @@ final class AppModel: ObservableObject {
     func consume(_ event: InterconnectEvent) {
         switch event {
         case .connected:
+            if m1RequiresReconnect && m1ReconnectObservedDisconnect {
+                m1RequiresReconnect = false
+                m1ReconnectObservedDisconnect = false
+            }
             rpkState = .ready
             sessionState = .applicationReady
         case .disconnected:
             rpkState = .locked
-            if m1Operation != nil || !isM1Terminal { terminateM1("TRANSFER_DISCONNECTED") }
+            if m1Operation != nil || !isM1Terminal {
+                terminateM1("TRANSFER_DISCONNECTED", requiresReconnect: true)
+            }
+            if m1RequiresReconnect { m1ReconnectObservedDisconnect = true }
         case let .sent(envelope):
             append(envelope, delivery: .sent)
         case let .received(envelope):
@@ -500,15 +520,22 @@ final class AppModel: ObservableObject {
         m1State = .failed(code: code)
     }
 
-    private func failOwnedM1(_ code: String, attempt: UUID) {
+    private func failOwnedM1(_ code: String, attempt: UUID, requiresReconnect: Bool = false) {
         guard currentM1Attempt == attempt else { return }
+        if requiresReconnect { requireM1Reconnect() }
         failM1(code)
     }
 
-    private func terminateM1(_ code: String) {
+    private func terminateM1(_ code: String, requiresReconnect: Bool = false) {
         let operation = m1Operation
+        if requiresReconnect { requireM1Reconnect() }
         failM1(code)
         operation?.task.cancel()
+    }
+
+    private func requireM1Reconnect() {
+        m1RequiresReconnect = true
+        m1ReconnectObservedDisconnect = false
     }
 
     private func ownsM1(_ attempt: UUID, runID: String) -> Bool {
@@ -529,7 +556,7 @@ final class AppModel: ObservableObject {
                   self.currentM1Attempt == attempt,
                   self.pendingM1Asset?.runID == runID,
                   case .waitingForBand = self.m1State else { return }
-            self.terminateM1("ASSET_RESULT_TIMEOUT")
+            self.terminateM1("ASSET_RESULT_TIMEOUT", requiresReconnect: true)
         }
     }
 
@@ -621,11 +648,11 @@ final class AppModel: ObservableObject {
         case "ok":
             guard Int(rawBytes) == expected.byteCount,
                   receivedPrefix == expected.hashPrefix else {
-                terminateM1("ASSET_RESULT_INVALID")
+                terminateM1("ASSET_RESULT_INVALID", requiresReconnect: true)
                 return
             }
             guard !isTransferring else {
-                terminateM1("ASSET_RESULT_INVALID")
+                terminateM1("ASSET_RESULT_INVALID", requiresReconnect: true)
                 return
             }
             currentM1Attempt = nil
@@ -639,7 +666,7 @@ final class AppModel: ObservableObject {
                 return
             }
             guard case let .string(code)? = body["code"], isAssetCode(code) else {
-                terminateM1("ASSET_RESULT_INVALID")
+                terminateM1("ASSET_RESULT_INVALID", requiresReconnect: true)
                 return
             }
             terminateM1(code)

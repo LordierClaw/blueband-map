@@ -89,8 +89,9 @@ final class M1AppModelTests: XCTestCase {
 
     func testBandWriteFailureBeforeChunkACKStopsRemainingTransferSteps() async throws {
         let asset = try makeAsset(byteCount: 700)
+        let provider = M1Provider(result: .success(asset))
         let sender = M1AcknowledgingSender()
-        let model = readyModel(provider: M1Provider(result: .success(asset)), sender: sender)
+        let model = readyModel(provider: provider, sender: sender, runIDs: [run1, run2])
         let start = Task { await model.startM1() }
         await waitUntil { await sender.startedCount == 1 }
         await sender.acknowledgeNext()
@@ -110,6 +111,15 @@ final class M1AppModelTests: XCTestCase {
         let sentSteps = await sender.steps
         XCTAssertEqual(sentSteps.count, 2)
         XCTAssertEqual(sentSteps.map(\.topic), ["map.asset.begin", "map.asset.chunk"])
+        XCTAssertFalse(model.m1RequiresReconnect)
+
+        let retry = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 3 }
+        retry.cancel()
+        await sender.failNext(CancellationError())
+        await retry.value
+        let fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 2)
     }
 
     func testMatchingBoundedBandFailuresAreAcceptedDuringTransfer() async throws {
@@ -216,7 +226,7 @@ final class M1AppModelTests: XCTestCase {
         await cancelBlockedStartForCleanup(start, sender: sender)
     }
 
-    func testBusyPressDoesNotFetchAgainAndTerminalPressIsOnlyRetry() async throws {
+    func testBusyAndReconnectRequiredPressesDoNotFetchAgain() async throws {
         let asset = try makeAsset()
         let provider = M1Provider(result: .success(asset))
         let sender = M1AcknowledgingSender()
@@ -232,13 +242,64 @@ final class M1AppModelTests: XCTestCase {
         await first.value
         XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_FAILED"))
 
-        let second = Task { await model.startM1() }
-        await waitUntil { await provider.fetchCount == 2 }
-        second.cancel()
-        await sender.failNext(CancellationError())
-        await second.value
+        await model.startM1()
+        fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 1)
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_RECONNECT_REQUIRED"))
+    }
+
+    func testAmbiguousTransferFailureBlocksProviderRetryUntilReconnect() async throws {
+        let provider = M1Provider(result: .success(try makeAsset()))
+        let model = readyModel(
+            provider: provider,
+            sender: M1ImmediateSender(error: M1TransferTestError.failed),
+            runIDs: [run1, run2]
+        )
+
+        await model.startM1()
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_FAILED"))
+        XCTAssertTrue(model.m1RequiresReconnect)
+
+        await model.startM1()
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_RECONNECT_REQUIRED"))
+        var fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 1)
+
+        model.consume(.connected)
+        XCTAssertTrue(model.m1RequiresReconnect)
+        model.consume(.disconnected)
+        XCTAssertTrue(model.m1RequiresReconnect)
+        model.consume(.connected)
+        XCTAssertFalse(model.m1RequiresReconnect)
+        await model.startM1()
         fetchCount = await provider.fetchCount
         XCTAssertEqual(fetchCount, 2)
+    }
+
+    func testSemanticCurrentRunWriteFailureAllowsExplicitProviderRetry() async throws {
+        let asset = try makeAsset()
+        let provider = M1Provider(result: .success(asset))
+        let model = readyModel(provider: provider, runIDs: [run1, run2])
+
+        await model.startM1()
+        model.consume(.received(resultEnvelope(
+            asset: asset.id,
+            run: run1,
+            status: "error",
+            bytes: 0,
+            prefix: String(asset.sha256.prefix(8)),
+            code: "ASSET_WRITE_FAILED"
+        )))
+        XCTAssertEqual(model.m1State, .failed(code: "ASSET_WRITE_FAILED"))
+        XCTAssertFalse(model.m1RequiresReconnect)
+
+        await model.startM1()
+        let fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 2)
+        XCTAssertEqual(model.m1State, .waitingForBand(
+            assetID: asset.id,
+            hashPrefix: String(asset.sha256.prefix(8))
+        ))
     }
 
     func testSemanticFailureKeepsRunOwnedUntilBlockedSendSettlesAndRejectsOverlap() async throws {
@@ -364,8 +425,9 @@ final class M1AppModelTests: XCTestCase {
         let plan = try MapAssetTransferPlan.make(asset: asset, runID: run1)
         let clock = M1ManualClock()
         let sender = M1AcknowledgingSender()
+        let provider = M1Provider(result: .success(asset))
         let model = readyModel(
-            provider: M1Provider(result: .success(asset)),
+            provider: provider,
             sender: sender,
             clock: clock
         )
@@ -384,6 +446,23 @@ final class M1AppModelTests: XCTestCase {
         await waitUntil { await clock.waitingCount == 1 }
         await clock.resumeNext()
         await waitUntil { model.m1State == .failed(code: "ASSET_RESULT_TIMEOUT") }
+        XCTAssertTrue(model.m1RequiresReconnect)
+
+        await model.startM1()
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_RECONNECT_REQUIRED"))
+        var fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 1)
+
+        model.consume(.disconnected)
+        model.consume(.connected)
+        XCTAssertFalse(model.m1RequiresReconnect)
+        let retry = Task { await model.startM1() }
+        await waitUntil { await sender.waitingCount == 1 }
+        retry.cancel()
+        await sender.failNext(CancellationError())
+        await retry.value
+        fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 2)
     }
 
     func testCancelledStaleTimeoutCannotFailNewerRun() async throws {
@@ -426,7 +505,11 @@ final class M1AppModelTests: XCTestCase {
             let model = readyModel(provider: provider)
             await model.startM1()
             XCTAssertEqual(model.m1State, .failed(code: code))
+            XCTAssertFalse(model.m1RequiresReconnect)
             XCTAssertFalse(String(describing: model.m1State).contains("secret-service-key"))
+            await model.startM1()
+            let fetchCount = await provider.fetchCount
+            XCTAssertEqual(fetchCount, 2)
         }
     }
 
@@ -445,6 +528,7 @@ final class M1AppModelTests: XCTestCase {
             let model = readyModel(provider: M1Provider(result: .success(try makeAsset())), sender: sender)
             await model.startM1()
             XCTAssertEqual(model.m1State, .failed(code: code))
+            XCTAssertTrue(model.m1RequiresReconnect)
             XCTAssertFalse(String(describing: model.m1State).contains("private-id"))
         }
     }

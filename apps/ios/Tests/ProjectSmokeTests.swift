@@ -36,6 +36,15 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertEqual(source.components(separatedBy: "startM1()").count - 1, 1)
     }
 
+    func testM1ReconnectGateIsVisibleAndDisablesRetry() {
+        let modelSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/AppModel.swift"))
+        let viewSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/ContentView.swift"))
+        XCTAssertTrue(modelSource.contains("TRANSFER_RECONNECT_REQUIRED"))
+        XCTAssertTrue(modelSource.contains("m1ReconnectObservedDisconnect"))
+        XCTAssertTrue(viewSource.contains("model.m1RequiresReconnect"))
+        XCTAssertTrue(viewSource.contains("Cần ngắt kết nối và kết nối lại Band"))
+    }
+
     private var sourceRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     }

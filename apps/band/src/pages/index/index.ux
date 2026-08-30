@@ -453,18 +453,18 @@ export default {
       return
     }
     if (transfer.receivedBytes !== transfer.bytes) {
-      this.failAsset(message, "ASSET_LENGTH_MISMATCH", true)
+      this.failAsset(message, "ASSET_LENGTH_MISMATCH")
       return
     }
     var digest
     try {
       digest = crypto.hashDigest({ uri: transfer.uri, algo: "SHA256" })
     } catch (error) {
-      this.failAsset(message, "ASSET_HASH_FAILED", true)
+      this.failAsset(message, "ASSET_HASH_FAILED")
       return
     }
     if (typeof digest !== "string" || digest.toLowerCase() !== transfer.sha256) {
-      this.failAsset(message, "ASSET_DIGEST_MISMATCH", true)
+      this.failAsset(message, "ASSET_DIGEST_MISMATCH")
       return
     }
     var asset = transfer.asset
@@ -519,10 +519,21 @@ export default {
     this.sendACK(id)
   },
 
-  failAsset(message, code, discardTransfer) {
+  failAsset(message, code) {
+    var transfer = this.activeTransfer
+    var body = message && message.body ? message.body : {}
+    var ownsOperation = this.activeMapOperationID === message.id
+    var preservesTransfer = code === "ASSET_BUSY" || code === "ASSET_MISMATCH" ||
+      code === "ASSET_RUN_MISMATCH" || code === "ASSET_NO_TRANSFER"
+    var matchesTransfer = ownsOperation && transfer && !preservesTransfer &&
+      body.asset === transfer.asset && this.validRun(body.run) && body.run === transfer.run
+    if (matchesTransfer) {
+      this.failCurrentTransfer(message, code, transfer)
+      return
+    }
+
     var owned = this.releaseMapOperation(message.id)
     if (!owned && code !== "ASSET_BUSY") return
-    var transfer = this.activeTransfer
     this.removeInFlight(message.id)
     if (code === "ASSET_BUSY") {
       var rejectedAsset = this.safeAsset(message.body.asset)
@@ -531,16 +542,6 @@ export default {
       this.sendACK(message.id)
       return
     }
-    if (discardTransfer && transfer) {
-      this.activeTransfer = null
-      this.deleteBestEffort(transfer.uri)
-      this.unconfirmedURI = ""
-      this.unconfirmedTouched = false
-      this.mapReady = false
-      this.mapPath = ""
-      this.mapHashPrefix = ""
-      this.renderItems = []
-    }
     var asset = transfer ? transfer.asset : (typeof message.body.asset === "string" ? message.body.asset : "")
     var bytes = transfer ? transfer.receivedBytes : 0
     var prefix = transfer ? transfer.sha256.slice(0, 8) : ""
@@ -548,6 +549,33 @@ export default {
     this.sendAssetResult(asset, run, "error", bytes, prefix, code)
     this.rememberSuccess(message.id)
     this.sendACK(message.id)
+  },
+
+  failCurrentTransfer(message, code, transfer) {
+    var page = this
+    var epoch = this.lifecycleEpoch
+    var asset = transfer.asset
+    var run = transfer.run
+    var bytes = transfer.receivedBytes
+    var prefix = transfer.sha256.slice(0, 8)
+    this.activeTransfer = null
+    this.unconfirmedURI = ""
+    this.unconfirmedTouched = false
+    this.mapReady = false
+    this.mapPath = ""
+    this.mapHashPrefix = ""
+    this.renderItems = []
+    this.showDiagnostics = true
+
+    var publish = function () {
+      if (!page.ownsMapOperation(message.id, epoch)) return
+      if (!page.releaseMapOperation(message.id)) return
+      page.removeInFlight(message.id)
+      page.sendAssetResult(asset, run, "error", bytes, prefix, code)
+      page.rememberSuccess(message.id)
+      page.sendACK(message.id)
+    }
+    if (!this.scheduleDelete(transfer.uri, publish, publish)) publish()
   },
 
   releaseMapOperation(id) {

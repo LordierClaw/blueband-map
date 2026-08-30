@@ -90,8 +90,12 @@ struct ContentView: View {
             LabeledContent("Trạng thái", value: m1Label)
             Text("Tối đa 1 Static Map request mỗi lần bấm")
                 .font(.caption).foregroundStyle(.secondary)
+            if model.m1RequiresReconnect {
+                Text("Cần ngắt kết nối và kết nối lại Band trước khi thử lại.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             Button("Tải và gửi M1") { Task { await model.startM1() } }
-                .disabled(model.rpkState != .ready || m1IsBusy)
+                .disabled(model.rpkState != .ready || m1IsBusy || model.m1RequiresReconnect)
         }
     }
 

@@ -475,7 +475,7 @@ test("rejects wrong final length, digest mismatch and thrown hash with stable re
   }
 })
 
-test("handled write failure is deduplicated and corrected retry requires a new ID", async () => {
+test("handled write failure is deduplicated and a new chunk cannot revive the aborted run", async () => {
   const file = memoryFile()
   let failFirst = true
   file.writeArrayBuffer = options => {
@@ -495,8 +495,69 @@ test("handled write failure is deduplicated and corrected retry requires a new I
   assert.equal(file.writes.length, 1)
   assert.equal(sent.filter(message => message.type === "ack" && message.id === "retry-1").length, 2)
   page.receiveMessage({ data: envelope("retry-2", "map.asset.chunk", chunk.body) })
-  assert.equal(file.writes.length, 2)
+  assert.equal(file.writes.length, 1)
+  assert.equal(sent.at(-2).body.code, "ASSET_NO_TRANSFER")
   assert.equal(sent.filter(message => message.type === "ack" && message.id === "retry-2").length, 1)
+})
+
+test("current-run write failure publishes only after cleanup and permits a fresh run", async () => {
+  const file = memoryFile()
+  const heldDeletes = []
+  file.writeArrayBuffer = options => {
+    file.writes.push(options)
+    options.fail()
+  }
+  file.delete = options => {
+    file.deletes.push(options.uri)
+    heldDeletes.push(options)
+  }
+  const { page, sent } = await readyHarness(file)
+  page.receiveMessage({ data: envelope("cleanup-begin", "map.asset.begin", beginBody({ bytes: 4 })) })
+  page.receiveMessage({ data: envelope("cleanup-chunk", "map.asset.chunk", {
+    asset: ASSET, offset: 0, data: "AAECAw==", run: RUN
+  }) })
+
+  assert.equal(page.activeTransfer, null)
+  assert.deepEqual(page.pendingDeleteURIs, [URI])
+  assert.equal(heldDeletes.length, 1)
+  assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
+  assert.equal(sent.some(message => message.type === "ack" && message.id === "cleanup-chunk"), false)
+
+  file.storage.delete(URI)
+  heldDeletes[0].success()
+  assert.equal(sent.at(-2).body.code, "ASSET_WRITE_FAILED")
+  assert.equal(sent.at(-2).body.run, RUN)
+  assert.deepEqual(sent.at(-1), { v: 1, id: "cleanup-chunk", src: "band", type: "ack" })
+  assert.deepEqual(page.pendingDeleteURIs, [])
+
+  page.receiveMessage({ data: envelope("fresh-begin", "map.asset.begin", beginBody({
+    bytes: 4,
+    run: RUN_B
+  })) })
+  assert.equal(page.activeTransfer.run, RUN_B)
+  assert.deepEqual(sent.at(-1), { v: 1, id: "fresh-begin", src: "band", type: "ack" })
+  assert.equal(sent.some(message => message.body?.code === "ASSET_BUSY"), false)
+})
+
+test("stale different-run failure preserves the active transfer", async () => {
+  const { page, sent, file } = await readyHarness()
+  page.receiveMessage({ data: envelope("preserve-begin", "map.asset.begin", beginBody({ bytes: 4 })) })
+  page.receiveMessage({ data: envelope("stale-chunk", "map.asset.chunk", {
+    asset: ASSET, offset: 0, data: "AAECAw==", run: RUN_B
+  }) })
+
+  assert.equal(sent.at(-2).body.code, "ASSET_RUN_MISMATCH")
+  assert.equal(page.activeTransfer.asset, ASSET)
+  assert.equal(page.activeTransfer.run, RUN)
+  assert.equal(page.activeTransfer.receivedBytes, 0)
+  assert.deepEqual(page.pendingDeleteURIs, [])
+  assert.equal(file.deletes.length, 0)
+
+  page.receiveMessage({ data: envelope("current-chunk", "map.asset.chunk", {
+    asset: ASSET, offset: 0, data: "AAECAw==", run: RUN
+  }) })
+  assert.equal(page.activeTransfer.receivedBytes, 4)
+  assert.deepEqual(sent.at(-1), { v: 1, id: "current-chunk", src: "band", type: "ack" })
 })
 
 test("validates every begin field, enforces one transfer and prepares files safely", async () => {
