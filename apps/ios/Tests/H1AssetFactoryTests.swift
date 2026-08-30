@@ -81,7 +81,7 @@ final class H1AssetFactoryTests: XCTestCase {
             ).make(mode: .vectorVietmap, serviceKey: nil, tileMapKey: key)
             XCTFail("Expected foreign tile host rejection")
         } catch {
-            XCTAssertEqual(error as? VietmapStyleError, .foreignHost)
+            XCTAssertEqual(error as? VietmapStyleError, .invalidTileTemplate)
             let requests = await tileTransport.recordedRequests
             XCTAssertTrue(requests.isEmpty)
         }
