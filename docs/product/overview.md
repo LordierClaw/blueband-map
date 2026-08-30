@@ -70,6 +70,8 @@ The project does not stream a newly captured full map image for every GPS update
 | U1 | iOS/Band lifecycle, background and state-snapshot recovery matrix |
 | U2 | Coherent configure-once motorcycle navigation vertical slice |
 
+M1 status: **Implementation ready for owner hardware acceptance; not hardware-confirmed.** M2 and all later phases remain unstarted.
+
 Detailed gates, stop conditions and evidence rules are in the [approved POC roadmap design](../superpowers/specs/2026-08-29-blueband-map-poc-roadmap-design.md).
 
 ## Core UX
