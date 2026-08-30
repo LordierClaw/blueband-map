@@ -1,6 +1,6 @@
 # BlueBand Map Hybrid Navigation Scene POC Design
 
-**Status:** Approved in conversation on 2026-08-30; written specification awaiting owner review
+**Status:** Approved in conversation on 2026-08-30; revised delivery batching awaiting owner review
 
 **Target hardware acceptance:** iPhone 13 Pro Max, iOS 26, Xiaomi Smart Band 10 with the firmware installed at test time
 
@@ -264,11 +264,17 @@ The metrics record:
 - No error path retains both raster and vector assets in Band memory.
 - No recovery loop is unbounded.
 
-## 9. POC ladder
+## 9. Two delivery batches and internal checkpoints
 
-Each POC proves one uncertainty and produces an independently identified handoff.
+The work is delivered in two implementation batches. Internal checkpoints preserve evidence boundaries but do not cause separate planning, review, IPA, or RPK cycles.
 
-This roadmap is intentionally not implemented through one large plan. P0, P1, each P2 renderer experiment, and every later phase receive a separate implementation plan and review gate. After this design is accepted, the immediate implementation plan covers P0 only.
+### H1 — Hybrid renderer evaluation build
+
+H1 uses one implementation plan and one continuous development pass for P0 through P2-Gate. It produces one iPhone app containing explicit Raster and Vector test functions, one RPK containing both bounded renderers, one combined hardware test packet, and one immutable artifact handoff.
+
+P0, P1, P2-R1, P2-R2, P2-V0, and P2-V1 are internal checkpoints in that plan. Automated failures stop implementation until fixed, but no additional owner approval is requested between them. Hardware support is not claimed while H1 is being built; all renderer hardware gates are executed together by the owner after the H1 IPA/RPK handoff.
+
+The owner returns the raster/vector test runs and readability feedback once. P2-Gate then selects the renderer for H2.
 
 ### P0 — Evidence foundation
 
@@ -324,6 +330,10 @@ Compare optimized raster and compact vector using the same viewport and navigati
 
 Raster is the default if vector does not clearly improve the complete hardware result. A smaller wire payload alone cannot select vector.
 
+### H2 — Selected navigation renderer build
+
+H2 begins only after the H1 hardware feedback selects a renderer. It uses one implementation plan and one continuous development pass for P3 through P6, followed by one combined IPA/RPK handoff and hardware packet. The rejected renderer remains available only in the H1 evaluation artifact and is not carried into the H2 runtime.
+
 ### P3 — Wider area
 
 Use only the selected renderer to show a wider nearby-road scene while retaining the same bounded navigation content.
@@ -339,6 +349,8 @@ Integrate the documented Vietmap route contract and populate active route, curre
 ### P6 — View modes
 
 Add only bounded north-up and heading-up modes plus discrete zoom levels. Arbitrary pitch, continuous free zoom, and general map browsing remain excluded.
+
+Only H1 and H2 are delivery-level POCs for artifact and handoff purposes. The P0–P6 names are evidence checkpoints inside those two POCs.
 
 ## 10. Initial hardware acceptance limits
 
