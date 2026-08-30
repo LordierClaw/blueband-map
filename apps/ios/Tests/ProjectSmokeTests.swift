@@ -6,6 +6,7 @@ final class ProjectSmokeTests: XCTestCase {
     func testIdentityConstantsAreStable() {
         XCTAssertEqual(BlueBandProduct.bundleIdentifier, "dev.lordierclaw.bluebandmap")
         XCTAssertEqual(BlueBandProduct.rpkPackage, "dev.lordierclaw.bluebandmap.band")
+        XCTAssertEqual(BlueBandProduct.version, "0.1.2")
     }
 
     func testM1StateHasOnlyTheApprovedCases() {
@@ -57,6 +58,16 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(viewSource.contains("ForEach(H1TestMode.allCases"))
         XCTAssertTrue(factorySource.contains("VietmapStyleClient"))
         XCTAssertTrue(factorySource.contains("MapboxVectorTile.decode"))
+    }
+
+    func testH1ExportUsesShareLinkForTheExistingSanitizedFile() {
+        let modelSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/AppModel.swift"))
+        let viewSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/ContentView.swift"))
+
+        XCTAssertTrue(viewSource.contains("ShareLink(\"Export log H1\", item: export)"))
+        XCTAssertTrue(viewSource.contains("if let export = model.lastH1ExportURL"))
+        XCTAssertFalse(viewSource.contains("model.exportLastH1Run()"))
+        XCTAssertFalse(modelSource.contains("func exportLastH1Run()"))
     }
 
     private var sourceRoot: URL {

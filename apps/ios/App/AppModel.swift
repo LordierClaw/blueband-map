@@ -430,16 +430,6 @@ final class AppModel: ObservableObject {
         syncH1State()
     }
 
-    func exportLastH1Run() {
-        guard let record = lastH1RunRecord else { return }
-        do {
-            lastH1ExportURL = try renderRunStore.export(record)
-            errorMessage = nil
-        } catch {
-            errorMessage = "Không export được log POC H1."
-        }
-    }
-
     private func performM1(attempt: UUID, runID: String, serviceKey: String) async {
         guard ownsM1(attempt, runID: runID), !Task.isCancelled else {
             failOwnedM1("TRANSFER_CANCELLED", attempt: attempt)

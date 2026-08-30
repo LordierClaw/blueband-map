@@ -121,12 +121,14 @@ struct ContentView: View {
                 LabeledContent("Bytes / primitives", value: "\(metrics.bytes) / \(metrics.primitives)")
                 LabeledContent("Tổng thời gian", value: "\(metrics.totalMilliseconds) ms")
                 LabeledContent("ACK p95", value: metrics.ackP95Milliseconds.map { "\($0) ms" } ?? "—")
-                Button("Export log H1") { model.exportLastH1Run() }
+                if let export = model.lastH1ExportURL {
+                    ShareLink("Export log H1", item: export)
+                } else {
+                    Button("Export log H1") {}
+                        .disabled(true)
+                }
                 if let directory = model.lastH1RunDirectory {
                     Text(directory.path).font(.caption2).textSelection(.enabled)
-                }
-                if let export = model.lastH1ExportURL {
-                    Text(export.path).font(.caption2).textSelection(.enabled)
                 }
             }
         }
