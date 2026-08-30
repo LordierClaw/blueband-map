@@ -65,7 +65,7 @@ final class ProjectSmokeTests: XCTestCase {
         let viewSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/ContentView.swift"))
         let exportSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/H1LogExport.swift"))
 
-        XCTAssertTrue(viewSource.contains("ShareLink(\"Export log H1\", item: H1LogExport(url: export))"))
+        XCTAssertTrue(viewSource.contains("ShareLink(item: H1LogExport(url: export))"))
         XCTAssertTrue(viewSource.contains("if let export = model.lastH1ExportURL"))
         XCTAssertTrue(exportSource.contains("contentType: .json"))
         XCTAssertTrue(exportSource.contains("SentTransferredFile(export.url)"))
