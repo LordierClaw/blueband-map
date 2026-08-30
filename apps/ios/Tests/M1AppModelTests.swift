@@ -1002,7 +1002,12 @@ private func makeAsset(byteCount: Int = 64) throws -> MapAsset {
 
 private func bigEndianBytes(_ value: Int) -> [UInt8] {
     let value = UInt32(value)
-    return [UInt8(value >> 24), UInt8(value >> 16), UInt8(value >> 8), UInt8(value)]
+    return [
+        UInt8(truncatingIfNeeded: value >> 24),
+        UInt8(truncatingIfNeeded: value >> 16),
+        UInt8(truncatingIfNeeded: value >> 8),
+        UInt8(truncatingIfNeeded: value)
+    ]
 }
 
 private func resultEnvelope(
