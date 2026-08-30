@@ -354,8 +354,9 @@ final class AppModel: ObservableObject {
         pendingM1Asset = nil
         m1State = .fetching
 
-        let operationTask = Task { @MainActor [weak self] in
-            await self?.performM1(attempt: attempt, runID: runID, serviceKey: serviceKey)
+        let operationTask: Task<Void, Never> = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performM1(attempt: attempt, runID: runID, serviceKey: serviceKey)
         }
         m1Operation = M1Operation(token: attempt, runID: runID, task: operationTask)
         await withTaskCancellationHandler {
