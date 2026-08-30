@@ -6,13 +6,14 @@ This document is the H1 hardware acceptance procedure. It is not evidence that a
 
 These values were checked against the downloaded CI artifact; never infer them from source metadata:
 
-- Source commit: `4392d87b70bf6f93524d197d765ef5309904403e`
-- IPA: `artifacts/h1-hybrid/4392d87/BlueBandMap-unsigned.ipa`
-- IPA SHA-256: `1398839176c77cca72254613f67e6f5c32e98be076f3abe2e96a13c496601eab`
-- RPK: `artifacts/h1-hybrid/4392d87/dev.lordierclaw.bluebandmap.band.debug.0.2.2.rpk`
-- RPK SHA-256: `04b05323057357825fbd36313fc672c6a36786499b06c6295167f391d5bf531a`
-- iOS version/build: `0.1.0 (1)` unless read differently from the installed artifact
-- RPK version/code: `0.2.2 (4)` unless read differently from the installed artifact
+- Source commit: `57db1895fc92e1c3ebbf3a492c5d026079e7d21b`
+- IPA: `artifacts/h1-hybrid/BlueBandMap-unsigned.ipa`
+- IPA bytes / SHA-256: `767817` / `f2a35b09150464fc987f66b446464dd45b59e694a53034e4866e27963f699c65`
+- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.3.rpk`
+- RPK bytes / SHA-256: `23224` / `df5d18a6603e1b20113fd6e07b0ab9de70d8cb6931c87d7bd06809700fb541bd`
+- iOS version/build: `0.1.1 (2)`
+- RPK version/code: `0.2.3 (5)`
+- Files to update on the test devices: **both IPA and RPK**. They share a changed H1 application-envelope contract and must not be mixed with an older counterpart.
 
 An unsigned IPA needs a valid tester signing/sideload process. Do not put Apple credentials, profiles or signing keys in this repository.
 
@@ -22,7 +23,9 @@ The iPhone selects exactly one renderer before transfer. The Band acknowledges `
 
 All H1 payloads are bounded to 212×360, 64 KiB, and at most 40 vector line primitives. The fixed-record vector payload is `BBMV` v1. Xiaomi BLE, SPP, authentication, encryption and transport-ACK bytes are unchanged.
 
-The `0.2.2` RPK contains the page-load regression fix and the H1 raster hotfix: the entry page imports only the three Xiaomi system modules, keeps the render helpers page-local in firmware-safe ES5, and publishes raster through one native `<image>` instance with a separate render token. This removes the one-item template loop from the raster path and forces a new package version so an older cached RPK cannot be mistaken for the fix. These properties are verified in the compiled bundle; hardware acceptance remains pending.
+The `0.2.3` RPK retains the page-load and raster-publication fixes from `0.2.2`, and changes the aggregate H1 result from JSON Boolean `success` to the bounded string `status: "ok" | "error"`. The `0.1.1` IPA accepts only that exact result schema. This targets the common failure visible in owner evidence: Static Map transferred `21567 / 0` and Synthetic 8 transferred `94 / 8` before both ended as `ASSET_RESULT_INVALID`. The schema change is covered by exact Swift/RPK vectors and iOS simulator tests, but only this owner run can confirm the native Vela bridge diagnosis on Band hardware.
+
+The developer live-smoked Vietmap Static Map once with the saved Service key: HTTP 200, `image/png`, 212×360, 21,567 bytes. The documented TileMap style URL was independently checked against current Vietmap documentation, but no live TileMap call was made from the build machine because `local/vietmap-tilemap-key` is absent. The IPA now preserves safe three-digit statuses such as `PROVIDER_HTTP_401` or `PROVIDER_HTTP_403`; it never exports the URL, response body, or key.
 
 ## Mode matrix
 
@@ -44,19 +47,19 @@ The UI has one button per mode. Run one button at a time and wait for a terminal
 - Mi Fitness fully closed while BlueBandMap owns the session.
 - AuthKey, Vietmap Service key and Vietmap TileMap key saved through Config; record only `SAVED`, `MISSING` or `UNREADABLE`, never values.
 - Test stationary. Do not operate the phone or Band while riding.
-- Fully uninstall the previous `dev.lordierclaw.bluebandmap.band` package first and confirm its icon disappears; this prevents a cached old RPK from being mistaken for `0.2.2`.
+- Fully uninstall the previous `dev.lordierclaw.bluebandmap.band` package first and confirm its icon disappears; this prevents a cached old RPK from being mistaken for `0.2.3`.
 - Install the RPK and IPA whose hashes are recorded above.
 
 ## Test sequence
 
 1. Verify the IPA/RPK hashes and versions against the bundle. If any identity is missing, return `BLOCKED-ENV`.
 2. Open Config, close it, reopen it, and confirm saved-key health persists without displaying values.
-3. Open the RPK. The entry page must immediately show `BLUEBAND MAP`, `PAGE READY` or `IOS LINK OPEN`, `CHECK CONNECTION`, and `RPK 0.2.2`; it must not be black or unresponsive. If it is black, stop and record the artifact hash before retrying.
+3. Open the RPK. The entry page must immediately show `BLUEBAND MAP`, `PAGE READY` or `IOS LINK OPEN`, `CHECK CONNECTION`, and `RPK 0.2.3`; it must not be black or unresponsive. If it is black, stop and record the artifact hash before retrying.
 4. Open the compact Band picker, select the intended Band, complete device proof and RPK trust, and reach `Đã xác thực`.
-5. Run `Raster · Vietmap Static Map` once. Expect one provider call, a prepare/ready exchange, serialized transfer, and a recognizable PNG. Record the displayed eight-character hash prefix and the H1 terminal metrics.
-6. Run `Raster · Indexed PNG` once. Expect zero additional provider calls and a raster result.
-7. Run Synthetic 8, then 20, then 40 lines. After each run record bytes, primitive count, total time, ACK p95, and whether the Band stayed responsive. The 40-line run is the ceiling test, not an assumption of support.
-8. Run `Vector · Vietmap TileMap` once. Expect the style/TileJSON discovery and one bounded MVT tile flow, then a vector result with a non-zero road primitive count. A provider authorization, schema, MIME or quota failure is recorded as a provider failure; do not retry after a rate limit.
+5. Run `Raster · Vietmap Static Map` once. Expect one provider call, a prepare/ready exchange, serialized transfer, a recognizable PNG, and terminal state `displayed` rather than `ASSET_RESULT_INVALID`. Record the displayed eight-character hash prefix and H1 metrics.
+6. Disconnect and reconnect, then run `Raster · Indexed PNG` once. Expect zero additional provider calls, a visible four-color map, and terminal state `displayed`.
+7. For each of Synthetic 8, 20, and 40 lines: disconnect/reconnect, run exactly one mode, then record bytes, primitive count, total time, ACK p95, terminal state, and whether the Band stayed responsive. The expected primitive counts are 8, 20, and 40; the 40-line run is a ceiling test, not an assumption of support.
+8. Disconnect/reconnect and run `Vector · Vietmap TileMap` once. Expect style/TileJSON discovery and one bounded MVT tile flow, then a vector result with a non-zero road primitive count. If it fails before transfer, record the exact safe code—especially `PROVIDER_HTTP_###`—and do not retry after a rate-limit response.
 9. Use `Export log H1` after each terminal run. Keep only the sanitized JSON and redacted screenshots; the app stores run files under its Application Support `BlueBandMap/test-runs` directory.
 
 ## Recovery checks
