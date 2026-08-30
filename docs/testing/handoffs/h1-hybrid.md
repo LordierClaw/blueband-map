@@ -4,13 +4,13 @@ This document is the H1 hardware acceptance procedure. It is not evidence that a
 
 ## Artifact identity
 
-Fill these values from the actual downloaded artifacts before testing; never infer them from source metadata:
+These values were checked against the downloaded CI artifact; never infer them from source metadata:
 
-- Source commit: `REQUIRED FROM CI ARTIFACT`
-- IPA: `artifacts/h1-hybrid/<commit>/BlueBandMap-unsigned.ipa`
-- IPA SHA-256: `REQUIRED FROM SHA256SUMS`
-- RPK: `artifacts/h1-hybrid/<commit>/dev.lordierclaw.bluebandmap.band.debug.0.2.0.rpk`
-- RPK SHA-256: `REQUIRED FROM SHA256SUMS`
+- Source commit: `cedc709eb002015ac2f047a7e2c570e6e8ed623b`
+- IPA: `artifacts/h1-hybrid/cedc709/BlueBandMap-unsigned.ipa`
+- IPA SHA-256: `a1c1acc0cd847ee6a0f42f00c1a8e505a5f96cfb9b5c1bd73d73c24820b2085e`
+- RPK: `artifacts/h1-hybrid/cedc709/dev.lordierclaw.bluebandmap.band.debug.0.2.0.rpk`
+- RPK SHA-256: `41622aa24df4184e38c64f5a5b6a21101f853a482cf804ecf65aee77b1bcf464`
 - iOS version/build: `0.1.0 (1)` unless read differently from the installed artifact
 - RPK version/code: `0.2.0 (2)` unless read differently from the installed artifact
 
