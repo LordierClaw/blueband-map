@@ -75,3 +75,11 @@ If the answer to raster street availability is no, the next supported experiment
 ## Conclusion
 
 The project is feasible enough to justify incremental development because every primitive needed for the first vertical proof is documented or already hardware-confirmed: direct messages, image fragments, local files and image display. A full smooth map/navigation product is not yet proven. Raster street sourcing, multi-image performance, route overlay and lifecycle recovery remain explicit decision gates rather than promises.
+
+## H1 bounded provider smoke
+
+H1 adds `scripts/vietmap-smoke.sh` as a deliberately narrow provider probe. It permits exactly one request per invocation, requires the supplied key file to be mode `600`, keeps the key in curl configuration on stdin instead of the process arguments, disables redirect following, caps the response body, and records only status, normalized MIME, byte count, PNG dimensions when applicable, and SHA-256 under the ignored `local/provider-smoke/` directory. The probe never stores or prints the response body or effective URL.
+
+The static mode calls the documented Static Map multipart endpoint with the existing 212×360 test viewport. The style mode calls the documented `maps/styles/tm/style.json` resource and is the only H1 provider call intended to discover the TileJSON/vector source contract. Fake-curl tests exercise MIME, bounds, permission, redaction, and one-call behavior without spending trial quota. A successful local or CI test of the script is not provider acceptance; the live style result remains a separate, single-call evidence item.
+
+On 2026-08-30, one live static probe returned HTTP 200 `image/png`, 21,567 bytes, dimensions 212×360, SHA-256 `c267280ac269b98acf1245065ffef6562838426a861a29ae43c5bc61c0fe4373`. No live style probe was spent because the TileMap key file was not present in the checkout; this is an environment gap, not a provider failure.
