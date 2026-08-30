@@ -105,6 +105,16 @@ Allowed fields include build, phase, device class, OS version, user-recorded fir
 
 Never export AuthKey, Vietmap keys, full CoreBluetooth peripheral identifiers, nonces, HMACs, derived keys, raw encrypted payloads, private signing material or unredacted captures.
 
+### M1 run ownership and HTTPS acceptance cases
+
+Run these with a controlled fixture build and redacted diagnostics. Do not use a real key or live Vietmap request for redirect injection.
+
+| Case | Procedure | Expected result | Result |
+|---|---|---|---|
+| Stale prior result, same asset | Complete attempt A terminally, explicitly start attempt B with identical PNG bytes, then deliver A's delayed `map.asset.result` before B's current result. | The asset IDs may match, but A's run ID is ignored. B remains transferring or waiting until its own run result arrives, then reaches only B's terminal state. | Not run |
+| Result timeout and recovery | ACK every transfer step but withhold the Band render result through the bounded wait; then press explicitly once to retry. | The first run becomes `ASSET_RESULT_TIMEOUT`; no automatic retry occurs. The explicit retry owns a new run and makes exactly one provider call. | Not run |
+| Redirect rejection and call budget | Point the controlled provider fixture at one HTTPS redirect response and press M1 once. | The iOS transport does not follow the redirect, buffers no oversized response, reports a bounded provider failure, and observes exactly one provider request with no retry. | Not run |
+
 ### Road-test safety
 
 The tester must not operate the phone or Band while controlling a motorcycle. Use a passenger for live observations or stop safely before reading, capturing or exporting diagnostics. A stationary route replay must pass before the live road test begins.

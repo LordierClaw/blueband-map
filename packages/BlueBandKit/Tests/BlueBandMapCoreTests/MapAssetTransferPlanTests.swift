@@ -93,6 +93,7 @@ final class MapAssetTransferPlanTests: XCTestCase {
 
         var expectedOffset = 0
         var reconstructed = Data()
+        var observedWorstCaseChunk = false
         reconstructed.reserveCapacity(asset.byteCount)
 
         for (index, step) in steps.enumerated() {
@@ -123,6 +124,10 @@ final class MapAssetTransferPlanTests: XCTestCase {
                 XCTAssertEqual(step.body["run"], .string(maximumRunID))
                 XCTAssertEqual(step.body["offset"], .number(Double(expectedOffset)))
                 let chunk = try XCTUnwrap(Data(base64Encoded: try string("data", in: step.body)))
+                if expectedOffset >= 100_000, chunk.count == 210 {
+                    XCTAssertEqual(try envelope.encoded().count, ApplicationEnvelope.maximumEncodedSize)
+                    observedWorstCaseChunk = true
+                }
                 expectedOffset += chunk.count
                 reconstructed.append(chunk)
             case "map.asset.end":
@@ -135,6 +140,7 @@ final class MapAssetTransferPlanTests: XCTestCase {
 
         XCTAssertEqual(expectedOffset, asset.byteCount)
         XCTAssertEqual(reconstructed, asset.data)
+        XCTAssertTrue(observedWorstCaseChunk)
     }
 
     func testMakeHandlesMapAssetBackedByNonZeroIndexDataSlice() throws {
