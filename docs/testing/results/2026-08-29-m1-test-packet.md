@@ -1,4 +1,4 @@
-# M1 owner hardware test packet — 2026-08-30
+# M1 owner hardware test packet — 2026-08-29
 
 ## Procedure status
 
@@ -83,11 +83,12 @@ Use a provider-call counter that reveals only counts and stable status codes. Th
 
 Run these with a controlled fixture or instrumented test build. Keep their provider counts separate from the five-press positive budget. Do not perform live redirect injection with a real Vietmap key.
 
-1. **Semantic Band failure cleanup:** Force a current-run Band write failure. Verify the Band removes the partial file and clears working ownership before sending `ASSET_WRITE_FAILED` and the ACK. After that semantic result and after the iOS operation settles, make one explicit retry. It must begin without `ASSET_BUSY`; no automatic retry is allowed.
+1. **Semantic Band failure cleanup:** Force a current-run Band write failure. Verify the Band removes the partial file and clears working ownership before sending `ASSET_WRITE_FAILED` and the ACK. Record the provider counter when the semantic result arrives and verify it does not change automatically. After the iOS operation settles, make one explicit retry. It must begin without `ASSET_BUSY`, increment the provider counter by exactly one and complete normally; no automatic provider call or retry is allowed.
 2. **Ambiguous ACK/send failure:** Force a local ACK/send failure after Band ownership may have started. Verify iOS shows `TRANSFER_RECONNECT_REQUIRED`, disables or rejects retry, and makes zero provider calls for presses before a full disconnect/reconnect. After disconnect and a new connected event, one explicit press may make one provider call.
-3. **Result timeout:** Withhold the Band render result after the final ACK until `ASSET_RESULT_TIMEOUT`. Verify every pre-reconnect retry makes zero provider calls and reports reconnect-required. Disconnect and reconnect before one explicit retry. A stale timeout from the old run must not mutate the new run.
+3. **Result timeout:** Record the provider counter after the initiating explicit press, then withhold the Band render result after the final ACK until `ASSET_RESULT_TIMEOUT`. Verify there is no automatic retry and no additional provider call either before or after the timeout. Every pressed retry while reconnect-gated must make zero provider calls and report reconnect-required. Disconnect and reconnect, then make one explicit retry; it must increment the provider counter by exactly one. A stale timeout from the old run must not mutate the new run.
 4. **Stale same-asset result:** Start a new run using the same asset bytes as a terminal prior run, then inject the prior run's delayed `map.asset.result`. Verify the old run ID is ignored and the current run alone determines the state.
-5. **Redirect rejection:** Using a controlled URLProtocol/provider fixture and a dummy test credential, return one HTTPS redirect. Verify the transport does not follow it and exactly one provider request occurs. Do not require or attempt live redirect injection with a real key.
+5. **Stale different-run preservation:** While a newer transfer is active, inject a delayed failure or transfer message carrying a different prior run ID. Verify it is ignored, does not clear or replace the current active transfer, and the current run proceeds through verification and reaches `M1 MAP READY` normally.
+6. **Redirect rejection and response bound:** Using a controlled URLProtocol/provider fixture and a dummy test credential, return one HTTPS redirect with an oversized declared or streamed response body. Verify the transport rejects the redirect without following it, does not buffer more than `MapAsset.maximumPNGBytes`, reports the bounded app-facing code `PROVIDER_REQUEST`, and makes exactly one provider request. Do not require or attempt live redirect injection with a real key.
 
 ## Evidence and disposition
 
