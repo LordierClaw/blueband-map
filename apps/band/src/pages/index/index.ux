@@ -60,6 +60,7 @@ export default {
     renderItems: [],
     pendingPublication: null,
     confirmedMap: null,
+    retiredMapURI: "",
     nextRenderToken: 1,
     showDiagnostics: true,
     nextID: 1
@@ -327,12 +328,6 @@ export default {
       uri: "internal://files/" + body.asset + ".png",
       receivedBytes: 0
     }
-    if (this.pendingDeleteURIs.indexOf(transfer.uri) >= 0) {
-      this.failAsset(message, "ASSET_BUSY")
-      return
-    }
-    this.unconfirmedURI = transfer.uri
-    this.unconfirmedTouched = false
     var activate = function () {
       if (!page.ownsMapOperation(message.id, epoch)) return
       if (page.confirmedMap && page.confirmedMap.uri === transfer.uri) page.confirmedMap = null
@@ -344,31 +339,53 @@ export default {
       page.showDiagnostics = true
       page.succeedAsset(message.id)
     }
-    try {
-      file.access({
-        uri: transfer.uri,
-        success: function () {
-          if (!page.ownsMapOperation(message.id, epoch)) return
-          var scheduled = page.scheduleDelete(transfer.uri, function () {
+    var prepare = function () {
+      if (!page.ownsMapOperation(message.id, epoch)) return
+      if (page.pendingDeleteURIs.indexOf(transfer.uri) >= 0) {
+        page.failAsset(message, "ASSET_BUSY")
+        return
+      }
+      page.unconfirmedURI = transfer.uri
+      page.unconfirmedTouched = false
+      try {
+        file.access({
+          uri: transfer.uri,
+          success: function () {
             if (!page.ownsMapOperation(message.id, epoch)) return
-            page.unconfirmedTouched = true
+            var scheduled = page.scheduleDelete(transfer.uri, function () {
+              if (!page.ownsMapOperation(message.id, epoch)) return
+              page.unconfirmedTouched = true
+              activate()
+            }, function () {
+              if (!page.ownsMapOperation(message.id, epoch)) return
+              page.failAsset(message, "ASSET_DELETE_FAILED")
+            })
+            if (!scheduled && page.ownsMapOperation(message.id, epoch)) {
+              page.failAsset(message, "ASSET_BUSY")
+            }
+          },
+          fail: function () {
+            if (!page.ownsMapOperation(message.id, epoch)) return
             activate()
-          }, function () {
-            if (!page.ownsMapOperation(message.id, epoch)) return
-            page.failAsset(message, "ASSET_DELETE_FAILED")
-          })
-          if (!scheduled && page.ownsMapOperation(message.id, epoch)) {
-            page.failAsset(message, "ASSET_BUSY")
           }
-        },
-        fail: function () {
-          if (!page.ownsMapOperation(message.id, epoch)) return
-          activate()
-        }
-      })
-    } catch (error) {
-      if (this.ownsMapOperation(message.id, epoch)) this.failAsset(message, "ASSET_PREPARE_FAILED")
+        })
+      } catch (error) {
+        if (page.ownsMapOperation(message.id, epoch)) page.failAsset(message, "ASSET_PREPARE_FAILED")
+      }
     }
+    if (this.retiredMapURI) {
+      var retiredURI = this.retiredMapURI
+      var scheduled = this.scheduleDelete(retiredURI, function () {
+        if (page.retiredMapURI === retiredURI) page.retiredMapURI = ""
+        prepare()
+      }, function () {
+        if (!page.ownsMapOperation(message.id, epoch)) return
+        page.failAsset(message, "ASSET_DELETE_FAILED")
+      })
+      if (!scheduled && this.ownsMapOperation(message.id, epoch)) this.failAsset(message, "ASSET_BUSY")
+      return
+    }
+    prepare()
   },
 
   decodeBase64(value) {
@@ -725,9 +742,9 @@ export default {
   mapComplete(token) {
     var publication = this.pendingPublication
     if (!publication || token !== publication.token || this.lifecycleEpoch !== publication.epoch ||
-      this.activeMapOperationID !== publication.operationID) return
-    this.pendingPublication = null
-    if (!this.releaseMapOperation(publication.operationID)) return
+      this.activeMapOperationID !== publication.operationID || publication.cleanupStarted) return
+    publication.cleanupStarted = true
+    var priorMap = this.confirmedMap
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
     this.confirmedMap = {
@@ -736,17 +753,34 @@ export default {
       token: publication.token
     }
     this.statusText = "M1 MAP READY"
-    this.sendAssetResult(publication.asset, publication.run, "ok", publication.bytes, publication.sha256Prefix)
+    var page = this
+    var publish = function () {
+      if (page.pendingPublication !== publication || page.lifecycleEpoch !== publication.epoch ||
+        page.activeMapOperationID !== publication.operationID) return
+      page.pendingPublication = null
+      if (!page.releaseMapOperation(publication.operationID)) return
+      page.sendAssetResult(publication.asset, publication.run, "ok", publication.bytes, publication.sha256Prefix)
+    }
+    if (priorMap && priorMap.uri !== publication.uri) {
+      var retiredURI = priorMap.uri
+      this.retiredMapURI = retiredURI
+      var finishRetirement = function (deleted) {
+        if (deleted && page.retiredMapURI === retiredURI) page.retiredMapURI = ""
+        publish()
+      }
+      if (!this.scheduleDelete(retiredURI, function () { finishRetirement(true) }, function () {
+        finishRetirement(false)
+      })) return
+      return
+    }
+    publish()
   },
 
   mapError(token) {
     var publication = this.pendingPublication
     if (!publication || token !== publication.token || this.lifecycleEpoch !== publication.epoch ||
-      this.activeMapOperationID !== publication.operationID) return
-    this.pendingPublication = null
-    if (!this.releaseMapOperation(publication.operationID)) return
-    this.unconfirmedURI = ""
-    this.unconfirmedTouched = false
+      this.activeMapOperationID !== publication.operationID || publication.cleanupStarted) return
+    publication.cleanupStarted = true
     if (this.confirmedMap) {
       this.mapPath = this.confirmedMap.uri
       this.mapHashPrefix = this.confirmedMap.sha256Prefix
@@ -760,11 +794,20 @@ export default {
     }
     this.showDiagnostics = true
     this.logText = "Map image display failed."
-    this.deleteBestEffort(publication.uri)
-    this.sendAssetResult(
-      publication.asset, publication.run, "error", publication.bytes,
-      publication.sha256Prefix, "ASSET_RENDER"
-    )
+    var page = this
+    var publish = function () {
+      if (page.pendingPublication !== publication || page.lifecycleEpoch !== publication.epoch ||
+        page.activeMapOperationID !== publication.operationID) return
+      page.pendingPublication = null
+      page.unconfirmedURI = ""
+      page.unconfirmedTouched = false
+      if (!page.releaseMapOperation(publication.operationID)) return
+      page.sendAssetResult(
+        publication.asset, publication.run, "error", publication.bytes,
+        publication.sha256Prefix, "ASSET_RENDER"
+      )
+    }
+    this.scheduleDelete(publication.uri, publish, publish)
   }
 }
 </script>

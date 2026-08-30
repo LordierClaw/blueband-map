@@ -6,6 +6,7 @@ import test from "node:test"
 const ASSET = "m1-054edec1d0211f62"
 const ASSET_B = "m1-fedcba9876543210"
 const URI = `internal://files/${ASSET}.png`
+const URI_B = `internal://files/${ASSET_B}.png`
 const DIGEST = "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8"
 const RUN = "run-0123456789abcdef"
 const RUN_B = "run-fedcba9876543210"
@@ -398,13 +399,25 @@ test("connection unlock does not release a held map operation", async () => {
   assert.equal(page.activeMapOperationID, "")
 })
 
-test("reports ASSET_RENDER only when image rendering fails and consumes lifecycle once", async () => {
-  const { page, sent, file } = await pendingPublicationHarness()
+test("render failure publishes only after URI cleanup and permits immediate same-asset retry", async () => {
+  const file = memoryFile()
+  const heldDeletes = []
+  file.delete = options => { heldDeletes.push(options) }
+  const { page, sent } = await pendingPublicationHarness(file)
   assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
   const token = pendingToken(page)
   page.mapError(token)
-  const results = sent.filter(message => message.topic === "map.asset.result")
   assert.equal(page.mapReady, false)
+  assert.equal(page.activeMapOperationID, "end-1")
+  assert.equal(page.pendingPublication.token, token)
+  assert.deepEqual(page.pendingDeleteURIs, [URI])
+  assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
+  page.mapError(token)
+  assert.equal(heldDeletes.length, 1)
+
+  file.storage.delete(URI)
+  heldDeletes[0].success()
+  const results = sent.filter(message => message.topic === "map.asset.result")
   assert.equal(results.length, 1)
   assert.deepEqual(results[0].body, {
     asset: ASSET,
@@ -414,14 +427,61 @@ test("reports ASSET_RENDER only when image rendering fails and consumes lifecycl
     sha256Prefix: "054edec1",
     code: "ASSET_RENDER"
   })
-  assert.equal(file.deletes.filter(uri => uri === URI).length, 1)
   assert.equal(page.activeMapOperationID, "")
-  page.receiveMessage({ data: envelope("begin-b", "map.asset.begin", beginBody({ asset: ASSET_B, bytes: 4 })) })
-  assert.equal(page.activeTransfer.asset, ASSET_B)
+  assert.equal(page.pendingPublication, null)
+  assert.deepEqual(page.pendingDeleteURIs, [])
+
+  page.receiveMessage({ data: envelope("begin-retry", "map.asset.begin", beginBody({ bytes: 4 })) })
+  assert.equal(page.activeTransfer.asset, ASSET)
+  assert.equal(sent.at(-1).id, "begin-retry")
+  heldDeletes[0].success()
+  heldDeletes[0].fail?.()
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 1)
+})
+
+test("render cleanup failure and duplicate callbacks release and publish exactly once", async () => {
+  const file = memoryFile()
+  const heldDeletes = []
+  file.delete = options => { heldDeletes.push(options) }
+  const { page, sent } = await pendingPublicationHarness(file)
+  const token = pendingToken(page)
+  page.mapError(token)
+  assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
+
+  heldDeletes[0].fail()
+  assert.equal(sent.filter(message => message.body?.code === "ASSET_RENDER").length, 1)
+  assert.equal(page.activeMapOperationID, "")
+  assert.equal(page.pendingPublication, null)
+  assert.deepEqual(page.pendingDeleteURIs, [])
+  heldDeletes[0].fail()
+  heldDeletes[0].success()
   page.mapError(token)
   page.mapComplete(token)
-  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 1)
-  assert.equal(file.deletes.filter(uri => uri === URI).length, 1)
+  assert.equal(sent.filter(message => message.body?.code === "ASSET_RENDER").length, 1)
+})
+
+test("render cleanup callback after lifecycle reset is inert and consumed once", async () => {
+  const file = memoryFile()
+  const heldDeletes = []
+  file.delete = options => { heldDeletes.push(options) }
+  const { page, sent } = await pendingPublicationHarness(file)
+  page.mapError(pendingToken(page))
+  assert.equal(heldDeletes.length, 1)
+  page.lock("IOS LINK CLOSED")
+  assert.equal(page.activeMapOperationID, "")
+  assert.equal(page.pendingPublication, null)
+
+  file.storage.delete(URI)
+  heldDeletes[0].success()
+  heldDeletes[0].success()
+  heldDeletes[0].fail?.()
+  assert.equal(sent.some(message => message.body?.code === "ASSET_RENDER"), false)
+  assert.deepEqual(page.pendingDeleteURIs, [])
+
+  page.unlock()
+  page.receiveMessage({ data: envelope("fresh-after-stale-cleanup", "map.asset.begin", beginBody({ bytes: 4 })) })
+  assert.equal(page.activeTransfer.asset, ASSET)
+  assert.equal(sent.at(-1).id, "fresh-after-stale-cleanup")
 })
 
 test("lock and destroy discard pending render publication", async () => {
@@ -733,6 +793,89 @@ test("confirmed map survives lifecycle reset while an unconfirmed map is hidden 
   assert.equal(unconfirmed.file.deletes.filter(uri => uri === URI).length, 1)
 })
 
+test("different-asset publication deletes prior map before advertising success", async () => {
+  const file = memoryFile()
+  const { page, sent } = await pendingPublicationHarness(file)
+  page.mapComplete(pendingToken(page))
+  const resultCount = sent.filter(message => message.topic === "map.asset.result").length
+  const heldDeletes = []
+  file.delete = options => { heldDeletes.push(options) }
+
+  page.receiveMessage({ data: envelope("begin-b", "map.asset.begin", beginBody({ asset: ASSET_B, bytes: 4 })) })
+  page.receiveMessage({
+    data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET_B, offset: 0, data: "AAECAw==" })
+  })
+  page.receiveMessage({ data: envelope("end-b", "map.asset.end", { asset: ASSET_B }) })
+  page.mapComplete(pendingToken(page))
+
+  assert.equal(page.confirmedMap.uri, URI_B)
+  assert.equal(page.mapPath, URI_B)
+  assert.equal(page.activeMapOperationID, "end-b")
+  assert.equal(heldDeletes.length, 1)
+  assert.equal(heldDeletes[0].uri, URI)
+  assert.deepEqual(page.pendingDeleteURIs, [URI])
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
+
+  file.storage.delete(URI)
+  heldDeletes[0].success()
+  const results = sent.filter(message => message.topic === "map.asset.result")
+  assert.equal(results.length, resultCount + 1)
+  assert.equal(results.at(-1).body.asset, ASSET_B)
+  assert.equal(results.at(-1).body.status, "ok")
+  assert.equal(page.activeMapOperationID, "")
+  assert.equal(page.retiredMapURI, "")
+  heldDeletes[0].success()
+  heldDeletes[0].fail?.()
+  assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount + 1)
+
+  page.receiveMessage({ data: envelope("begin-a-again", "map.asset.begin", beginBody({ bytes: 4 })) })
+  assert.equal(page.activeTransfer.asset, ASSET)
+  assert.equal(sent.at(-1).id, "begin-a-again")
+})
+
+test("failed prior-map deletion stays tracked and is serialized before the next begin", async () => {
+  const file = memoryFile()
+  const { page, sent } = await pendingPublicationHarness(file)
+  page.mapComplete(pendingToken(page))
+  const heldDeletes = []
+  file.delete = options => { heldDeletes.push(options) }
+
+  page.receiveMessage({ data: envelope("begin-b", "map.asset.begin", beginBody({ asset: ASSET_B, bytes: 4 })) })
+  page.receiveMessage({
+    data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET_B, offset: 0, data: "AAECAw==" })
+  })
+  page.receiveMessage({ data: envelope("end-b", "map.asset.end", { asset: ASSET_B }) })
+  page.mapComplete(pendingToken(page))
+  heldDeletes[0].fail()
+
+  const bResults = sent.filter(message => message.topic === "map.asset.result" && message.body.asset === ASSET_B)
+  assert.equal(bResults.length, 1)
+  assert.equal(bResults[0].body.status, "ok")
+  assert.equal(page.confirmedMap.uri, URI_B)
+  assert.equal(page.retiredMapURI, URI)
+  assert.deepEqual(page.pendingDeleteURIs, [])
+  heldDeletes[0].fail()
+  heldDeletes[0].success()
+  assert.equal(sent.filter(message => message.topic === "map.asset.result" && message.body.asset === ASSET_B).length, 1)
+  assert.equal(page.retiredMapURI, URI)
+
+  page.receiveMessage({ data: envelope("begin-a-retry", "map.asset.begin", beginBody({ bytes: 4 })) })
+  assert.equal(heldDeletes.length, 2)
+  assert.equal(heldDeletes[1].uri, URI)
+  assert.equal(page.activeMapOperationID, "begin-a-retry")
+  assert.equal(page.activeTransfer, null)
+  assert.equal(sent.some(message => message.body?.code === "ASSET_BUSY"), false)
+
+  file.storage.delete(URI)
+  heldDeletes[1].success()
+  assert.equal(page.retiredMapURI, "")
+  assert.equal(page.activeTransfer.asset, ASSET)
+  assert.equal(sent.at(-1).id, "begin-a-retry")
+  heldDeletes[1].success()
+  heldDeletes[1].fail?.()
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "begin-a-retry").length, 1)
+})
+
 test("handled failures ACK once, deduplicate result side effects, and bound adversarial result envelopes", async () => {
   const { page, sent } = await readyHarness()
   const invalidAssets = ["x".repeat(220), "地図".repeat(40), "m1-0123456789abcdeG"]
@@ -800,6 +943,13 @@ test("same-asset replacement keeps deletion ownership across lifecycle reset", a
   assert.equal(file.accesses.length, accessCount + 2)
   assert.equal(page.activeTransfer.asset, ASSET)
   assert.equal(sent.at(-1).id, "replace-allowed")
+  page.receiveMessage({ data: envelope("replace-chunk", "map.asset.chunk", {
+    asset: ASSET, offset: 0, data: "AAECAw=="
+  }) })
+  page.receiveMessage({ data: envelope("replace-end", "map.asset.end", { asset: ASSET }) })
+  page.mapComplete(pendingToken(page))
+  assert.equal(heldDeletes.length, 1, "publishing the same URI must not delete the current map")
+  assert.equal(page.confirmedMap.uri, URI)
 })
 
 test("delayed best-effort cleanup blocks same URI retry until callback completion", async () => {
