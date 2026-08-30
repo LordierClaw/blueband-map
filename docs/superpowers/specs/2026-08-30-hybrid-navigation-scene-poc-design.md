@@ -1,6 +1,6 @@
 # BlueBand Map Hybrid Navigation Scene POC Design
 
-**Status:** Approved in conversation on 2026-08-30; revised delivery batching awaiting owner review
+**Status:** Approved in conversation on 2026-08-30, including the two-batch delivery revision
 
 **Target hardware acceptance:** iPhone 13 Pro Max, iOS 26, Xiaomi Smart Band 10 with the firmware installed at test time
 
@@ -207,7 +207,7 @@ In benchmark mode, a vector reject or render failure ends that run. It does not 
 
 Detailed telemetry is collected on the iPhone. The Band keeps only bounded counters and timestamps in memory and sends one summary at completion or failure. It does not append per-chunk logs or update progress UI for every chunk.
 
-Ignored local runs use the fixed layout:
+On iPhone, runs are written under the app's Application Support `test-runs` directory. A selected run is exported as a sanitized bundle through the iOS share sheet. After the owner returns that export, the developer imports it into the Git-ignored workspace path below:
 
 ```text
 local/test-runs/<timestamp>-<run-id>-<renderer>/
