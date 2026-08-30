@@ -213,7 +213,8 @@ test("H1 vector reads BBMV once, publishes native segments, and sends one aggreg
   assert.equal(page.mapToken, "")
   assert.equal(page.activeMapOperationID, "")
   assert.equal(sent.filter(message => message.topic === "render.result").length, 1)
-  assert.equal(sent.find(message => message.topic === "render.result").body.success, true)
+  assert.equal(sent.find(message => message.topic === "render.result").body.status, "ok")
+  assert.equal(sent.find(message => message.topic === "render.result").body.success, undefined)
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 0)
 })
 
@@ -264,7 +265,8 @@ test("H1 vector read failure releases the transfer with a stable aggregate error
   page.receiveMessage({ data: envelope("vector-end", "map.asset.end", { asset: VECTOR_ASSET, run: RUN }) })
   reads[0].fail()
   const result = sent.find(message => message.topic === "render.result")
-  assert.equal(result.body.success, false)
+  assert.equal(result.body.status, "error")
+  assert.equal(result.body.success, undefined)
   assert.equal(result.body.errorCode, "ASSET_VECTOR_READ_FAILED")
   assert.equal(page.activeMapOperationID, "")
   assert.equal(page.preparedRender, null)
@@ -292,7 +294,8 @@ test("H1 raster uses native image completion but publishes render.result", async
   assert.equal(page.mapToken, page.pendingPublication.token)
   page.mapComplete(page.mapToken)
   const result = sent.find(message => message.topic === "render.result")
-  assert.equal(result.body.success, true)
+  assert.equal(result.body.status, "ok")
+  assert.equal(result.body.success, undefined)
   assert.equal(result.body.renderer, "raster")
   assert.equal(result.body.runId, RUN)
   assert.equal(result.body.sceneId, prepare.sceneId)
@@ -342,7 +345,7 @@ test("H1 renderer replacement retires the previous vector file and leaves one re
   assert.equal(page.vectorReady, false)
   assert.equal(page.mapToken, page.confirmedMap.token)
   assert.ok(file.deletes.includes(`internal://files/${VECTOR_ASSET}.bbmv`))
-  assert.equal(sent.filter(message => message.topic === "render.result" && message.body.success).length, 2)
+  assert.equal(sent.filter(message => message.topic === "render.result" && message.body.status === "ok").length, 2)
 })
 
 test("rejects missing invalid or changed map run correlation", async () => {

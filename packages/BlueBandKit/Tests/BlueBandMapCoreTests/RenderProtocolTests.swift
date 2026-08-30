@@ -56,8 +56,17 @@ final class RenderProtocolTests: XCTestCase {
             validateMilliseconds: 2,
             renderMilliseconds: 4
         )
-        XCTAssertEqual(result.jsonBody()["success"], .bool(true))
-        XCTAssertEqual(result.jsonBody()["renderMs"], .number(4))
+        XCTAssertEqual(result.jsonBody(), [
+            "runId": .string(runID),
+            "sceneId": .string(sceneID),
+            "renderer": .string("vector"),
+            "formatVersion": .number(1),
+            "status": .string("ok"),
+            "bytes": .number(128),
+            "primitives": .number(8),
+            "validateMs": .number(2),
+            "renderMs": .number(4),
+        ])
     }
 
     func testRejectCodesAndProtocolTopicsAreStable() {

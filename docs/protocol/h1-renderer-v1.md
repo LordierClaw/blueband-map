@@ -36,7 +36,7 @@ These are application-envelope topics. They do not modify the Xiaomi wire protoc
 
 `render.reject` (Band → iPhone) contains only `runId`, `sceneId`, and one stable `code` from the seven-code rejection set in ADR 0009. It is sent before any payload allocation or asset begin.
 
-`render.result` (Band → iPhone) contains `runId`, `sceneId`, `renderer`, `formatVersion`, `success`, `bytes`, `primitives`, `prepareMs`, `validateMs`, `renderMs`, and `sha256Prefix`. Failed results may add one bounded `errorCode` with the `ASSET_` prefix. The Band sends one aggregate result rather than per-chunk logs:
+`render.result` (Band → iPhone) contains `runId`, `sceneId`, `renderer`, `formatVersion`, `status`, `bytes`, `primitives`, `prepareMs`, `validateMs`, `renderMs`, and `sha256Prefix`. `status` is exactly the string `"ok"` or `"error"`; a JSON Boolean `success` is not part of v1. Failed results may add one bounded `errorCode` with the `ASSET_` prefix. The Band sends one aggregate result rather than per-chunk logs:
 
 ```json
 {
@@ -44,7 +44,7 @@ These are application-envelope topics. They do not modify the Xiaomi wire protoc
   "sceneId": "scene-...",
   "renderer": "raster|vector",
   "formatVersion": 1,
-  "success": true,
+  "status": "ok",
   "bytes": 1234,
   "primitives": 0,
   "prepareMs": 4,
@@ -55,6 +55,8 @@ These are application-envelope topics. They do not modify the Xiaomi wire protoc
 ```
 
 `render.result` is emitted only after the Band has completed its native publication/cleanup path. A vector failure is terminal for that run; it must not be converted into a raster result.
+
+The bounded status string is intentional at the Vela native interconnect boundary. [Xiaomi's interconnect documentation](https://iot.mi.com/vela/quickapp/en/features/network/interconnect.html) exercises string and number fields, while the device callback crosses a native bridge. Keeping result state string-valued also matches the hardware-proven M1 result convention. Automated fakes must not infer Boolean support merely because JavaScript preserves it in-process.
 
 ## Transfer
 

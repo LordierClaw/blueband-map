@@ -42,3 +42,9 @@ The result is emitted only after the Band's publication and cleanup callback has
 This decision preserves every verified Xiaomi BLE, SPP, authentication, encryption, ThirdPartyApp, and transport-ACK byte. It changes only application topics and payload contracts. Existing cleanup, deduplication, disconnect invalidation, and acknowledged delivery behavior remain required invariants.
 
 The 64 KiB ceiling is a test limit, not a measured Band maximum. H1 automated tests prove serialization, bounds, and ordering only. Compilation and deterministic tests do not prove Smart Band 10 hardware support; hardware runs must measure readiness, transfer, render, readability, hangs, and disconnect recovery.
+
+## 2026-08-30 amendment: bridge-safe result state
+
+`render.result` carries `status: "ok" | "error"` and never a JSON Boolean `success`. Hardware feedback showed both raster and synthetic vector transfers reaching the expected byte/primitive totals before iOS rejected their aggregate result. The only H1-specific result field without prior hardware evidence was the Boolean crossing Vela interconnect; the M1 flow already uses a bounded status string successfully. [Xiaomi's interconnect documentation](https://iot.mi.com/vela/quickapp/en/features/network/interconnect.html) demonstrates string and number object fields but does not establish Boolean preservation across the native callback boundary.
+
+This amendment changes only the H1 application-envelope body. It does not alter Xiaomi BLE/SPP bytes, authentication, encryption, transport ACKs, chunking, or renderer payload formats. Exact Swift and RPK vectors reject the previous Boolean shape. Hardware acceptance remains required to confirm this diagnosis on the current Band firmware.

@@ -41,8 +41,6 @@ git -C "$repository_root" merge-base --is-ancestor "$full_commit" HEAD || {
   echo 'commit must be an ancestor of HEAD' >&2
   exit 2
 }
-short_commit=$(git -C "$repository_root" rev-parse --short=7 "$full_commit")
-
 case "$handoff" in
   /*)
     echo 'handoff path must be repository-relative' >&2
@@ -84,16 +82,18 @@ validate_artifact() {
 validate_artifact ipa "$ipa"
 validate_artifact rpk "$rpk"
 
-destination_parent="$repository_root/artifacts/$poc"
-destination="$destination_parent/$short_commit"
-[ ! -e "$destination" ] || {
-  echo 'destination already exists' >&2
+artifact_root="$repository_root/artifacts"
+destination="$artifact_root/$poc"
+if [ -e "$destination" ] && { [ ! -d "$destination" ] || [ -L "$destination" ]; }; then
+  echo 'artifact destination must be a regular directory' >&2
   exit 2
-}
-mkdir -p "$repository_root/artifacts" "$destination_parent"
-temporary=$(mktemp -d "$repository_root/artifacts/.tmp-${poc}-${short_commit}.XXXXXX")
+fi
+mkdir -p "$artifact_root"
+temporary=$(mktemp -d "$artifact_root/.tmp-${poc}.XXXXXX")
+backup=''
 cleanup() {
   [ -z "${temporary:-}" ] || rm -rf -- "$temporary"
+  [ -z "${backup:-}" ] || rm -rf -- "$backup"
 }
 trap cleanup EXIT
 
@@ -115,9 +115,27 @@ if [ "${#artifact_names[@]}" -gt 0 ]; then
   (cd "$temporary" && sha256sum -c SHA256SUMS)
 fi
 
-mv -- "$temporary" "$destination"
+if [ -d "$destination" ]; then
+  backup=$(mktemp -d "$artifact_root/.old-${poc}.XXXXXX")
+  rmdir -- "$backup"
+  mv -- "$destination" "$backup"
+fi
+if ! mv -- "$temporary" "$destination"; then
+  if [ -n "$backup" ]; then
+    if mv -- "$backup" "$destination"; then
+      backup=''
+    else
+      preserved_backup=$backup
+      backup=''
+      printf 'failed to restore previous bundle; preserved at %s\n' "$preserved_backup" >&2
+    fi
+  fi
+  exit 1
+fi
 temporary=''
-printf 'bundle=artifacts/%s/%s\n' "$poc" "$short_commit"
+[ -z "$backup" ] || rm -rf -- "$backup"
+backup=''
+printf 'bundle=artifacts/%s\n' "$poc"
 for artifact_name in "${artifact_names[@]}"; do
   size=$(stat -c '%s' "$destination/$artifact_name")
   digest=$(sha256sum "$destination/$artifact_name" | awk '{print $1}')

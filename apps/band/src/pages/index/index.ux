@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.2</text>
+      <text class="version">RPK 0.2.3</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.2 • ENV V1</text>
+        <text class="version">RPK 0.2.3 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -1210,7 +1210,7 @@ export default {
       sceneId: renderProtocol.validIdentifier(publication.scene) ? publication.scene : "",
       renderer: publication.renderer === "vector" ? "vector" : "raster",
       formatVersion: publication.formatVersion === 1 ? 1 : 0,
-      success: success === true,
+      status: success === true ? "ok" : "error",
       bytes: safeBytes,
       primitives: safePrimitives,
       prepareMs: safeMilliseconds(start - prepared),

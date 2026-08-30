@@ -245,7 +245,7 @@ public struct RenderResultBody: Equatable, Codable, Sendable {
             "sceneId": .string(sceneID),
             "renderer": .string(renderer.rawValue),
             "formatVersion": .number(Double(formatVersion)),
-            "success": .bool(success),
+            "status": .string(success ? "ok" : "error"),
             "bytes": .number(Double(bytes)),
             "primitives": .number(Double(primitives)),
             "validateMs": .number(Double(validateMilliseconds)),

@@ -19,7 +19,6 @@ git -C "$repo" add scripts/prepare-poc-handoff.sh docs/testing/handoffs/m1.md
 git -C "$repo" commit -qm base
 initial_branch=$(git -C "$repo" branch --show-current)
 full_commit=$(git -C "$repo" rev-parse HEAD)
-short_commit=$(git -C "$repo" rev-parse --short=7 HEAD)
 
 printf 'rpk-fixture-without-secrets\n' >"$sources/blueband.rpk"
 printf 'ipa-fixture-without-secrets\n' >"$sources/blueband.ipa"
@@ -28,7 +27,7 @@ output=$("$repo/scripts/prepare-poc-handoff.sh" \
   --poc m1 --commit "$full_commit" \
   --handoff docs/testing/handoffs/m1.md \
   --ipa "$sources/blueband.ipa" --rpk "$sources/blueband.rpk")
-bundle="$repo/artifacts/m1/$short_commit"
+bundle="$repo/artifacts/m1"
 test -f "$bundle/HANDOFF.md"
 test -f "$bundle/blueband.ipa"
 test -f "$bundle/blueband.rpk"
@@ -37,7 +36,7 @@ cmp -s "$repo/docs/testing/handoffs/m1.md" "$bundle/HANDOFF.md"
 (cd "$bundle" && sha256sum -c SHA256SUMS)
 test "$(sed -n '1p' "$bundle/SHA256SUMS" | awk '{print $2}')" = "blueband.ipa"
 test "$(sed -n '2p' "$bundle/SHA256SUMS" | awk '{print $2}')" = "blueband.rpk"
-grep -q "bundle=artifacts/m1/$short_commit" <<<"$output"
+grep -q "bundle=artifacts/m1" <<<"$output"
 if grep -q 'fixture-without-secrets' <<<"$output"; then
   echo 'packager printed artifact content' >&2
   exit 1
@@ -46,7 +45,7 @@ fi
 "$repo/scripts/prepare-poc-handoff.sh" \
   --poc rpk-only --commit HEAD --handoff docs/testing/handoffs/m1.md \
   --rpk "$sources/blueband.rpk"
-rpk_only_bundle="$repo/artifacts/rpk-only/$short_commit"
+rpk_only_bundle="$repo/artifacts/rpk-only"
 test -f "$rpk_only_bundle/blueband.rpk"
 test ! -e "$rpk_only_bundle/blueband.ipa"
 test "$(wc -l <"$rpk_only_bundle/SHA256SUMS")" -eq 1
@@ -55,7 +54,7 @@ test "$(wc -l <"$rpk_only_bundle/SHA256SUMS")" -eq 1
 "$repo/scripts/prepare-poc-handoff.sh" \
   --poc ipa-only --commit HEAD --handoff docs/testing/handoffs/m1.md \
   --ipa "$sources/blueband.ipa"
-ipa_only_bundle="$repo/artifacts/ipa-only/$short_commit"
+ipa_only_bundle="$repo/artifacts/ipa-only"
 test -f "$ipa_only_bundle/blueband.ipa"
 test ! -e "$ipa_only_bundle/blueband.rpk"
 test "$(wc -l <"$ipa_only_bundle/SHA256SUMS")" -eq 1
@@ -63,20 +62,19 @@ test "$(wc -l <"$ipa_only_bundle/SHA256SUMS")" -eq 1
 
 "$repo/scripts/prepare-poc-handoff.sh" \
   --poc docs-only --commit HEAD --handoff docs/testing/handoffs/m1.md
-docs_only_bundle="$repo/artifacts/docs-only/$short_commit"
+docs_only_bundle="$repo/artifacts/docs-only"
 test -f "$docs_only_bundle/HANDOFF.md"
 test -f "$docs_only_bundle/SHA256SUMS"
 test ! -s "$docs_only_bundle/SHA256SUMS"
 test -z "$(find "$docs_only_bundle" -maxdepth 1 -type f \( -name '*.ipa' -o -name '*.rpk' \) -print -quit)"
 
-set +e
-existing_output=$("$repo/scripts/prepare-poc-handoff.sh" \
+replacement_output=$("$repo/scripts/prepare-poc-handoff.sh" \
   --poc m1 --commit HEAD --handoff docs/testing/handoffs/m1.md \
-  --rpk "$sources/blueband.rpk" 2>&1)
-existing_status=$?
-set -e
-test "$existing_status" -ne 0
-grep -q 'destination already exists' <<<"$existing_output"
+  --rpk "$sources/blueband.rpk")
+test -f "$bundle/blueband.rpk"
+test ! -e "$bundle/blueband.ipa"
+test "$(wc -l <"$bundle/SHA256SUMS")" -eq 1
+grep -q 'bundle=artifacts/m1' <<<"$replacement_output"
 
 printf '\nlocal dirty change\n' >>"$repo/docs/testing/handoffs/m1.md"
 set +e
@@ -105,7 +103,7 @@ for case_name in wrong empty symlink; do
   validation_status=$?
   set -e
   test "$validation_status" -ne 0
-  test ! -e "$repo/artifacts/$case_name/$short_commit"
+  test ! -e "$repo/artifacts/$case_name"
 done
 
 git -C "$repo" checkout -q --orphan unrelated

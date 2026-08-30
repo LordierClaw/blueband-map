@@ -610,7 +610,8 @@ final class H1RenderCoordinator {
               let sceneID = string(body, key: "sceneId"), sceneID == pending.sceneID,
               let renderer = renderKind(body, key: "renderer"),
               let formatVersion = integer(body, key: "formatVersion"),
-              let success = boolean(body, key: "success"),
+              let status = string(body, key: "status"),
+              status == "ok" || status == "error",
               let bytes = integer(body, key: "bytes"),
               let primitives = integer(body, key: "primitives"),
               let renderMilliseconds = integer(body, key: "renderMs"),
@@ -638,7 +639,7 @@ final class H1RenderCoordinator {
             sceneID: sceneID,
             renderer: renderer,
             formatVersion: formatVersion,
-            success: success,
+            success: status == "ok",
             bytes: bytes,
             primitives: primitives,
             renderMilliseconds: renderMilliseconds,
@@ -664,11 +665,6 @@ final class H1RenderCoordinator {
         return Int(value)
     }
 
-    private func boolean(_ body: [String: JSONValue], key: String) -> Bool? {
-        guard case let .bool(value)? = body[key] else { return nil }
-        return value
-    }
-
     private func isSafeCode(_ value: String) -> Bool {
         guard (1...40).contains(value.utf8.count) else { return false }
         return value.utf8.allSatisfy {
@@ -681,13 +677,13 @@ final class H1RenderCoordinator {
         case let error as VietmapStaticMapError:
             switch error {
             case .rateLimited: return "PROVIDER_RATE_LIMITED"
-            case .httpStatus: return "PROVIDER_HTTP"
+            case let .httpStatus(status): return providerHTTPCode(status)
             case .wrongContentType: return "PROVIDER_MIME"
             case .invalidRequest, .missingServiceKey: return "PROVIDER_REQUEST"
             }
         case let error as VietmapStyleError:
             switch error {
-            case .httpStatus: return "PROVIDER_HTTP"
+            case let .httpStatus(status): return providerHTTPCode(status)
             case .wrongContentType: return "PROVIDER_MIME"
             case .missingTileMapKey: return "TILEMAP_KEY_MISSING"
             case .invalidJSON, .missingTiles, .noRoadLayers: return "PROVIDER_DATA"
@@ -695,7 +691,7 @@ final class H1RenderCoordinator {
             }
         case let error as H1AssetFactory.Error:
             switch error {
-            case .tileHTTPStatus: return "PROVIDER_HTTP"
+            case let .tileHTTPStatus(status): return providerHTTPCode(status)
             case .tileWrongContentType: return "PROVIDER_MIME"
             case .missingTileMapConfiguration: return "TILEMAP_KEY_MISSING"
             case .tileEmpty, .tileHasNoRoads: return "PROVIDER_DATA"
@@ -707,6 +703,10 @@ final class H1RenderCoordinator {
         default:
             return "PROVIDER_REQUEST"
         }
+    }
+
+    private func providerHTTPCode(_ status: Int) -> String {
+        (100...599).contains(status) ? "PROVIDER_HTTP_\(status)" : "PROVIDER_HTTP"
     }
 
     private func transferCode(for error: Swift.Error) -> String {

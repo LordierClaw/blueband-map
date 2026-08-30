@@ -20,6 +20,23 @@ final class H1RenderCoordinatorTests: XCTestCase {
         XCTAssertEqual(H1TestMode.vectorSynthetic40.expectedPrimitives, 40)
     }
 
+    func testProviderHTTPStatusIsPreservedWithoutProviderBodyOrKey() async {
+        let sender = H1TestSender()
+        let coordinator = H1RenderCoordinator(
+            session: sender,
+            assetProvider: { _, _, _ in throw VietmapStyleError.httpStatus(403) },
+            resultTimeout: .seconds(10),
+            runIDGenerator: { "h1-run-000000000001" },
+            sceneIDGenerator: { "scene-000000000001" }
+        )
+
+        await coordinator.start(mode: .vectorVietmap, tileMapKey: "not-exported")
+
+        XCTAssertEqual(coordinator.state, .failed(mode: .vectorVietmap, code: "PROVIDER_HTTP_403"))
+        let startedCount = await sender.startedCount
+        XCTAssertEqual(startedCount, 0)
+    }
+
     func testReadyBeforePrepareACKIsBufferedAndTransferRemainsStopAndWait() async throws {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: try makeAsset(kind: .vector))
@@ -69,6 +86,10 @@ final class H1RenderCoordinatorTests: XCTestCase {
         for index in 0..<plan.count {
             await waitUntil { await sender.startedCount == index + 2 }
             if index == plan.count - 1 {
+                coordinator.consume(legacyBooleanResultEnvelope(
+                    runID: run1, sceneID: scene1, renderer: "vector",
+                    bytes: asset.byteCount, primitives: asset.primitives
+                ))
                 coordinator.consume(resultEnvelope(
                     runID: run1, sceneID: scene1, renderer: "vector", success: true,
                     bytes: asset.byteCount, primitives: asset.primitives
@@ -158,7 +179,21 @@ final class H1RenderCoordinatorTests: XCTestCase {
     ) -> ApplicationEnvelope {
         .message(id: "band-result", source: .band, topic: "render.result", body: [
             "runId": .string(runID), "sceneId": .string(sceneID), "renderer": .string(renderer),
-            "formatVersion": .number(1), "success": .bool(success), "bytes": .number(Double(bytes)),
+            "formatVersion": .number(1), "status": .string(success ? "ok" : "error"), "bytes": .number(Double(bytes)),
+            "primitives": .number(Double(primitives)), "renderMs": .number(2),
+        ])
+    }
+
+    private func legacyBooleanResultEnvelope(
+        runID: String,
+        sceneID: String,
+        renderer: String,
+        bytes: Int,
+        primitives: Int
+    ) -> ApplicationEnvelope {
+        .message(id: "legacy-band-result", source: .band, topic: "render.result", body: [
+            "runId": .string(runID), "sceneId": .string(sceneID), "renderer": .string(renderer),
+            "formatVersion": .number(1), "success": .bool(false), "bytes": .number(Double(bytes)),
             "primitives": .number(Double(primitives)), "renderMs": .number(2),
         ])
     }

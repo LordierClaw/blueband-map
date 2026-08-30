@@ -51,7 +51,7 @@ const expectedFeatures = [
   { name: "system.crypto" }
 ]
 if (manifest.package !== "dev.lordierclaw.bluebandmap.band" || manifest.icon !== "/common/icon.png" ||
-    manifest.versionName !== "0.2.2" || manifest.versionCode !== 4 || manifest.config.designWidth !== 212 ||
+    manifest.versionName !== "0.2.3" || manifest.versionCode !== 5 || manifest.config.designWidth !== 212 ||
     JSON.stringify(manifest.features) !== JSON.stringify(expectedFeatures)) {
   throw new Error("compiled manifest does not match Band 10 bundle contract")
 }

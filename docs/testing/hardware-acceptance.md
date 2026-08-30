@@ -52,10 +52,12 @@ The developer supplies:
 
 Every POC ends with both:
 
-- a committed record at `docs/testing/handoffs/<poc>-<short-commit>.md`; and
-- an ignored local bundle at `artifacts/<poc>/<short-commit>/` containing `HANDOFF.md`, `SHA256SUMS` and every IPA/RPK that actually exists.
+- a committed record under `docs/testing/handoffs/`; and
+- one ignored latest bundle at `artifacts/<poc>/` containing `HANDOFF.md`, `SHA256SUMS` and every IPA/RPK from the same build that actually exists.
 
-The handoff summarizes completed work, lists numbered owner test steps and reports the exact path, size and SHA-256 of each available IPA/RPK. A missing artifact must be written as `Không có` with its build boundary; a nonexistent path or fabricated hash is forbidden. Run `scripts/prepare-poc-handoff.sh` to create the local bundle. The bundle identifies artifacts but never upgrades automated evidence to `PASS-HW`.
+The handoff summarizes completed work, lists numbered owner test steps and reports the exact path, size and SHA-256 of each available IPA/RPK. A missing artifact must be written as `Không có` with its build boundary; a nonexistent path or fabricated hash is forbidden. Run `scripts/prepare-poc-handoff.sh` to publish a staged replacement of the local latest bundle. The directory is never split by commit hash and must not retain stale artifacts from the previous build. The bundle identifies artifacts but never upgrades automated evidence to `PASS-HW`.
+
+Rebuilding alone does not require a version bump. Bump and replace only an artifact whose source or packaged content changed; the handoff must explicitly list which installed files the tester needs to update. If both IPA and RPK changed, both are bumped and replaced together.
 
 The tester returns one status:
 
@@ -126,6 +128,13 @@ Run these with a controlled fixture build and redacted diagnostics. Do not use a
 | Ambiguous transfer failure recovery | Force an iOS-local send/ACK failure after Band may own the transfer, then press M1 before and after a full disconnect/reconnect cycle. | The first retry reports `TRANSFER_RECONNECT_REQUIRED`, remains disabled in UI, and makes zero provider calls. After reconnect, one explicit press makes exactly one provider call. | Not run |
 | Result timeout and recovery | ACK every transfer step but withhold the Band render result through the bounded wait; press M1, then complete a disconnect/reconnect cycle and press again. | The run becomes `ASSET_RESULT_TIMEOUT`; no automatic retry occurs. The pre-reconnect press reports `TRANSFER_RECONNECT_REQUIRED` with zero provider calls. The post-reconnect press owns a new run and makes exactly one provider call. | Not run |
 | Redirect rejection and call budget | Point the controlled provider fixture at one HTTPS redirect response and press M1 once. | The iOS transport does not follow the redirect, buffers no oversized response, reports a bounded provider failure, and observes exactly one provider request with no retry. | Not run |
+
+### H1 result bridge acceptance cases
+
+| Case | Procedure | Expected result | Result |
+|---|---|---|---|
+| Bridge-safe aggregate result | Clean-install the current IPA and RPK, reconnect, then run raster static, raster indexed, and synthetic vector 8 in separate sessions. Export each sanitized H1 log. | Every transferred result contains string `status` equal to `ok` or `error`; no result contains Boolean `success`. A successful publication reaches `displayed` rather than `ASSET_RESULT_INVALID`. | Not run |
+| Stale result schema | With a controlled fixture, inject a current-run `render.result` containing Boolean `success` and no string `status`, then send the valid status-string result. | iOS ignores the stale schema and closes the run only from the exact status-string result. | Not run |
 
 ### Road-test safety
 
