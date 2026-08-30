@@ -18,6 +18,7 @@ final class HTTPTransportTests: XCTestCase {
         let lastRequest = await transport.lastRequest()
 
         XCTAssertEqual(lastRequest, request)
+        XCTAssertEqual(lastRequest?.maximumResponseBytes, MapAsset.maximumPNGBytes)
         XCTAssertEqual(response.statusCode, 200)
         XCTAssertEqual(response.header(named: "Content-Type"), "image/png")
     }

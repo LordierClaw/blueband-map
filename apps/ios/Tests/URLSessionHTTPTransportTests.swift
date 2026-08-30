@@ -118,6 +118,27 @@ final class URLSessionHTTPTransportTests: XCTestCase {
         }
     }
 
+    func testUsesRequestSpecificResponseCap() async {
+        M1URLProtocol.handler = { protocolInstance in
+            protocolInstance.respond(status: 200, headers: ["Content-Type": "application/json"])
+            protocolInstance.load(Data(repeating: 0, count: 65))
+            protocolInstance.finish()
+        }
+        let transport = URLSessionHTTPTransport(protocolClasses: [M1URLProtocol.self])
+        do {
+            _ = try await transport.execute(MapHTTPRequest(
+                method: "GET",
+                url: URL(string: "https://maps.example/style.json")!,
+                headers: [:],
+                body: Data(),
+                maximumResponseBytes: 64
+            ))
+            XCTFail("Expected request-specific cap rejection")
+        } catch {
+            XCTAssertEqual(error as? URLSessionHTTPTransport.Error, .responseTooLarge)
+        }
+    }
+
     private func request() -> MapHTTPRequest {
         MapHTTPRequest(
             method: "GET",

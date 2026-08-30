@@ -45,7 +45,7 @@ final class URLSessionHTTPTransport: MapHTTPTransport, @unchecked Sendable {
             urlRequest.setValue(value, forHTTPHeaderField: name)
         }
 
-        let delegate = StreamingRequestDelegate(maximumBodyBytes: MapAsset.maximumPNGBytes)
+        let delegate = StreamingRequestDelegate(maximumBodyBytes: request.maximumResponseBytes)
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1
         let session = URLSession(

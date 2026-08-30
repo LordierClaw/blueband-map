@@ -5,12 +5,20 @@ public struct MapHTTPRequest: Equatable, Sendable {
     public let url: URL
     public let headers: [String: String]
     public let body: Data
+    public let maximumResponseBytes: Int
 
-    public init(method: String, url: URL, headers: [String: String], body: Data) {
+    public init(
+        method: String,
+        url: URL,
+        headers: [String: String],
+        body: Data,
+        maximumResponseBytes: Int = MapAsset.maximumPNGBytes
+    ) {
         self.method = method
         self.url = url
         self.headers = headers
         self.body = body
+        self.maximumResponseBytes = maximumResponseBytes
     }
 }
 

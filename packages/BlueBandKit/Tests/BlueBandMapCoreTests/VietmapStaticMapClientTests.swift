@@ -43,6 +43,7 @@ final class VietmapStaticMapClientTests: XCTestCase {
         XCTAssertEqual(sent.method, "POST")
         XCTAssertEqual(sent.url.absoluteString, "https://maps.vietmap.vn/api/maps/statics/tm")
         XCTAssertEqual(sent.headers, ["Content-Type": "multipart/form-data; boundary=blueband-boundary"])
+        XCTAssertEqual(sent.maximumResponseBytes, 64 * 1_024)
         XCTAssertEqual(String(decoding: sent.body, as: UTF8.self), expectedBody)
         XCTAssertEqual(asset.data, png)
         XCTAssertEqual(asset.mimeType, "image/png")

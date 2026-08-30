@@ -86,7 +86,8 @@ public struct VietmapStaticMapClient: StaticMapProviding, Sendable {
             method: "POST",
             url: URL(string: "https://maps.vietmap.vn/api/maps/statics/tm")!,
             headers: ["Content-Type": "multipart/form-data; boundary=\(boundary)"],
-            body: multipart(fields)
+            body: multipart(fields),
+            maximumResponseBytes: 64 * 1_024
         )
 
         let response = try await transport.execute(httpRequest)
