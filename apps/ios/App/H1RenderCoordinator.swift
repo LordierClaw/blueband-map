@@ -117,8 +117,8 @@ final class H1RenderCoordinator {
         assetProvider: @escaping H1AssetProvider,
         clock: any BlueBandClock = ContinuousBlueBandClock(),
         resultTimeout: Duration = .seconds(15),
-        runIDGenerator: @escaping @Sendable () -> String = H1RenderCoordinator.makeRunID,
-        sceneIDGenerator: @escaping @Sendable () -> String = H1RenderCoordinator.makeSceneID
+        runIDGenerator: @escaping @Sendable () -> String = { H1RenderCoordinator.makeRunID() },
+        sceneIDGenerator: @escaping @Sendable () -> String = { H1RenderCoordinator.makeSceneID() }
     ) {
         self.session = session
         self.assetProvider = assetProvider
@@ -335,7 +335,9 @@ final class H1RenderCoordinator {
         guard ownsLive(token), var waiting = pending, waiting.token == token else { return }
         waiting.phase = .waitingForBand
         pending = waiting
-        runContext?.transferMilliseconds = max(0, Self.nowMilliseconds() - (runContext?.transferStartedMilliseconds ?? Self.nowMilliseconds()))
+        let now = Self.nowMilliseconds()
+        let transferStarted = runContext?.transferStartedMilliseconds ?? now
+        runContext?.transferMilliseconds = max(0, now - transferStarted)
         state = .waitingForBand(mode: mode, runID: runID, sceneID: sceneID)
         recordEvent("transfer-complete")
 
@@ -699,27 +701,27 @@ final class H1RenderCoordinator {
             case .tileEmpty, .tileHasNoRoads: return "PROVIDER_DATA"
             }
         case is CancellationError:
-            "TRANSFER_CANCELLED"
+            return "TRANSFER_CANCELLED"
         case is RenderAsset.Error, is MapAsset.Error, is RenderTransferPlan.Error:
-            "ASSET_INVALID"
+            return "ASSET_INVALID"
         default:
-            "PROVIDER_REQUEST"
+            return "PROVIDER_REQUEST"
         }
     }
 
     private func transferCode(for error: Swift.Error) -> String {
         switch error {
         case is CancellationError:
-            "TRANSFER_CANCELLED"
+            return "TRANSFER_CANCELLED"
         case InterconnectDeliveryError.timeout:
-            "TRANSFER_TIMEOUT"
+            return "TRANSFER_TIMEOUT"
         case InterconnectDeliveryError.disconnected,
              BandSessionError.disconnected,
              BandSessionError.notConnected,
              InterconnectSession.Error.notReady:
-            "TRANSFER_DISCONNECTED"
+            return "TRANSFER_DISCONNECTED"
         default:
-            "TRANSFER_FAILED"
+            return "TRANSFER_FAILED"
         }
     }
 
