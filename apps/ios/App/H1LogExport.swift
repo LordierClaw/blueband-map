@@ -19,7 +19,10 @@ struct H1LogExportLink: View {
     let url: URL
 
     var body: some View {
-        ShareLink(item: H1LogExport(url: url)) {
+        ShareLink(
+            item: H1LogExport(url: url),
+            preview: SharePreview(url.lastPathComponent)
+        ) {
             Text("Export log H1")
         }
     }

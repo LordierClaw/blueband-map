@@ -69,7 +69,8 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(viewSource.contains("if let export = model.lastH1ExportURL"))
         XCTAssertTrue(exportSource.contains("contentType: .json"))
         XCTAssertTrue(exportSource.contains("SentTransferredFile(export.url)"))
-        XCTAssertTrue(exportSource.contains("ShareLink(item: H1LogExport(url: url))"))
+        XCTAssertTrue(exportSource.contains("item: H1LogExport(url: url)"))
+        XCTAssertTrue(exportSource.contains("preview: SharePreview(url.lastPathComponent)"))
         XCTAssertFalse(viewSource.contains("model.exportLastH1Run()"))
         XCTAssertFalse(modelSource.contains("func exportLastH1Run()"))
     }
