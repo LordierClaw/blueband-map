@@ -128,9 +128,9 @@ final class H1RenderCoordinatorTests: XCTestCase {
         return H1RenderCoordinator(
             session: sender,
             assetProvider: { mode, _, _ in await provider.asset(for: mode) },
+            resultTimeout: .seconds(10),
             runIDGenerator: { runSource.next() },
-            sceneIDGenerator: { "scene-000000000001" },
-            resultTimeout: .seconds(10)
+            sceneIDGenerator: { "scene-000000000001" }
         )
     }
 

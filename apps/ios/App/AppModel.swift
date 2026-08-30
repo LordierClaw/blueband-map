@@ -129,7 +129,7 @@ final class AppModel: ObservableObject {
         h1AssetProvider: H1AssetProvider? = nil,
         m1Clock: any BlueBandClock = ContinuousBlueBandClock(),
         m1ResultTimeout: Duration = .seconds(15),
-        m1RunIDGenerator: @escaping @Sendable () -> String = AppModel.makeM1RunID,
+        m1RunIDGenerator: @escaping @Sendable () -> String = { AppModel.makeM1RunID() },
         h1Clock: any BlueBandClock = ContinuousBlueBandClock(),
         h1ResultTimeout: Duration = .seconds(15),
         renderRunStore: FileRenderRunStore = FileRenderRunStore(),

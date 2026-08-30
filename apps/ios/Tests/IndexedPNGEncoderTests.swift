@@ -10,7 +10,12 @@ final class IndexedPNGEncoderTests: XCTestCase {
         let png = try IndexedPNGEncoder.encode(raster)
 
         XCTAssertLessThanOrEqual(png.count, RenderProtocol.maximumPayloadBytes)
-        XCTAssertEqual(try PNGInspector.dimensions(of: png).width, RenderProtocol.viewportWidth)
-        XCTAssertEqual(try PNGInspector.dimensions(of: png).height, RenderProtocol.viewportHeight)
+        let asset = try MapAsset.png(
+            data: png,
+            expectedWidth: RenderProtocol.viewportWidth,
+            expectedHeight: RenderProtocol.viewportHeight
+        )
+        XCTAssertEqual(asset.width, RenderProtocol.viewportWidth)
+        XCTAssertEqual(asset.height, RenderProtocol.viewportHeight)
     }
 }
