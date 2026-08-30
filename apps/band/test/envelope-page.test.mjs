@@ -21,27 +21,13 @@ const VECTOR_FORMAT = "application/vnd.blueband.map-vector-v1"
 
 async function loadPage(connection, file, crypto) {
   const ux = await readFile(new URL("../src/pages/index/index.ux", import.meta.url), "utf8")
-  const protocolSource = await readFile(new URL("../src/common/render-protocol.js", import.meta.url), "utf8")
-  const vectorSource = await readFile(new URL("../src/common/vector-scene.js", import.meta.url), "utf8")
-  const renderProtocol = new Function(
-    protocolSource
-      .replace(/export \{[^}]+\}\n/, "")
-      .replace("export default", "return")
-  )()
-  const vectorScene = new Function(
-    vectorSource
-      .replace(/export \{[^}]+\}\n/, "")
-      .replace("export default", "return")
-  )()
   const script = ux.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/import interconnect from ["']@system\.interconnect["']/, "")
     .replace(/import file from ["']@system\.file["']/, "")
     .replace(/import crypto from ["']@system\.crypto["']/, "")
-    .replace(/import renderProtocol from ["']\.\.\/\.\.\/common\/render-protocol\.js["']/, "")
-    .replace(/import vectorScene from ["']\.\.\/\.\.\/common\/vector-scene\.js["']/, "")
     .replace("export default", "return")
-  const component = new Function("interconnect", "file", "crypto", "renderProtocol", "vectorScene", script)(
-    { instance() { return connection } }, file, crypto, renderProtocol, vectorScene
+  const component = new Function("interconnect", "file", "crypto", script)(
+    { instance() { return connection } }, file, crypto
   )
   const page = structuredClone(component.private)
   for (const [name, value] of Object.entries(component)) if (name !== "private") page[name] = value

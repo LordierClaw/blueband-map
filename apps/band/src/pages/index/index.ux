@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.0</text>
+      <text class="version">RPK 0.2.1</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.0 • ENV V1</text>
+        <text class="version">RPK 0.2.1 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -34,8 +34,255 @@
 import interconnect from "@system.interconnect"
 import file from "@system.file"
 import crypto from "@system.crypto"
-import renderProtocol from "../../common/render-protocol.js"
-import vectorScene from "../../common/vector-scene.js"
+
+// Keep the Band entry self-contained. The Vela page loader is the most fragile
+// part of this POC; importing pure helpers here creates a webpack module graph
+// that is evaluated before the first frame is drawn. These ES5 helpers mirror
+// the tested host-side modules without adding runtime imports to the RPK page.
+var renderProtocolLimits = {
+  envelopeBytes: 512,
+  payloadBytes: 64 * 1024,
+  width: 212,
+  height: 360,
+  maximumPrimitives: 40,
+  formatVersion: 1,
+  maximumIdentifierBytes: 24
+}
+
+function renderProtocolUTF8Length(value) {
+  if (typeof value !== "string") return 0
+  var length = 0
+  for (var index = 0; index < value.length; index += 1) {
+    var code = value.charCodeAt(index)
+    if (code < 128) length += 1
+    else if (code < 2048) length += 2
+    else if (code >= 55296 && code <= 56319 && index + 1 < value.length) {
+      index += 1
+      length += 4
+    } else length += 3
+  }
+  return length
+}
+
+function renderProtocolValidIdentifier(value) {
+  return typeof value === "string" && renderProtocolUTF8Length(value) >= 1 &&
+    renderProtocolUTF8Length(value) <= renderProtocolLimits.maximumIdentifierBytes && /^[\x20-\x7e]+$/.test(value)
+}
+
+function renderProtocolValidSHA256(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
+}
+
+function renderProtocolValidInteger(value) {
+  return typeof value === "number" && isFinite(value) && Math.floor(value) === value
+}
+
+function renderProtocolReject(code) {
+  return { ok: false, code: code }
+}
+
+function renderProtocolValidatePrepare(body, options) {
+  options = options || {}
+  if (options.prepared) return renderProtocolReject("busy")
+  if (!body || typeof body !== "object" || Array.isArray(body)) return renderProtocolReject("unsupportedRenderer")
+  if (body.renderer !== "raster" && body.renderer !== "vector") return renderProtocolReject("unsupportedRenderer")
+  if (body.formatVersion !== renderProtocolLimits.formatVersion) return renderProtocolReject("unsupportedFormatVersion")
+  if ((body.renderer === "raster" && body.format !== "image/png") ||
+    (body.renderer === "vector" && body.format !== "application/vnd.blueband.map-vector-v1")) {
+    return renderProtocolReject("unsupportedFormatVersion")
+  }
+  if (body.width !== renderProtocolLimits.width || body.height !== renderProtocolLimits.height) {
+    return renderProtocolReject("invalidDimensions")
+  }
+  if (!renderProtocolValidInteger(body.bytes) || body.bytes <= 0 || body.bytes > renderProtocolLimits.payloadBytes) {
+    return renderProtocolReject("payloadTooLarge")
+  }
+  if (!renderProtocolValidInteger(body.primitives) || body.primitives < 0 || body.primitives > renderProtocolLimits.maximumPrimitives) {
+    return renderProtocolReject("tooManyPrimitives")
+  }
+  if (!renderProtocolValidIdentifier(body.runId) || !renderProtocolValidIdentifier(body.sceneId) || !renderProtocolValidSHA256(body.sha256)) {
+    return renderProtocolReject("unsupportedFormatVersion")
+  }
+  if (options.availableStorageBytes !== undefined && body.bytes > options.availableStorageBytes) {
+    return renderProtocolReject("insufficientStorage")
+  }
+  return {
+    ok: true,
+    prepared: {
+      runId: body.runId,
+      sceneId: body.sceneId,
+      renderer: body.renderer,
+      format: body.format,
+      formatVersion: body.formatVersion,
+      width: body.width,
+      height: body.height,
+      bytes: body.bytes,
+      sha256: body.sha256,
+      primitives: body.primitives
+    }
+  }
+}
+
+function renderProtocolValidateAssetBegin(body, prepared) {
+  if (!prepared) return renderProtocolReject("notPrepared")
+  if (!body || typeof body !== "object" ||
+    body.run !== prepared.runId || body.scene !== prepared.sceneId ||
+    body.renderer !== prepared.renderer || body.formatVersion !== prepared.formatVersion ||
+    body.width !== prepared.width || body.height !== prepared.height ||
+    body.bytes !== prepared.bytes || body.sha256 !== prepared.sha256 ||
+    body.primitives !== prepared.primitives || body.format !== prepared.format) {
+    return renderProtocolReject("notPrepared")
+  }
+  return { ok: true }
+}
+
+var renderProtocol = {
+  validIdentifier: renderProtocolValidIdentifier,
+  validSHA256: renderProtocolValidSHA256,
+  validatePrepare: renderProtocolValidatePrepare,
+  validateAssetBegin: renderProtocolValidateAssetBegin
+}
+
+var vectorSceneLimits = {
+  width: 212,
+  height: 360,
+  maximumSegments: 40,
+  headerBytes: 22,
+  segmentBytes: 9
+}
+
+function vectorSceneAsBytes(value) {
+  if (value instanceof Uint8Array) return value
+  if (value instanceof ArrayBuffer) return new Uint8Array(value)
+  if (value && value.buffer instanceof ArrayBuffer && typeof value.byteLength === "number") {
+    return new Uint8Array(value.buffer, value.byteOffset || 0, value.byteLength)
+  }
+  return null
+}
+
+function vectorSceneReadUInt16(bytes, offset) {
+  return bytes[offset] | (bytes[offset + 1] << 8)
+}
+
+function vectorSceneReadUInt32(bytes, offset) {
+  return (bytes[offset] | (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0
+}
+
+function vectorSceneInside(point) {
+  return point.x < vectorSceneLimits.width && point.y < vectorSceneLimits.height
+}
+
+function vectorSceneDecodeBBMV(value) {
+  var bytes = vectorSceneAsBytes(value)
+  if (!bytes || bytes.length < vectorSceneLimits.headerBytes) return { ok: false, code: "invalidLength" }
+  var magic = [0x42, 0x42, 0x4d, 0x56]
+  for (var magicIndex = 0; magicIndex < magic.length; magicIndex += 1) {
+    if (bytes[magicIndex] !== magic[magicIndex]) return { ok: false, code: "invalidMagic" }
+  }
+  if (bytes[4] !== 1) return { ok: false, code: "unsupportedVersion" }
+
+  var width = vectorSceneReadUInt16(bytes, 5)
+  var height = vectorSceneReadUInt16(bytes, 7)
+  if (width !== vectorSceneLimits.width || height !== vectorSceneLimits.height) {
+    return { ok: false, code: "invalidViewport" }
+  }
+  var roadCount = bytes[9]
+  var routeCount = bytes[10]
+  var segmentCount = roadCount + routeCount
+  if (segmentCount > vectorSceneLimits.maximumSegments) return { ok: false, code: "tooManySegments" }
+  if (bytes.length !== vectorSceneLimits.headerBytes + segmentCount * vectorSceneLimits.segmentBytes) {
+    return { ok: false, code: "invalidLength" }
+  }
+
+  var currentPosition = {
+    x: vectorSceneReadUInt16(bytes, 11),
+    y: vectorSceneReadUInt16(bytes, 13)
+  }
+  if (!vectorSceneInside(currentPosition)) return { ok: false, code: "outOfViewport" }
+  var heading = vectorSceneReadUInt16(bytes, 15)
+  if (heading > 359) return { ok: false, code: "invalidHeading" }
+  var maneuver = bytes[17]
+  if (maneuver > 4) return { ok: false, code: "invalidManeuver" }
+
+  var segments = []
+  var offset = vectorSceneLimits.headerBytes
+  for (var index = 0; index < segmentCount; index += 1) {
+    var start = {
+      x: vectorSceneReadUInt16(bytes, offset),
+      y: vectorSceneReadUInt16(bytes, offset + 2)
+    }
+    var end = {
+      x: vectorSceneReadUInt16(bytes, offset + 4),
+      y: vectorSceneReadUInt16(bytes, offset + 6)
+    }
+    var lineClass = bytes[offset + 8]
+    if (lineClass > 2) return { ok: false, code: "invalidSegmentClass" }
+    if (!vectorSceneInside(start) || !vectorSceneInside(end)) return { ok: false, code: "outOfViewport" }
+    segments.push({ start: start, end: end, lineClass: lineClass })
+    offset += vectorSceneLimits.segmentBytes
+  }
+
+  return {
+    ok: true,
+    scene: {
+      currentPosition: currentPosition,
+      heading: heading,
+      maneuver: maneuver,
+      distanceMeters: vectorSceneReadUInt32(bytes, 18),
+      roadSegmentCount: roadCount,
+      routeSegmentCount: routeCount,
+      segments: segments
+    }
+  }
+}
+
+function vectorSceneNativeSegments(scene) {
+  if (!scene || !Array.isArray(scene.segments) || scene.segments.length > vectorSceneLimits.maximumSegments) return []
+  var colors = ["#7897b8", "#d7e7f7", "#5dffb0"]
+  var segments = []
+  for (var index = 0; index < scene.segments.length; index += 1) {
+    var segment = scene.segments[index]
+    var dx = segment.end.x - segment.start.x
+    var dy = segment.end.y - segment.start.y
+    var length = Math.max(1, Math.round(Math.sqrt(dx * dx + dy * dy)))
+    var angle = Math.round(Math.atan2(dy, dx) * 180 / Math.PI * 10) / 10
+    var color = colors[segment.lineClass] || colors[0]
+    var thickness = segment.lineClass === 2 ? 3 : (segment.lineClass === 1 ? 2 : 1)
+    segments.push({
+      key: "segment-" + index,
+      left: segment.start.x,
+      top: segment.start.y,
+      width: length,
+      height: thickness,
+      angle: angle,
+      color: color,
+      style: "position:absolute;left:" + segment.start.x + "px;top:" + segment.start.y +
+        "px;width:" + length + "px;height:" + thickness + "px;background-color:" + color +
+        ";transform-origin:0 50%;transform:rotate(" + angle + "deg);"
+    })
+  }
+  return segments
+}
+
+function vectorSceneNativeMarker(scene) {
+  if (!scene || !vectorSceneInside(scene.currentPosition)) return null
+  var x = scene.currentPosition.x
+  var y = scene.currentPosition.y
+  return {
+    left: x - 4,
+    top: y - 4,
+    style: "position:absolute;left:" + (x - 4) + "px;top:" + (y - 4) +
+      "px;width:8px;height:8px;border-radius:4px;background-color:#168cff;"
+  }
+}
+
+var vectorScene = {
+  LIMITS: vectorSceneLimits,
+  decodeBBMV: vectorSceneDecodeBBMV,
+  sceneToNativeSegments: vectorSceneNativeSegments,
+  sceneToNativeMarker: vectorSceneNativeMarker
+}
 
 export default {
   private: {
