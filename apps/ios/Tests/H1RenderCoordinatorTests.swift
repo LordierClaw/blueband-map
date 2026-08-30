@@ -196,19 +196,21 @@ private actor H1TestSender: H1SessionSending {
     private(set) var steps: [RenderTransferStep] = []
     private(set) var inFlight = 0
     private(set) var maximumInFlight = 0
-    private var waiters: [CheckedContinuation<Void, any Swift.Error>] = []
+    private var waiters: [CheckedContinuation<String, any Swift.Error>] = []
     var startedCount: Int { steps.count }
     var waitingCount: Int { waiters.count }
 
-    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws {
+    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
         steps.append(RenderTransferStep(topic: topic, body: body))
         inFlight += 1
         maximumInFlight = max(maximumInFlight, inFlight)
         defer { inFlight -= 1 }
-        try await withCheckedThrowingContinuation { waiters.append($0) }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, any Swift.Error>) in
+            waiters.append(continuation)
+        }
     }
 
-    func acknowledgeNext() { waiters.removeFirst().resume() }
+    func acknowledgeNext() { waiters.removeFirst().resume(returning: "ack") }
     func failNext(_ error: any Swift.Error) { waiters.removeFirst().resume(throwing: error) }
 }
 
