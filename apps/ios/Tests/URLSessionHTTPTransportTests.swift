@@ -32,7 +32,7 @@ final class URLSessionHTTPTransportTests: XCTestCase {
         let expectedBody = Data("request-body".utf8)
         M1URLProtocol.handler = { protocolInstance in
             XCTAssertEqual(protocolInstance.request.httpMethod, "POST")
-            XCTAssertEqual(protocolInstance.request.httpBody, expectedBody)
+            XCTAssertEqual(protocolInstance.requestBody, expectedBody)
             XCTAssertEqual(protocolInstance.request.value(forHTTPHeaderField: "apikey"), "service-key")
             XCTAssertEqual(protocolInstance.request.cachePolicy, .reloadIgnoringLocalCacheData)
             XCTAssertFalse(protocolInstance.request.httpShouldHandleCookies)
@@ -156,6 +156,24 @@ private final class M1URLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() { Self.handler?(self) }
     override func stopLoading() {}
+
+    var requestBody: Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4 * 1024)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 { return nil }
+            if count == 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 
     func respond(status: Int, headers: [String: String]) {
         let response = HTTPURLResponse(
