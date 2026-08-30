@@ -19,6 +19,8 @@ public enum InterconnectDeliveryError: Swift.Error, Equatable, Sendable {
 }
 
 public actor InterconnectSession {
+    private static let maximumCompletedOutgoingIDs = 64
+
     public enum Error: Swift.Error, Equatable {
         case notReady
         case unexpectedPackage
@@ -48,7 +50,8 @@ public actor InterconnectSession {
     private var identity: ThirdPartyAppIdentity?
     private var recentIDs: [String] = []
     private var recentIDSet: Set<String> = []
-    private var issuedOutgoingIDs: Set<String> = []
+    private var completedOutgoingIDs: [String] = []
+    private var completedOutgoingIDSet: Set<String> = []
     private var pendingDeliveries: [String: PendingDelivery] = [:]
     private var generation: UInt64 = 0
     private var isTerminal = false
@@ -90,7 +93,7 @@ public actor InterconnectSession {
             case .ack:
                 guard var pending = pendingDeliveries[envelope.id] else { return }
                 if pending.timeoutTask != nil {
-                    pendingDeliveries.removeValue(forKey: envelope.id)
+                    _ = removeDelivery(id: envelope.id, token: pending.token)
                     pending.timeoutTask?.cancel()
                     pending.transmitTask?.cancel()
                     eventContinuation.yield(.acknowledged(envelope.id))
@@ -296,10 +299,9 @@ public actor InterconnectSession {
         guard !isTerminal, self.generation == generation else {
             throw InterconnectDeliveryError.disconnected
         }
-        guard pendingDeliveries[id] == nil, !issuedOutgoingIDs.contains(id) else {
+        guard pendingDeliveries[id] == nil, !completedOutgoingIDSet.contains(id) else {
             throw InterconnectDeliveryError.identifierCollision(id)
         }
-        issuedOutgoingIDs.insert(id)
         pendingDeliveries[id] = PendingDelivery(
             token: token,
             generation: generation,
@@ -314,7 +316,7 @@ public actor InterconnectSession {
         pendingDeliveries[id] = pending
         eventContinuation.yield(.sent(envelope))
         if pending.earlyAcknowledged {
-            pendingDeliveries.removeValue(forKey: id)
+            _ = removeDelivery(id: id, token: token)
             pending.timeoutTask?.cancel()
             eventContinuation.yield(.acknowledged(id))
             pending.waiter?.resume(returning: id)
@@ -334,7 +336,16 @@ public actor InterconnectSession {
     private func removeDelivery(id: String, token: UUID) -> PendingDelivery? {
         guard let pending = pendingDeliveries[id], pending.token == token else { return nil }
         pendingDeliveries.removeValue(forKey: id)
+        rememberCompletedOutgoingID(id)
         return pending
+    }
+
+    private func rememberCompletedOutgoingID(_ id: String) {
+        guard completedOutgoingIDSet.insert(id).inserted else { return }
+        completedOutgoingIDs.append(id)
+        if completedOutgoingIDs.count > Self.maximumCompletedOutgoingIDs {
+            completedOutgoingIDSet.remove(completedOutgoingIDs.removeFirst())
+        }
     }
 
     private func isCurrent(id: String, token: UUID, generation: UInt64) -> Bool {
@@ -370,7 +381,8 @@ public actor InterconnectSession {
         }
         recentIDs.removeAll()
         recentIDSet.removeAll()
-        issuedOutgoingIDs.removeAll()
+        completedOutgoingIDs.removeAll()
+        completedOutgoingIDSet.removeAll()
         eventContinuation.yield(.disconnected)
         eventContinuation.finish()
         return disconnectedIdentity

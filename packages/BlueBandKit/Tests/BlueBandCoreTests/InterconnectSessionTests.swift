@@ -743,6 +743,72 @@ final class InterconnectSessionTests: XCTestCase {
         XCTAssertEqual(commandCount, 2)
     }
 
+    func testCompletedOutgoingIdentifierTombstonesEvictOldestAtBound() async throws {
+        let recorder = CommandRecorder()
+        let generatedIDs = (0...64).map { "i-terminal-\($0)" } + ["i-terminal-0"]
+        let ids = LockedIDSequence(generatedIDs)
+        let session = makeSession(
+            recorder: recorder,
+            trust: MemoryTrustStore(),
+            idGenerator: { ids.next() }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        for index in 0...64 {
+            let id = try await session.send(topic: "terminal-\(index)", body: [:])
+            XCTAssertEqual(id, "i-terminal-\(index)")
+            _ = await events.next()
+            let ack = ApplicationEnvelope.acknowledgement(id: id, source: .band)
+            try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+            let acknowledged = await events.next()
+            XCTAssertEqual(acknowledged, .acknowledged(id))
+        }
+
+        let reused = try await session.send(topic: "oldest-reused", body: [:])
+        XCTAssertEqual(reused, "i-terminal-0")
+        let sent = await events.next()
+        guard case let .sent(envelope) = sent else {
+            return XCTFail("Expected reused oldest ID to transmit")
+        }
+        XCTAssertEqual(envelope.id, reused)
+    }
+
+    func testPendingOutgoingIdentifierNeverEvictsUnderTerminalChurn() async throws {
+        let recorder = CommandRecorder()
+        let generatedIDs = ["i-held"] + (0...64).map { "i-churn-\($0)" } + ["i-held"]
+        let ids = LockedIDSequence(generatedIDs)
+        let session = makeSession(
+            recorder: recorder,
+            trust: MemoryTrustStore(),
+            idGenerator: { ids.next() }
+        )
+        var events = await session.events().makeAsyncIterator()
+        try await session.receive(.statusRequest(identity))
+        _ = await events.next()
+
+        let heldID = try await session.send(topic: "held", body: [:])
+        XCTAssertEqual(heldID, "i-held")
+        _ = await events.next()
+        for index in 0...64 {
+            let id = try await session.send(topic: "churn-\(index)", body: [:])
+            _ = await events.next()
+            let ack = ApplicationEnvelope.acknowledgement(id: id, source: .band)
+            try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+            _ = await events.next()
+        }
+
+        do {
+            _ = try await session.send(topic: "held-collision", body: [:])
+            XCTFail("Expected pending identifier collision")
+        } catch {
+            XCTAssertEqual(error as? InterconnectDeliveryError, .identifierCollision("i-held"))
+        }
+        let commandCount = await recorder.commands().count
+        XCTAssertEqual(commandCount, 67)
+    }
+
     func testLateDuplicateAcknowledgementCannotAcknowledgeNewerDistinctDelivery() async throws {
         let recorder = CommandRecorder()
         let ids = LockedIDSequence(["i-old", "i-new"])
