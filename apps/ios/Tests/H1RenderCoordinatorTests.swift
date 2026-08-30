@@ -54,6 +54,26 @@ final class H1RenderCoordinatorTests: XCTestCase {
         XCTAssertEqual(startedCount, 0)
     }
 
+    func testStyleAndTileMIMEFailuresRemainDistinguishable() async {
+        for (error, code) in [
+            (VietmapStyleError.wrongContentType as Swift.Error, "STYLE_MIME"),
+            (H1AssetFactory.Error.tileWrongContentType as Swift.Error, "TILE_MIME"),
+        ] {
+            let sender = H1TestSender()
+            let coordinator = H1RenderCoordinator(
+                session: sender,
+                assetProvider: { _, _, _ in throw error },
+                resultTimeout: .seconds(10),
+                runIDGenerator: { "h1-run-000000000001" },
+                sceneIDGenerator: { "scene-000000000001" }
+            )
+
+            await coordinator.start(mode: .vectorVietmap, tileMapKey: "not-exported")
+
+            XCTAssertEqual(coordinator.state, .failed(mode: .vectorVietmap, code: code))
+        }
+    }
+
     func testReadyBeforePrepareACKIsBufferedAndTransferRemainsStopAndWait() async throws {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: try makeAsset(kind: .vector))
@@ -195,9 +215,9 @@ final class H1RenderCoordinatorTests: XCTestCase {
         await start.value
 
         XCTAssertEqual(coordinator.state, .failed(
-            mode: .vectorSynthetic8, code: "RESULT_METADATA_INVALID"
+            mode: .vectorSynthetic8, code: "RESULT_BYTES_MISMATCH"
         ))
-        XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "RESULT_METADATA_INVALID")
+        XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "RESULT_BYTES_MISMATCH")
     }
 
     func testStaleResultIsIgnoredAndVectorFailureNeverInvokesRaster() async throws {

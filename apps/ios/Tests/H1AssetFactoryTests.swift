@@ -38,6 +38,23 @@ final class H1AssetFactoryTests: XCTestCase {
         XCTAssertEqual(asset.kind, .vector)
     }
 
+    func testVectorVietmapAcceptsMissingMIMEOnlyForValidatedVietmapPBF() async throws {
+        let styleTransport = H1HTTPTransport(responses: [styleResponse(maximumZoom: 15)])
+        let tileTransport = H1HTTPTransport(responses: [MapHTTPResponse(
+            statusCode: 200,
+            headers: [:],
+            body: H1VectorTileFixture.centeredLineTile()
+        )])
+
+        let asset = try await makeFactory(
+            styleTransport: styleTransport,
+            tileTransport: tileTransport
+        ).make(mode: .vectorVietmap, serviceKey: nil, tileMapKey: key)
+
+        XCTAssertEqual(asset.kind, .vector)
+        XCTAssertGreaterThan(asset.primitives, 0)
+    }
+
     func testTextPlainRequiresVietmapPBFPathAndValidMVTBody() async {
         let wrongPathStyle = styleResponse(maximumZoom: 15, pathExtension: "bin")
         let validBody = H1VectorTileFixture.centeredLineTile()

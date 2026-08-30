@@ -6,7 +6,7 @@ final class ProjectSmokeTests: XCTestCase {
     func testIdentityConstantsAreStable() {
         XCTAssertEqual(BlueBandProduct.bundleIdentifier, "dev.lordierclaw.bluebandmap")
         XCTAssertEqual(BlueBandProduct.rpkPackage, "dev.lordierclaw.bluebandmap.band")
-        XCTAssertEqual(BlueBandProduct.version, "0.1.2")
+        XCTAssertEqual(BlueBandProduct.version, "0.1.3")
     }
 
     func testM1StateHasOnlyTheApprovedCases() {
@@ -60,12 +60,15 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(factorySource.contains("MapboxVectorTile.decode"))
     }
 
-    func testH1ExportUsesShareLinkForTheExistingSanitizedFile() {
+    func testH1ExportUsesFileTransferRepresentationForTheExistingSanitizedFile() {
         let modelSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/AppModel.swift"))
         let viewSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/ContentView.swift"))
+        let exportSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/H1LogExport.swift"))
 
-        XCTAssertTrue(viewSource.contains("ShareLink(\"Export log H1\", item: export)"))
+        XCTAssertTrue(viewSource.contains("ShareLink(\"Export log H1\", item: H1LogExport(url: export))"))
         XCTAssertTrue(viewSource.contains("if let export = model.lastH1ExportURL"))
+        XCTAssertTrue(exportSource.contains("FileRepresentation(contentType: .json)"))
+        XCTAssertTrue(exportSource.contains("SentTransferredFile(export.url)"))
         XCTAssertFalse(viewSource.contains("model.exportLastH1Run()"))
         XCTAssertFalse(modelSource.contains("func exportLastH1Run()"))
     }

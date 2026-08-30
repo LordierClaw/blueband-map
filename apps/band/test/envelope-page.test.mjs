@@ -204,6 +204,12 @@ test("H1 vector reads BBMV once, publishes native segments, and sends one aggreg
     asset: VECTOR_ASSET, offset: 0,
     data: Buffer.from(VECTOR_BYTES).toString("base64"), run: RUN
   }) })
+  const renderResultArguments = []
+  const sendRenderResult = page.sendRenderResult.bind(page)
+  page.sendRenderResult = (...args) => {
+    renderResultArguments.push(args)
+    return sendRenderResult(...args)
+  }
   page.receiveMessage({ data: envelope("vector-end", "map.asset.end", { asset: VECTOR_ASSET, run: RUN }) })
 
   assert.equal(file.reads.length, 1)
@@ -215,6 +221,8 @@ test("H1 vector reads BBMV once, publishes native segments, and sends one aggreg
   assert.equal(sent.filter(message => message.topic === "render.result").length, 1)
   assert.equal(sent.find(message => message.topic === "render.result").body.status, "ok")
   assert.equal(sent.find(message => message.topic === "render.result").body.success, undefined)
+  assert.equal(renderResultArguments[0][4], VECTOR_BYTES.length)
+  assert.equal(renderResultArguments[0][5], VECTOR_DIGEST.slice(0, 8))
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 0)
 })
 
@@ -292,6 +300,12 @@ test("H1 raster uses native image completion but publishes render.result", async
   }) })
   assert.equal(page.mapRenderer, "raster")
   assert.equal(page.mapToken, page.pendingPublication.token)
+  const renderResultArguments = []
+  const sendRenderResult = page.sendRenderResult.bind(page)
+  page.sendRenderResult = (...args) => {
+    renderResultArguments.push(args)
+    return sendRenderResult(...args)
+  }
   page.mapComplete(page.mapToken)
   const result = sent.find(message => message.topic === "render.result")
   assert.equal(result.body.status, "ok")
@@ -303,6 +317,8 @@ test("H1 raster uses native image completion but publishes render.result", async
   assert.equal(result.body.bytes, 4)
   assert.equal(result.body.primitives, 0)
   assert.equal(result.body.sha256Prefix, DIGEST.slice(0, 8))
+  assert.equal(renderResultArguments[0][4], 4)
+  assert.equal(renderResultArguments[0][5], DIGEST.slice(0, 8))
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, 0)
 })
 

@@ -420,12 +420,8 @@ final class H1RenderCoordinator {
 
     private func handleResult(_ result: H1BandResult, token: UUID) {
         guard ownsLive(token), let pending, pending.token == token else { return }
-        guard result.renderer == pending.asset.kind,
-              result.formatVersion == pending.asset.formatVersion,
-              result.bytes == pending.asset.byteCount,
-              result.primitives == pending.asset.primitives,
-              result.hashPrefix == nil || result.hashPrefix == String(pending.asset.sha256.prefix(8)) else {
-            finishOwned(code: "RESULT_METADATA_INVALID", token: token, requiresReconnect: true)
+        if let mismatch = resultMetadataMismatchCode(result, asset: pending.asset) {
+            finishOwned(code: mismatch, token: token, requiresReconnect: true)
             return
         }
         if result.success {
@@ -448,6 +444,17 @@ final class H1RenderCoordinator {
             }
             finishOwned(code: code, token: token, requiresReconnect: false)
         }
+    }
+
+    private func resultMetadataMismatchCode(_ result: H1BandResult, asset: RenderAsset) -> String? {
+        if result.renderer != asset.kind { return "RESULT_RENDERER_MISMATCH" }
+        if result.formatVersion != asset.formatVersion { return "RESULT_FORMAT_MISMATCH" }
+        if result.bytes != asset.byteCount { return "RESULT_BYTES_MISMATCH" }
+        if result.primitives != asset.primitives { return "RESULT_PRIMITIVES_MISMATCH" }
+        if let prefix = result.hashPrefix, prefix != String(asset.sha256.prefix(8)) {
+            return "RESULT_HASH_MISMATCH"
+        }
+        return nil
     }
 
     private func waitForPrepareResponse(token: UUID) async -> PrepareResponse? {
@@ -686,7 +693,7 @@ final class H1RenderCoordinator {
         case let error as VietmapStyleError:
             switch error {
             case let .httpStatus(status): return stageHTTPCode("STYLE", status: status)
-            case .wrongContentType: return "PROVIDER_MIME"
+            case .wrongContentType: return "STYLE_MIME"
             case .missingTileMapKey: return "TILEMAP_KEY_MISSING"
             case .invalidJSON, .missingTiles, .noRoadLayers: return "PROVIDER_DATA"
             default: return "PROVIDER_REQUEST"
@@ -694,7 +701,7 @@ final class H1RenderCoordinator {
         case let error as H1AssetFactory.Error:
             switch error {
             case let .tileHTTPStatus(status): return stageHTTPCode("TILE", status: status)
-            case .tileWrongContentType: return "PROVIDER_MIME"
+            case .tileWrongContentType: return "TILE_MIME"
             case .missingTileMapConfiguration: return "TILEMAP_KEY_MISSING"
             case .tileEmpty, .tileHasNoRoads: return "PROVIDER_DATA"
             }

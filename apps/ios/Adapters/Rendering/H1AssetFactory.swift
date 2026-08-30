@@ -158,7 +158,12 @@ struct H1AssetFactory: Sendable {
     }
 
     private static func isVectorTileContentType(_ value: String?, url: URL) -> Bool {
-        guard let value else { return false }
+        let isTrustedPBF = url.scheme?.lowercased() == "https"
+            && url.host?.lowercased() == "maps.vietmap.vn"
+            && url.user == nil
+            && url.password == nil
+            && url.path.lowercased().hasSuffix(".pbf")
+        guard let value else { return isTrustedPBF }
         let mediaType = value
             .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -170,11 +175,6 @@ struct H1AssetFactory: Sendable {
         ].contains(mediaType) {
             return true
         }
-        return mediaType == "text/plain"
-            && url.scheme?.lowercased() == "https"
-            && url.host?.lowercased() == "maps.vietmap.vn"
-            && url.user == nil
-            && url.password == nil
-            && url.path.lowercased().hasSuffix(".pbf")
+        return mediaType == "text/plain" && isTrustedPBF
     }
 }

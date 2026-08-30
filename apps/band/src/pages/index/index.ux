@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.3</text>
+      <text class="version">RPK 0.2.4</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.3 • ENV V1</text>
+        <text class="version">RPK 0.2.4 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -1005,7 +1005,9 @@ export default {
     }
     this.statusText = "H1 VECTOR READY"
     if (!this.releaseMapOperation(operationID)) return
-    this.sendRenderResult(publication, true, publication.renderMs, "")
+    this.sendRenderResult(
+      publication, true, publication.renderMs, "", publication.bytes, publication.sha256Prefix
+    )
     this.preparedRender = null
   },
 
@@ -1321,7 +1323,10 @@ export default {
       page.pendingPublication = null
       if (!page.releaseMapOperation(publication.operationID)) return
       if (publication.h1) {
-        page.sendRenderResult(publication, true, Date.now() - publication.renderStartedAt)
+        page.sendRenderResult(
+          publication, true, Date.now() - publication.renderStartedAt, "",
+          publication.bytes, publication.sha256Prefix
+        )
         page.preparedRender = null
       } else {
         page.sendAssetResult(publication.asset, publication.run, "ok", publication.bytes, publication.sha256Prefix)
