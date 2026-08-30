@@ -12,6 +12,8 @@ final class VietmapStyleClientTests: XCTestCase {
           "sources": {
             "vietmap": {
               "type": "vector",
+              "minzoom": 0,
+              "maxzoom": 15,
               "tiles": ["https://maps.vietmap.vn/tiles/{z}/{x}/{y}.pbf?apikey={apikey}"]
             }
           },
@@ -28,6 +30,8 @@ final class VietmapStyleClientTests: XCTestCase {
 
         XCTAssertEqual(template.urlTemplate, "https://maps.vietmap.vn/tiles/{z}/{x}/{y}.pbf?apikey={apikey}")
         XCTAssertEqual(template.sourceLayers, ["road"])
+        XCTAssertEqual(template.minimumZoom, 0)
+        XCTAssertEqual(template.maximumZoom, 15)
         let recordedRequests = await transport.requests()
         let request = try XCTUnwrap(recordedRequests.first)
         XCTAssertEqual(request.maximumResponseBytes, 2 * 1_024 * 1_024)
@@ -52,8 +56,81 @@ final class VietmapStyleClientTests: XCTestCase {
 
         XCTAssertEqual(template.urlTemplate, "https://maps.vietmap.vn/vector/{z}/{x}/{y}.pbf?apikey={apikey}")
         XCTAssertEqual(template.sourceLayers, ["transportation"])
+        XCTAssertNil(template.minimumZoom)
+        XCTAssertNil(template.maximumZoom)
         let recordedRequests = await transport.requests()
         XCTAssertEqual(recordedRequests.count, 2)
+    }
+
+    func testDiscoversTileJSONZoomBoundsWhenStyleSourceOmitsThem() async throws {
+        let style = """
+        {
+          "version": 8,
+          "sources": {
+            "vietmap": {"type":"vector", "url":"https://maps.vietmap.vn/tiles.json?apikey={apikey}"}
+          },
+          "layers": [
+            {"id":"road","type":"line","source":"vietmap","source-layer":"road"}
+          ]
+        }
+        """
+        let tileJSON = """
+        {"tiles":["https://maps.vietmap.vn/vector/{z}/{x}/{y}.pbf?apikey={apikey}"],"minzoom":2,"maxzoom":14}
+        """
+        let transport = StyleRecordingTransport(responses: [jsonResponse(style), jsonResponse(tileJSON)])
+
+        let template = try await VietmapStyleClient(transport: transport).discover(tileMapKey: key)
+
+        XCTAssertEqual(template.minimumZoom, 2)
+        XCTAssertEqual(template.maximumZoom, 14)
+    }
+
+    func testRejectsMalformedOrContradictoryZoomBounds() async {
+        let invalidBounds = [
+            "\"minzoom\":1.5,\"maxzoom\":15",
+            "\"minzoom\":-1,\"maxzoom\":15",
+            "\"minzoom\":0,\"maxzoom\":23",
+            "\"minzoom\":16,\"maxzoom\":15",
+            "\"minzoom\":\"0\",\"maxzoom\":15",
+        ]
+
+        for bounds in invalidBounds {
+            let style = """
+            {"version":8,"sources":{"vietmap":{"type":"vector",\(bounds),"tiles":["https://maps.vietmap.vn/tiles/{z}/{x}/{y}.pbf?apikey={apikey}"]}},"layers":[{"id":"road","type":"line","source":"vietmap","source-layer":"road"}]}
+            """
+            let transport = StyleRecordingTransport(responses: [jsonResponse(style)])
+
+            do {
+                _ = try await VietmapStyleClient(transport: transport).discover(tileMapKey: key)
+                XCTFail("Expected invalid zoom bounds to be rejected: \(bounds)")
+            } catch {
+                XCTAssertEqual(error as? VietmapStyleError, .unsupportedSource)
+            }
+        }
+    }
+
+    func testRejectsConflictingBoundsAcrossSelectedSources() async {
+        let style = """
+        {
+          "version":8,
+          "sources":{
+            "roads":{"type":"vector","minzoom":0,"maxzoom":15,"tiles":["https://maps.vietmap.vn/tiles/{z}/{x}/{y}.pbf?apikey={apikey}"]},
+            "bridges":{"type":"vector","minzoom":0,"maxzoom":14,"tiles":["https://maps.vietmap.vn/tiles/{z}/{x}/{y}.pbf?apikey={apikey}"]}
+          },
+          "layers":[
+            {"id":"road","type":"line","source":"roads","source-layer":"road"},
+            {"id":"bridge","type":"line","source":"bridges","source-layer":"bridge"}
+          ]
+        }
+        """
+        let transport = StyleRecordingTransport(responses: [jsonResponse(style)])
+
+        do {
+            _ = try await VietmapStyleClient(transport: transport).discover(tileMapKey: key)
+            XCTFail("Expected conflicting zoom bounds to be rejected")
+        } catch {
+            XCTAssertEqual(error as? VietmapStyleError, .unsupportedSource)
+        }
     }
 
     func testRejectsForeignHostsNonVectorSourcesAndMissingTiles() async {

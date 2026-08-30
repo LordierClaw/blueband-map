@@ -1,12 +1,22 @@
 import Foundation
+import CoreFoundation
 
 public struct VectorTileTemplate: Equatable, Sendable {
     public let urlTemplate: String
     public let sourceLayers: [String]
+    public let minimumZoom: Int?
+    public let maximumZoom: Int?
 
-    public init(urlTemplate: String, sourceLayers: [String]) {
+    public init(
+        urlTemplate: String,
+        sourceLayers: [String],
+        minimumZoom: Int? = nil,
+        maximumZoom: Int? = nil
+    ) {
         self.urlTemplate = urlTemplate
         self.sourceLayers = sourceLayers
+        self.minimumZoom = minimumZoom
+        self.maximumZoom = maximumZoom
     }
 
     public func url(z: Int, x: Int, y: Int, tileMapKey: String) throws -> URL {
@@ -39,6 +49,12 @@ public enum VietmapStyleError: Swift.Error, Equatable, Sendable {
 }
 
 public struct VietmapStyleClient: Sendable {
+    private struct ResolvedTileSource: Equatable {
+        let template: String
+        let minimumZoom: Int?
+        let maximumZoom: Int?
+    }
+
     private static let styleMaximumResponseBytes = 2 * 1_024 * 1_024
     private let transport: any MapHTTPTransport
 
@@ -70,31 +86,38 @@ public struct VietmapStyleClient: Sendable {
         }
         guard !selectedLayersBySource.isEmpty else { throw VietmapStyleError.noRoadLayers }
 
-        var discoveredTemplate: String?
+        var discoveredSource: ResolvedTileSource?
         var selectedSourceLayers = Set<String>()
         for (sourceName, sourceLayers) in selectedLayersBySource {
             guard let source = sources[sourceName] as? [String: Any],
                   (source["type"] as? String)?.lowercased() == "vector" else {
                 throw VietmapStyleError.unsupportedSource
             }
-            let tileURLTemplate = try await resolveTileTemplate(source: source, key: key)
-            if let discoveredTemplate, discoveredTemplate != tileURLTemplate {
+            let resolvedSource = try await resolveTileSource(source: source, key: key)
+            if let discoveredSource, discoveredSource != resolvedSource {
                 throw VietmapStyleError.unsupportedSource
             }
-            discoveredTemplate = tileURLTemplate
+            discoveredSource = resolvedSource
             selectedSourceLayers.formUnion(sourceLayers)
         }
 
-        guard let discoveredTemplate else { throw VietmapStyleError.missingTiles }
+        guard let discoveredSource else { throw VietmapStyleError.missingTiles }
         return VectorTileTemplate(
-            urlTemplate: discoveredTemplate,
-            sourceLayers: selectedSourceLayers.sorted()
+            urlTemplate: discoveredSource.template,
+            sourceLayers: selectedSourceLayers.sorted(),
+            minimumZoom: discoveredSource.minimumZoom,
+            maximumZoom: discoveredSource.maximumZoom
         )
     }
 
-    private func resolveTileTemplate(source: [String: Any], key: String) async throws -> String {
+    private func resolveTileSource(source: [String: Any], key: String) async throws -> ResolvedTileSource {
+        let sourceBounds = try Self.zoomBounds(source)
         if let tiles = source["tiles"] as? [String], let first = tiles.first {
-            return try Self.sanitizedTileTemplate(first, key: key)
+            return ResolvedTileSource(
+                template: try Self.sanitizedTileTemplate(first, key: key),
+                minimumZoom: sourceBounds.minimum,
+                maximumZoom: sourceBounds.maximum
+            )
         }
         if let tileJSONURL = source["url"] as? String {
             guard let parsed = URL(string: tileJSONURL), Self.isAllowedHTTPSHost(parsed) else {
@@ -105,9 +128,43 @@ public struct VietmapStyleClient: Sendable {
             guard let tiles = tileJSON["tiles"] as? [String], let first = tiles.first else {
                 throw VietmapStyleError.missingTiles
             }
-            return try Self.sanitizedTileTemplate(first, key: key)
+            let tileJSONBounds = try Self.zoomBounds(tileJSON)
+            let minimumZoom = sourceBounds.minimum ?? tileJSONBounds.minimum
+            let maximumZoom = sourceBounds.maximum ?? tileJSONBounds.maximum
+            try Self.validateZoomRange(minimum: minimumZoom, maximum: maximumZoom)
+            return ResolvedTileSource(
+                template: try Self.sanitizedTileTemplate(first, key: key),
+                minimumZoom: minimumZoom,
+                maximumZoom: maximumZoom
+            )
         }
         throw VietmapStyleError.missingTiles
+    }
+
+    private static func zoomBounds(_ object: [String: Any]) throws -> (minimum: Int?, maximum: Int?) {
+        let minimum = try zoomBound(object["minzoom"])
+        let maximum = try zoomBound(object["maxzoom"])
+        try validateZoomRange(minimum: minimum, maximum: maximum)
+        return (minimum, maximum)
+    }
+
+    private static func zoomBound(_ raw: Any?) throws -> Int? {
+        guard let raw else { return nil }
+        guard let number = raw as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            throw VietmapStyleError.unsupportedSource
+        }
+        let value = number.doubleValue
+        guard value.isFinite, value.rounded(.towardZero) == value, (0...22).contains(value) else {
+            throw VietmapStyleError.unsupportedSource
+        }
+        return Int(value)
+    }
+
+    private static func validateZoomRange(minimum: Int?, maximum: Int?) throws {
+        if let minimum, let maximum, minimum > maximum {
+            throw VietmapStyleError.unsupportedSource
+        }
     }
 
     private func fetchJSONObject(_ url: URL, key: String) async throws -> [String: Any] {
