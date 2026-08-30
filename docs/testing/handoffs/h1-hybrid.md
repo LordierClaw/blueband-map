@@ -6,13 +6,13 @@ This document is the H1 hardware acceptance procedure. It is not evidence that a
 
 These values were checked against the downloaded CI artifact; never infer them from source metadata:
 
-- Source commit: `8bab870a91676325c574af0e795cf4693701fcb8`
-- IPA: `artifacts/h1-hybrid/8bab870/BlueBandMap-unsigned.ipa`
-- IPA SHA-256: `acf66ed3c9d40e20984ba025ca7a0d5866fc50afa7e77f72bf78daf960cf9dfb`
-- RPK: `artifacts/h1-hybrid/8bab870/dev.lordierclaw.bluebandmap.band.debug.0.2.1.rpk`
-- RPK SHA-256: `5c442e6982175f55f096d84c4fb988ec6e74990cf709ba769bb0e5293f44a209`
+- Source commit: `4392d87b70bf6f93524d197d765ef5309904403e`
+- IPA: `artifacts/h1-hybrid/4392d87/BlueBandMap-unsigned.ipa`
+- IPA SHA-256: `1398839176c77cca72254613f67e6f5c32e98be076f3abe2e96a13c496601eab`
+- RPK: `artifacts/h1-hybrid/4392d87/dev.lordierclaw.bluebandmap.band.debug.0.2.2.rpk`
+- RPK SHA-256: `04b05323057357825fbd36313fc672c6a36786499b06c6295167f391d5bf531a`
 - iOS version/build: `0.1.0 (1)` unless read differently from the installed artifact
-- RPK version/code: `0.2.1 (3)` unless read differently from the installed artifact
+- RPK version/code: `0.2.2 (4)` unless read differently from the installed artifact
 
 An unsigned IPA needs a valid tester signing/sideload process. Do not put Apple credentials, profiles or signing keys in this repository.
 
@@ -22,7 +22,7 @@ The iPhone selects exactly one renderer before transfer. The Band acknowledges `
 
 All H1 payloads are bounded to 212×360, 64 KiB, and at most 40 vector line primitives. The fixed-record vector payload is `BBMV` v1. Xiaomi BLE, SPP, authentication, encryption and transport-ACK bytes are unchanged.
 
-The `0.2.1` RPK also contains the page-load regression fix: the entry page imports only the three Xiaomi system modules, keeps the render helpers page-local in firmware-safe ES5, and does not embed the custom helper module graph. This is verified in the compiled bundle; it still requires the owner hardware check below.
+The `0.2.2` RPK contains the page-load regression fix and the H1 raster hotfix: the entry page imports only the three Xiaomi system modules, keeps the render helpers page-local in firmware-safe ES5, and publishes raster through one native `<image>` instance with a separate render token. This removes the one-item template loop from the raster path and forces a new package version so an older cached RPK cannot be mistaken for the fix. These properties are verified in the compiled bundle; hardware acceptance remains pending.
 
 ## Mode matrix
 
@@ -44,14 +44,14 @@ The UI has one button per mode. Run one button at a time and wait for a terminal
 - Mi Fitness fully closed while BlueBandMap owns the session.
 - AuthKey, Vietmap Service key and Vietmap TileMap key saved through Config; record only `SAVED`, `MISSING` or `UNREADABLE`, never values.
 - Test stationary. Do not operate the phone or Band while riding.
-- Fully uninstall the previous `dev.lordierclaw.bluebandmap.band` package first and confirm its icon disappears; this prevents a cached old RPK from being mistaken for `0.2.1`.
+- Fully uninstall the previous `dev.lordierclaw.bluebandmap.band` package first and confirm its icon disappears; this prevents a cached old RPK from being mistaken for `0.2.2`.
 - Install the RPK and IPA whose hashes are recorded above.
 
 ## Test sequence
 
 1. Verify the IPA/RPK hashes and versions against the bundle. If any identity is missing, return `BLOCKED-ENV`.
 2. Open Config, close it, reopen it, and confirm saved-key health persists without displaying values.
-3. Open the RPK. The entry page must immediately show `BLUEBAND MAP`, `PAGE READY` or `IOS LINK OPEN`, `CHECK CONNECTION`, and `RPK 0.2.1`; it must not be black or unresponsive. If it is black, stop and record the artifact hash before retrying.
+3. Open the RPK. The entry page must immediately show `BLUEBAND MAP`, `PAGE READY` or `IOS LINK OPEN`, `CHECK CONNECTION`, and `RPK 0.2.2`; it must not be black or unresponsive. If it is black, stop and record the artifact hash before retrying.
 4. Open the compact Band picker, select the intended Band, complete device proof and RPK trust, and reach `Đã xác thực`.
 5. Run `Raster · Vietmap Static Map` once. Expect one provider call, a prepare/ready exchange, serialized transfer, and a recognizable PNG. Record the displayed eight-character hash prefix and the H1 terminal metrics.
 6. Run `Raster · Indexed PNG` once. Expect zero additional provider calls and a raster result.
