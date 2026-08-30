@@ -170,6 +170,103 @@ final class M1AppModelTests: XCTestCase {
         XCTAssertEqual(sentCount, 1)
     }
 
+    func testMatchingOKAfterFinalACKEventBeforeSendContinuationIsBufferedThenDisplayed() async throws {
+        let asset = try makeAsset()
+        let plan = try MapAssetTransferPlan.make(asset: asset, runID: run1)
+        let clock = M1ManualClock()
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(
+            provider: M1Provider(result: .success(asset)),
+            sender: sender,
+            clock: clock
+        )
+        let start = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+
+        for nextStep in 2...plan.count {
+            await sender.acknowledgeNext()
+            await waitUntil { await sender.startedCount == nextStep }
+        }
+        await sender.acknowledgeNext(afterAcknowledgement: {
+            model.consume(.received(resultEnvelope(
+                asset: asset.id,
+                run: self.run1,
+                status: "ok",
+                bytes: asset.byteCount,
+                prefix: String(asset.sha256.prefix(8))
+            )))
+        })
+        await start.value
+
+        XCTAssertEqual(model.m1State, .displayed(
+            assetID: asset.id,
+            hashPrefix: String(asset.sha256.prefix(8))
+        ))
+        XCTAssertFalse(model.m1RequiresReconnect)
+        let timeoutCount = await clock.waitingCount
+        XCTAssertEqual(timeoutCount, 0)
+    }
+
+    func testBufferedFinalOKIsClearedByDisconnectAndCannotAffectNextRun() async throws {
+        let asset = try makeAsset()
+        let plan = try MapAssetTransferPlan.make(asset: asset, runID: run1)
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(
+            provider: M1Provider(result: .success(asset)),
+            sender: sender,
+            runIDs: [run1, run2]
+        )
+        let first = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+        for nextStep in 2...plan.count {
+            await sender.acknowledgeNext()
+            await waitUntil { await sender.startedCount == nextStep }
+        }
+        await sender.acknowledgeNext(afterAcknowledgement: {
+            model.consume(.received(resultEnvelope(
+                asset: asset.id,
+                run: self.run1,
+                status: "ok",
+                bytes: asset.byteCount,
+                prefix: String(asset.sha256.prefix(8))
+            )))
+            model.consume(.disconnected)
+        })
+        await first.value
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_DISCONNECTED"))
+
+        model.consume(.connected)
+        let firstRunStepCount = await sender.startedCount
+        let second = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == firstRunStepCount + 1 }
+        for nextStep in (firstRunStepCount + 2)...(firstRunStepCount + plan.count) {
+            await sender.acknowledgeNext()
+            await waitUntil { await sender.startedCount == nextStep }
+        }
+        await sender.acknowledgeNext()
+        await second.value
+        let waiting = model.m1State
+        model.consume(.received(resultEnvelope(
+            asset: asset.id,
+            run: run1,
+            status: "ok",
+            bytes: asset.byteCount,
+            prefix: String(asset.sha256.prefix(8))
+        )))
+        XCTAssertEqual(model.m1State, waiting)
+        model.consume(.received(resultEnvelope(
+            asset: asset.id,
+            run: run2,
+            status: "ok",
+            bytes: asset.byteCount,
+            prefix: String(asset.sha256.prefix(8))
+        )))
+        XCTAssertEqual(model.m1State, .displayed(
+            assetID: asset.id,
+            hashPrefix: String(asset.sha256.prefix(8))
+        ))
+    }
+
     func testCancellationBeforeSuccessfulACKStopsRemainingTransferSteps() async throws {
         let sender = M1AcknowledgingSender()
         let model = readyModel(
@@ -842,6 +939,11 @@ private actor M1AcknowledgingSender: M1SessionSending {
     }
 
     func acknowledgeNext() { waiters.removeFirst().resume() }
+    func acknowledgeNext(afterAcknowledgement action: @MainActor @Sendable () -> Void) async {
+        let waiter = waiters.removeFirst()
+        await action()
+        waiter.resume()
+    }
     func failNext(_ error: any Swift.Error) { waiters.removeFirst().resume(throwing: error) }
 }
 

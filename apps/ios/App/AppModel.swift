@@ -85,7 +85,19 @@ final class AppModel: ObservableObject {
     private struct PendingM1Asset: Sendable {
         enum Phase: Sendable {
             case transferring(awaitingStep: Int)
+            case awaitingFinalAcknowledgement
             case waitingForBand
+
+            func matchesAcknowledgedStep(_ step: Int, finalStep: Int) -> Bool {
+                switch self {
+                case let .transferring(awaitingStep):
+                    awaitingStep == step && step != finalStep
+                case .awaitingFinalAcknowledgement:
+                    step == finalStep
+                case .waitingForBand:
+                    false
+                }
+            }
         }
 
         let runToken: UUID
@@ -94,6 +106,7 @@ final class AppModel: ObservableObject {
         let hashPrefix: String
         let byteCount: Int
         var phase: Phase
+        var hasBufferedSuccessfulResult: Bool
     }
 
     init(
@@ -387,7 +400,8 @@ final class AppModel: ObservableObject {
             id: asset.id,
             hashPrefix: String(asset.sha256.prefix(8)),
             byteCount: asset.byteCount,
-            phase: .transferring(awaitingStep: 0)
+            phase: .transferring(awaitingStep: 0),
+            hasBufferedSuccessfulResult: false
         )
         pendingM1Asset = expected
         m1State = .transferring(completed: 0, total: steps.count)
@@ -403,15 +417,17 @@ final class AppModel: ObservableObject {
                     failOwnedM1("TRANSFER_CANCELLED", attempt: attempt, requiresReconnect: true)
                     return
                 }
-                pending.phase = .transferring(awaitingStep: index)
+                let isFinalStep = index == steps.count - 1
+                pending.phase = isFinalStep
+                    ? .awaitingFinalAcknowledgement
+                    : .transferring(awaitingStep: index)
                 pendingM1Asset = pending
                 try await m1Session.sendAwaitingAcknowledgement(topic: step.topic, body: step.body)
                 guard ownsM1(attempt, runID: runID),
                       let current = pendingM1Asset,
                       current.runToken == attempt,
                       current.runID == runID,
-                      case let .transferring(awaitingStep) = current.phase,
-                      awaitingStep == index,
+                      current.phase.matchesAcknowledgedStep(index, finalStep: steps.count - 1),
                       case .transferring = m1State else {
                     return
                 }
@@ -440,6 +456,10 @@ final class AppModel: ObservableObject {
         pending.phase = .waitingForBand
         pendingM1Asset = pending
         m1State = .waitingForBand(assetID: pending.id, hashPrefix: pending.hashPrefix)
+        if pending.hasBufferedSuccessfulResult {
+            displayM1(pending)
+            return
+        }
         scheduleM1ResultTimeout(attempt: attempt, runID: runID)
     }
 
@@ -616,13 +636,20 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let isTransferring: Bool
+        enum ResultPhase {
+            case transferring
+            case awaitingFinalAcknowledgement
+            case waitingForBand
+        }
+        let resultPhase: ResultPhase
         switch (m1State, expected.phase) {
         case (.transferring, .transferring):
-            isTransferring = true
+            resultPhase = .transferring
+        case (.transferring, .awaitingFinalAcknowledgement):
+            resultPhase = .awaitingFinalAcknowledgement
         case let (.waitingForBand(assetID, hashPrefix), .waitingForBand)
             where assetID == expected.id && hashPrefix == expected.hashPrefix:
-            isTransferring = false
+            resultPhase = .waitingForBand
         default:
             return
         }
@@ -651,15 +678,16 @@ final class AppModel: ObservableObject {
                 terminateM1("ASSET_RESULT_INVALID", requiresReconnect: true)
                 return
             }
-            guard !isTransferring else {
+            switch resultPhase {
+            case .transferring:
                 terminateM1("ASSET_RESULT_INVALID", requiresReconnect: true)
-                return
+            case .awaitingFinalAcknowledgement:
+                var buffered = expected
+                buffered.hasBufferedSuccessfulResult = true
+                pendingM1Asset = buffered
+            case .waitingForBand:
+                displayM1(expected)
             }
-            currentM1Attempt = nil
-            pendingM1Asset = nil
-            cancelM1ResultTimeout()
-            m1Operation?.task.cancel()
-            m1State = .displayed(assetID: expected.id, hashPrefix: expected.hashPrefix)
         case "error":
             guard Int(rawBytes) <= expected.byteCount,
                   receivedPrefix.isEmpty || receivedPrefix == expected.hashPrefix else {
@@ -673,6 +701,17 @@ final class AppModel: ObservableObject {
         default:
             return
         }
+    }
+
+    private func displayM1(_ expected: PendingM1Asset) {
+        guard currentM1Attempt == expected.runToken,
+              pendingM1Asset?.runToken == expected.runToken,
+              pendingM1Asset?.runID == expected.runID else { return }
+        currentM1Attempt = nil
+        pendingM1Asset = nil
+        cancelM1ResultTimeout()
+        m1Operation?.task.cancel()
+        m1State = .displayed(assetID: expected.id, hashPrefix: expected.hashPrefix)
     }
 
     private func isResultHashPrefix(_ value: String) -> Bool {
