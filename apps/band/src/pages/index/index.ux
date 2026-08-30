@@ -544,7 +544,7 @@ export default {
     var asset = transfer ? transfer.asset : (typeof message.body.asset === "string" ? message.body.asset : "")
     var bytes = transfer ? transfer.receivedBytes : 0
     var prefix = transfer ? transfer.sha256.slice(0, 8) : ""
-    var run = transfer ? transfer.run : this.safeRun(message.body.run)
+    var run = this.safeRun(message.body.run)
     this.sendAssetResult(asset, run, "error", bytes, prefix, code)
     this.rememberSuccess(message.id)
     this.sendACK(message.id)

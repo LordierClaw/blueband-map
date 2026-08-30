@@ -8,6 +8,9 @@ import BlueBandProtocol
 
 @MainActor
 final class M1AppModelTests: XCTestCase {
+    private let run1 = "run-0000000000000001"
+    private let run2 = "run-0000000000000002"
+
     func testFixedM1ConfigurationMatchesProofOfConceptBudget() {
         XCTAssertEqual(M1Configuration.request.latitude, 10.759157)
         XCTAssertEqual(M1Configuration.request.longitude, 106.675859)
@@ -48,7 +51,7 @@ final class M1AppModelTests: XCTestCase {
 
     func testOnePressFetchesOnceAndSendsEveryStepSequentiallyThroughACKs() async throws {
         let asset = try makeAsset(byteCount: 700)
-        let plan = try MapAssetTransferPlan.make(asset: asset)
+        let plan = try MapAssetTransferPlan.make(asset: asset, runID: run1)
         let provider = M1Provider(result: .success(asset))
         let sender = M1AcknowledgingSender()
         let model = readyModel(provider: provider, sender: sender)
@@ -75,6 +78,8 @@ final class M1AppModelTests: XCTestCase {
         let sentSteps = await sender.steps
         XCTAssertEqual(fetchCount, 1)
         XCTAssertEqual(requests, [M1Configuration.request])
+        let serviceKeys = await provider.serviceKeys
+        XCTAssertEqual(serviceKeys, ["secret-service-key"])
         XCTAssertEqual(sentSteps, plan)
         XCTAssertEqual(model.m1State, .waitingForBand(
             assetID: asset.id,
@@ -236,6 +241,176 @@ final class M1AppModelTests: XCTestCase {
         XCTAssertEqual(fetchCount, 2)
     }
 
+    func testSemanticFailureKeepsRunOwnedUntilBlockedSendSettlesAndRejectsOverlap() async throws {
+        let asset = try makeAsset()
+        let provider = M1Provider(result: .success(asset))
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(provider: provider, sender: sender)
+        let first = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+
+        model.consume(.received(resultEnvelope(
+            asset: asset.id, run: run1, status: "error", bytes: 0,
+            prefix: "", code: "ASSET_BEGIN_INVALID"
+        )))
+        XCTAssertEqual(model.m1State, .failed(code: "ASSET_BEGIN_INVALID"))
+
+        await model.startM1()
+        var fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 1)
+        await sender.acknowledgeNext()
+        await awaitNaturalCompletion(first, sender: sender)
+
+        let retry = Task { await model.startM1() }
+        await waitUntil { await provider.fetchCount == 2 }
+        retry.cancel()
+        await sender.acknowledgeNext()
+        await retry.value
+    }
+
+    func testDisconnectCancelsBlockedOwnedRunAndLateACKCannotMutateTerminalState() async throws {
+        let asset = try makeAsset()
+        let provider = M1Provider(result: .success(asset))
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(provider: provider, sender: sender)
+        let first = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+
+        model.consume(.disconnected)
+        await model.startM1()
+        let fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 1)
+        await sender.acknowledgeNext()
+        await awaitNaturalCompletion(first, sender: sender)
+
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_DISCONNECTED"))
+        let sentCount = await sender.startedCount
+        XCTAssertEqual(sentCount, 1)
+    }
+
+    func testCancelledCallerCannotOverlapOwnedRunWhileSendSettles() async throws {
+        let provider = M1Provider(result: .success(try makeAsset()))
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(provider: provider, sender: sender)
+        let first = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+
+        first.cancel()
+        await model.startM1()
+        let fetchCount = await provider.fetchCount
+        XCTAssertEqual(fetchCount, 1)
+        await sender.acknowledgeNext()
+        await awaitNaturalCompletion(first, sender: sender)
+
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_CANCELLED"))
+        let sentCount = await sender.startedCount
+        XCTAssertEqual(sentCount, 1)
+    }
+
+    func testCancelledOldFetchMustSettleBeforeRetryAndCannotMutateNewRun() async throws {
+        let asset = try makeAsset()
+        let provider = M1BlockingProvider()
+        let model = readyModel(provider: provider, runIDs: [run1, run2])
+        let first = Task { await model.startM1() }
+        await waitUntil { await provider.fetchCount == 1 }
+
+        model.consume(.disconnected)
+        await model.startM1()
+        let fetchCountWhileOldFetchSettles = await provider.fetchCount
+        XCTAssertEqual(fetchCountWhileOldFetchSettles, 1)
+        await provider.resolveNext(with: asset)
+        await first.value
+        XCTAssertEqual(model.m1State, .failed(code: "TRANSFER_DISCONNECTED"))
+
+        model.consume(.connected)
+        let second = Task { await model.startM1() }
+        await waitUntil { await provider.fetchCount == 2 }
+        await provider.resolveNext(with: asset)
+        await second.value
+        XCTAssertEqual(model.m1State, .waitingForBand(
+            assetID: asset.id, hashPrefix: String(asset.sha256.prefix(8))
+        ))
+    }
+
+    func testStaleSameAssetResultFromPriorRunIsIgnoredByWireRunID() async throws {
+        let asset = try makeAsset()
+        let provider = M1Provider(result: .success(asset))
+        let model = readyModel(provider: provider, runIDs: [run1, run2])
+        await model.startM1()
+        model.consume(.received(resultEnvelope(
+            asset: asset.id, run: run1, status: "error", bytes: asset.byteCount,
+            prefix: String(asset.sha256.prefix(8)), code: "ASSET_RENDER"
+        )))
+        XCTAssertEqual(model.m1State, .failed(code: "ASSET_RENDER"))
+
+        await model.startM1()
+        let currentWaiting = model.m1State
+        model.consume(.received(resultEnvelope(
+            asset: asset.id, run: run1, status: "ok", bytes: asset.byteCount,
+            prefix: String(asset.sha256.prefix(8))
+        )))
+        XCTAssertEqual(model.m1State, currentWaiting)
+        model.consume(.received(resultEnvelope(
+            asset: asset.id, run: run2, status: "ok", bytes: asset.byteCount,
+            prefix: String(asset.sha256.prefix(8))
+        )))
+        XCTAssertEqual(model.m1State, .displayed(
+            assetID: asset.id, hashPrefix: String(asset.sha256.prefix(8))
+        ))
+    }
+
+    func testResultTimeoutStartsOnlyAfterFinalACKAndFailsBoundedly() async throws {
+        let asset = try makeAsset()
+        let plan = try MapAssetTransferPlan.make(asset: asset, runID: run1)
+        let clock = M1ManualClock()
+        let sender = M1AcknowledgingSender()
+        let model = readyModel(
+            provider: M1Provider(result: .success(asset)),
+            sender: sender,
+            clock: clock
+        )
+        let start = Task { await model.startM1() }
+        await waitUntil { await sender.startedCount == 1 }
+        let timeoutCountBeforeFinalACK = await clock.waitingCount
+        XCTAssertEqual(timeoutCountBeforeFinalACK, 0)
+
+        for completed in 1...plan.count {
+            await sender.acknowledgeNext()
+            if completed < plan.count {
+                await waitUntil { await sender.startedCount == completed + 1 }
+            }
+        }
+        await start.value
+        await waitUntil { await clock.waitingCount == 1 }
+        await clock.resumeNext()
+        await waitUntil { model.m1State == .failed(code: "ASSET_RESULT_TIMEOUT") }
+    }
+
+    func testCancelledStaleTimeoutCannotFailNewerRun() async throws {
+        let asset = try makeAsset()
+        let clock = M1ManualClock()
+        let model = readyModel(
+            provider: M1Provider(result: .success(asset)),
+            clock: clock,
+            runIDs: [run1, run2]
+        )
+        await model.startM1()
+        await waitUntil { await clock.waitingCount == 1 }
+        model.consume(.received(resultEnvelope(
+            asset: asset.id, run: run1, status: "error", bytes: asset.byteCount,
+            prefix: String(asset.sha256.prefix(8)), code: "ASSET_RENDER"
+        )))
+
+        await model.startM1()
+        await waitUntil { await clock.waitingCount == 2 }
+        let currentWaiting = model.m1State
+        await clock.resumeNext()
+        await Task.yield()
+        XCTAssertEqual(model.m1State, currentWaiting)
+        await clock.resumeNext()
+        await waitUntil { model.m1State == .failed(code: "ASSET_RESULT_TIMEOUT") }
+    }
+
     func testProviderAndAssetErrorsMapToStableCodesWithoutLeakingDescriptions() async {
         let cases: [(any Swift.Error, String)] = [
             (VietmapStaticMapError.rateLimited, "PROVIDER_RATE_LIMITED"),
@@ -386,13 +561,17 @@ final class M1AppModelTests: XCTestCase {
     }
 
     private func readyModel(
-        provider: M1Provider,
-        sender: any M1SessionSending = M1ImmediateSender()
+        provider: any StaticMapProviding,
+        sender: any M1SessionSending = M1ImmediateSender(),
+        clock: any BlueBandClock = ContinuousBlueBandClock(),
+        runIDs: [String] = ["run-0000000000000001"]
     ) -> AppModel {
         let model = makeModel(
             keys: M1KeyStore(serviceKey: "secret-service-key"),
             provider: provider,
-            sender: sender
+            sender: sender,
+            clock: clock,
+            runIDs: runIDs
         )
         model.consume(.connected)
         return model
@@ -400,8 +579,10 @@ final class M1AppModelTests: XCTestCase {
 
     private func makeModel(
         keys: M1KeyStore,
-        provider: M1Provider,
-        sender: any M1SessionSending = M1ImmediateSender()
+        provider: any StaticMapProviding,
+        sender: any M1SessionSending = M1ImmediateSender(),
+        clock: any BlueBandClock = ContinuousBlueBandClock(),
+        runIDs: [String] = ["run-0000000000000001"]
     ) -> AppModel {
         let central = M1Central()
         let trustStore = M1TrustStore()
@@ -412,6 +593,7 @@ final class M1AppModelTests: XCTestCase {
             cipher: cipher,
             trustedRPKStore: trustStore
         )
+        let runIDSource = M1RunIDSource(runIDs)
         return AppModel(
             keyStore: M1AuthKeyStore(),
             vietmapKeyStore: keys,
@@ -420,7 +602,10 @@ final class M1AppModelTests: XCTestCase {
             central: central,
             session: session,
             staticMapProvider: provider,
-            m1Session: sender
+            m1Session: sender,
+            m1Clock: clock,
+            m1ResultTimeout: .seconds(10),
+            m1RunIDGenerator: { runIDSource.next() }
         )
     }
 
@@ -506,14 +691,54 @@ private final class M1KeyStore: VietmapKeyStoreProtocol, @unchecked Sendable {
 private actor M1Provider: StaticMapProviding {
     private let result: Result<MapAsset, any Swift.Error>
     private(set) var requests: [StaticMapRequest] = []
+    private(set) var serviceKeys: [String] = []
     var fetchCount: Int { requests.count }
 
     init(result: Result<MapAsset, any Swift.Error>) { self.result = result }
 
     func fetch(_ request: StaticMapRequest, serviceKey: String) async throws -> MapAsset {
         requests.append(request)
+        serviceKeys.append(serviceKey)
         return try result.get()
     }
+}
+
+private actor M1BlockingProvider: StaticMapProviding {
+    private(set) var fetchCount = 0
+    private var waiters: [CheckedContinuation<MapAsset, any Swift.Error>] = []
+
+    func fetch(_ request: StaticMapRequest, serviceKey: String) async throws -> MapAsset {
+        fetchCount += 1
+        return try await withCheckedThrowingContinuation { waiters.append($0) }
+    }
+
+    func resolveNext(with asset: MapAsset) { waiters.removeFirst().resume(returning: asset) }
+}
+
+private final class M1RunIDSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var runIDs: [String]
+    private let fallback: String
+    init(_ runIDs: [String]) {
+        self.runIDs = runIDs
+        fallback = runIDs.last ?? "run-0000000000000001"
+    }
+    func next() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return runIDs.isEmpty ? fallback : runIDs.removeFirst()
+    }
+}
+
+private actor M1ManualClock: BlueBandClock {
+    private var waiters: [CheckedContinuation<Void, any Swift.Error>] = []
+    var waitingCount: Int { waiters.count }
+
+    func sleep(for duration: Duration) async throws {
+        try await withCheckedThrowingContinuation { waiters.append($0) }
+    }
+
+    func resumeNext() { waiters.removeFirst().resume() }
 }
 
 private actor M1AcknowledgingSender: M1SessionSending {
@@ -596,6 +821,7 @@ private func bigEndianBytes(_ value: Int) -> [UInt8] {
 
 private func resultEnvelope(
     asset: String,
+    run: String = "run-0000000000000001",
     status: String,
     bytes: Int,
     prefix: String,
@@ -603,6 +829,7 @@ private func resultEnvelope(
 ) -> ApplicationEnvelope {
     var body: [String: JSONValue] = [
         "asset": .string(asset),
+        "run": .string(run),
         "status": .string(status),
         "bytes": .number(Double(bytes)),
         "sha256Prefix": .string(prefix),

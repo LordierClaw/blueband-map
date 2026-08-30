@@ -63,11 +63,22 @@ final class AppModel: ObservableObject {
     private let session: BandSession
     private let staticMapProvider: any StaticMapProviding
     private let m1Session: any M1SessionSending
+    private let m1Clock: any BlueBandClock
+    private let m1ResultTimeout: Duration
+    private let m1RunIDGenerator: @Sendable () -> String
     private let scanDuration: Duration
     private var scanGeneration = 0
     private var eventTask: Task<Void, Never>?
     private var currentM1Attempt: UUID?
     private var pendingM1Asset: PendingM1Asset?
+    private var m1Operation: M1Operation?
+    private var m1ResultTimeoutTask: Task<Void, Never>?
+
+    private struct M1Operation {
+        let token: UUID
+        let runID: String
+        let task: Task<Void, Never>
+    }
 
     private struct PendingM1Asset: Sendable {
         enum Phase: Sendable {
@@ -75,8 +86,8 @@ final class AppModel: ObservableObject {
             case waitingForBand
         }
 
-        // The Band result has no run token; this token only rejects stale local continuations.
         let runToken: UUID
+        let runID: String
         let id: String
         let hashPrefix: String
         let byteCount: Int
@@ -92,6 +103,9 @@ final class AppModel: ObservableObject {
         session: BandSession,
         staticMapProvider: any StaticMapProviding,
         m1Session: any M1SessionSending,
+        m1Clock: any BlueBandClock = ContinuousBlueBandClock(),
+        m1ResultTimeout: Duration = .seconds(15),
+        m1RunIDGenerator: @escaping @Sendable () -> String = AppModel.makeM1RunID,
         scanDuration: Duration = .seconds(15)
     ) {
         self.keyStore = keyStore
@@ -102,6 +116,9 @@ final class AppModel: ObservableObject {
         self.session = session
         self.staticMapProvider = staticMapProvider
         self.m1Session = m1Session
+        self.m1Clock = m1Clock
+        self.m1ResultTimeout = m1ResultTimeout
+        self.m1RunIDGenerator = m1RunIDGenerator
         self.scanDuration = scanDuration
         rememberedBand = bandStore.load()
         do { hasSavedKey = try keyStore.load() != nil }
@@ -272,10 +289,7 @@ final class AppModel: ObservableObject {
         guard sessionState != .idle else { return }
         sessionState = .disconnecting
         eventTask?.cancel()
-        if !isM1Terminal {
-            currentM1Attempt = nil
-            failM1("TRANSFER_DISCONNECTED")
-        }
+        if m1Operation != nil || !isM1Terminal { terminateM1("TRANSFER_DISCONNECTED") }
         await session.disconnect()
         rpkState = .locked
         sessionState = .idle
@@ -289,7 +303,7 @@ final class AppModel: ObservableObject {
     }
 
     func startM1() async {
-        guard isM1Terminal else { return }
+        guard m1Operation == nil, isM1Terminal else { return }
         guard rpkState == .ready else {
             failM1("RPK_NOT_READY")
             return
@@ -307,35 +321,60 @@ final class AppModel: ObservableObject {
             return
         }
 
+        let runID = m1RunIDGenerator()
+        guard MapAssetTransferPlan.isValidRunID(runID) else {
+            failM1("ASSET_INVALID")
+            return
+        }
         let attempt = UUID()
+        cancelM1ResultTimeout()
         currentM1Attempt = attempt
         pendingM1Asset = nil
         m1State = .fetching
+
+        let operationTask = Task { @MainActor [weak self] in
+            await self?.performM1(attempt: attempt, runID: runID, serviceKey: serviceKey)
+        }
+        m1Operation = M1Operation(token: attempt, runID: runID, task: operationTask)
+        await withTaskCancellationHandler {
+            await operationTask.value
+        } onCancel: {
+            operationTask.cancel()
+        }
+        if m1Operation?.token == attempt { m1Operation = nil }
+    }
+
+    private func performM1(attempt: UUID, runID: String, serviceKey: String) async {
+        guard ownsM1(attempt, runID: runID), !Task.isCancelled else {
+            failOwnedM1("TRANSFER_CANCELLED", attempt: attempt)
+            return
+        }
 
         let asset: MapAsset
         do {
             asset = try await staticMapProvider.fetch(M1Configuration.request, serviceKey: serviceKey)
         } catch {
             guard currentM1Attempt == attempt else { return }
-            failM1(Task.isCancelled ? "TRANSFER_CANCELLED" : providerCode(for: error))
+            failOwnedM1(Task.isCancelled ? "TRANSFER_CANCELLED" : providerCode(for: error), attempt: attempt)
             return
         }
-        guard currentM1Attempt == attempt else { return }
+        guard ownsM1(attempt, runID: runID) else { return }
         guard !Task.isCancelled else {
-            failM1("TRANSFER_CANCELLED")
+            failOwnedM1("TRANSFER_CANCELLED", attempt: attempt)
             return
         }
 
         let steps: [MapTransferStep]
         do {
-            steps = try MapAssetTransferPlan.make(asset: asset)
+            steps = try MapAssetTransferPlan.make(asset: asset, runID: runID)
         } catch {
-            failM1("ASSET_INVALID")
+            failOwnedM1("ASSET_INVALID", attempt: attempt)
             return
         }
 
         let expected = PendingM1Asset(
             runToken: attempt,
+            runID: runID,
             id: asset.id,
             hashPrefix: String(asset.sha256.prefix(8)),
             byteCount: asset.byteCount,
@@ -345,46 +384,50 @@ final class AppModel: ObservableObject {
         m1State = .transferring(completed: 0, total: steps.count)
         do {
             for (index, step) in steps.enumerated() {
-                guard currentM1Attempt == attempt,
+                guard ownsM1(attempt, runID: runID),
                       var pending = pendingM1Asset,
-                      pending.runToken == attempt else {
+                      pending.runToken == attempt,
+                      pending.runID == runID else {
                     return
                 }
                 guard !Task.isCancelled else {
-                    failM1("TRANSFER_CANCELLED")
+                    failOwnedM1("TRANSFER_CANCELLED", attempt: attempt)
                     return
                 }
                 pending.phase = .transferring(awaitingStep: index)
                 pendingM1Asset = pending
                 try await m1Session.sendAwaitingAcknowledgement(topic: step.topic, body: step.body)
-                guard currentM1Attempt == attempt,
+                guard ownsM1(attempt, runID: runID),
                       let current = pendingM1Asset,
                       current.runToken == attempt,
+                      current.runID == runID,
                       case let .transferring(awaitingStep) = current.phase,
                       awaitingStep == index,
                       case .transferring = m1State else {
                     return
                 }
                 guard !Task.isCancelled else {
-                    failM1("TRANSFER_CANCELLED")
+                    failOwnedM1("TRANSFER_CANCELLED", attempt: attempt)
                     return
                 }
                 m1State = .transferring(completed: index + 1, total: steps.count)
             }
         } catch {
             guard currentM1Attempt == attempt else { return }
-            failM1(Task.isCancelled ? "TRANSFER_CANCELLED" : transferCode(for: error))
+            failOwnedM1(Task.isCancelled ? "TRANSFER_CANCELLED" : transferCode(for: error), attempt: attempt)
             return
         }
 
-        guard currentM1Attempt == attempt,
+        guard ownsM1(attempt, runID: runID),
               var pending = pendingM1Asset,
-              pending.runToken == attempt else {
+              pending.runToken == attempt,
+              pending.runID == runID else {
             return
         }
         pending.phase = .waitingForBand
         pendingM1Asset = pending
         m1State = .waitingForBand(assetID: pending.id, hashPrefix: pending.hashPrefix)
+        scheduleM1ResultTimeout(attempt: attempt, runID: runID)
     }
 
     func clearEvents() { events = [] }
@@ -427,10 +470,7 @@ final class AppModel: ObservableObject {
             sessionState = .applicationReady
         case .disconnected:
             rpkState = .locked
-            if !isM1Terminal {
-                currentM1Attempt = nil
-                failM1("TRANSFER_DISCONNECTED")
-            }
+            if m1Operation != nil || !isM1Terminal { terminateM1("TRANSFER_DISCONNECTED") }
         case let .sent(envelope):
             append(envelope, delivery: .sent)
         case let .received(envelope):
@@ -454,9 +494,53 @@ final class AppModel: ObservableObject {
     }
 
     private func failM1(_ code: String) {
+        cancelM1ResultTimeout()
         currentM1Attempt = nil
         pendingM1Asset = nil
         m1State = .failed(code: code)
+    }
+
+    private func failOwnedM1(_ code: String, attempt: UUID) {
+        guard currentM1Attempt == attempt else { return }
+        failM1(code)
+    }
+
+    private func terminateM1(_ code: String) {
+        let operation = m1Operation
+        failM1(code)
+        operation?.task.cancel()
+    }
+
+    private func ownsM1(_ attempt: UUID, runID: String) -> Bool {
+        currentM1Attempt == attempt &&
+            m1Operation?.token == attempt &&
+            m1Operation?.runID == runID
+    }
+
+    private func scheduleM1ResultTimeout(attempt: UUID, runID: String) {
+        cancelM1ResultTimeout()
+        let clock = m1Clock
+        let timeout = m1ResultTimeout
+        m1ResultTimeoutTask = Task { @MainActor [weak self] in
+            do { try await clock.sleep(for: timeout) }
+            catch { return }
+            guard !Task.isCancelled,
+                  let self,
+                  self.currentM1Attempt == attempt,
+                  self.pendingM1Asset?.runID == runID,
+                  case .waitingForBand = self.m1State else { return }
+            self.terminateM1("ASSET_RESULT_TIMEOUT")
+        }
+    }
+
+    private func cancelM1ResultTimeout() {
+        m1ResultTimeoutTask?.cancel()
+        m1ResultTimeoutTask = nil
+    }
+
+    nonisolated static func makeM1RunID() -> String {
+        let compact = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        return "run-" + String(compact.prefix(16))
     }
 
     private func providerCode(for error: Swift.Error) -> String {
@@ -498,7 +582,10 @@ final class AppModel: ObservableObject {
               currentM1Attempt == expected.runToken,
               let body = envelope.body,
               case let .string(receivedAsset)? = body["asset"],
-              receivedAsset == expected.id else {
+              receivedAsset == expected.id,
+              case let .string(receivedRunID)? = body["run"],
+              MapAssetTransferPlan.isValidRunID(receivedRunID),
+              receivedRunID == expected.runID else {
             return
         }
 
@@ -534,15 +621,17 @@ final class AppModel: ObservableObject {
         case "ok":
             guard Int(rawBytes) == expected.byteCount,
                   receivedPrefix == expected.hashPrefix else {
-                failM1("ASSET_RESULT_INVALID")
+                terminateM1("ASSET_RESULT_INVALID")
                 return
             }
             guard !isTransferring else {
-                failM1("ASSET_RESULT_INVALID")
+                terminateM1("ASSET_RESULT_INVALID")
                 return
             }
             currentM1Attempt = nil
             pendingM1Asset = nil
+            cancelM1ResultTimeout()
+            m1Operation?.task.cancel()
             m1State = .displayed(assetID: expected.id, hashPrefix: expected.hashPrefix)
         case "error":
             guard Int(rawBytes) <= expected.byteCount,
@@ -550,10 +639,10 @@ final class AppModel: ObservableObject {
                 return
             }
             guard case let .string(code)? = body["code"], isAssetCode(code) else {
-                failM1("ASSET_RESULT_INVALID")
+                terminateM1("ASSET_RESULT_INVALID")
                 return
             }
-            failM1(code)
+            terminateM1(code)
         default:
             return
         }

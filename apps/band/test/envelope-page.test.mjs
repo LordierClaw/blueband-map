@@ -83,7 +83,7 @@ test("rejects missing invalid or changed map run correlation", async () => {
   }) })
   const result = sent.findLast(message => message.topic === "map.asset.result")
   assert.equal(result.body.code, "ASSET_RUN_MISMATCH")
-  assert.equal(result.body.run, RUN)
+  assert.equal(result.body.run, RUN_B)
 })
 
 function fakeCrypto(digest = DIGEST) {
