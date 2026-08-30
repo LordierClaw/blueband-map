@@ -31,7 +31,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /topic:\s*["']system\.echo["']/)
   assert.match(page, /MAX_ENVELOPE_BYTES:\s*512/)
   assert.match(page, /MAX_RECENT_IDS:\s*64/)
-  assert.match(page, /MAX_ASSET_BYTES:\s*200\s*\*\s*1024/)
+  assert.match(page, /MAX_ASSET_BYTES:\s*64\s*\*\s*1024/)
   assert.match(page, /MAP_WIDTH:\s*212/)
   assert.match(page, /MAP_HEIGHT:\s*360/)
   assert.match(page, /import interconnect from ["']@system\.interconnect["']/)

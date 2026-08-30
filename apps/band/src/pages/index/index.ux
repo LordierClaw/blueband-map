@@ -29,12 +29,13 @@
 import interconnect from "@system.interconnect"
 import file from "@system.file"
 import crypto from "@system.crypto"
+import renderProtocol from "../../common/render-protocol.js"
 
 export default {
   private: {
     MAX_ENVELOPE_BYTES: 512,
     MAX_RECENT_IDS: 64,
-    MAX_ASSET_BYTES: 200 * 1024,
+    MAX_ASSET_BYTES: 64 * 1024,
     MAP_WIDTH: 212,
     MAP_HEIGHT: 360,
     connection: null,
@@ -59,6 +60,7 @@ export default {
     mapHashPrefix: "",
     renderItems: [],
     pendingPublication: null,
+    preparedRender: null,
     confirmedMap: null,
     retiredMapURI: "",
     nextRenderToken: 1,
@@ -183,6 +185,7 @@ export default {
     this.inFlightIDs = []
     this.activeTransfer = null
     this.pendingPublication = null
+    this.preparedRender = null
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
     if (this.confirmedMap) {
@@ -260,10 +263,21 @@ export default {
       return
     }
     if (this.inFlightIDs.indexOf(message.id) >= 0) return
+    if (message.topic === "render.prepare") {
+      this.handleRenderPrepare(message)
+      return
+    }
     if (message.topic.indexOf("map.asset.") === 0) {
       if (this.activeMapOperationID) {
         this.failAsset(message, "ASSET_BUSY")
         return
+      }
+      if (message.topic === "map.asset.begin" && this.isH1BeginBody(message.body)) {
+        var admission = renderProtocol.validateAssetBegin(message.body, this.preparedRender)
+        if (!admission.ok) {
+          this.rejectUnpreparedAsset(message)
+          return
+        }
       }
       this.activeMapOperationID = message.id
       this.inFlightIDs.push(message.id)
@@ -276,6 +290,64 @@ export default {
       var text = typeof message.body.text === "string" ? message.body.text : "(object)"
       this.appendRow(message.id, "IOS > " + text, false)
     }
+    this.rememberSuccess(message.id)
+    this.sendACK(message.id)
+  },
+
+  isH1BeginBody(body) {
+    return !!body && (body.renderer !== undefined || body.format !== undefined ||
+      body.scene !== undefined || body.formatVersion !== undefined)
+  },
+
+  handleRenderPrepare(message) {
+    var body = message.body
+    var occupied = this.preparedRender || this.activeTransfer || this.pendingPublication ||
+      (this.activeMapOperationID ? {} : null)
+    var result = renderProtocol.validatePrepare(body, { prepared: occupied })
+    if (!result.ok) {
+      this.sendRenderReject(body, result.code)
+      this.rememberSuccess(message.id)
+      this.sendACK(message.id)
+      return
+    }
+    this.preparedRender = result.prepared
+    this.sendEnvelope({
+      v: 1,
+      id: this.nextBandMessageID(),
+      src: "band",
+      type: "message",
+      topic: "render.ready",
+      body: {
+        runId: result.prepared.runId,
+        sceneId: result.prepared.sceneId,
+        renderer: result.prepared.renderer,
+        formatVersion: result.prepared.formatVersion,
+        width: result.prepared.width,
+        height: result.prepared.height,
+        bytes: result.prepared.bytes,
+        primitives: result.prepared.primitives
+      }
+    })
+    this.rememberSuccess(message.id)
+    this.sendACK(message.id)
+  },
+
+  sendRenderReject(body, code) {
+    var runId = renderProtocol.validIdentifier(body && body.runId) ? body.runId : ""
+    var sceneId = renderProtocol.validIdentifier(body && body.sceneId) ? body.sceneId : ""
+    this.sendEnvelope({
+      v: 1,
+      id: this.nextBandMessageID(),
+      src: "band",
+      type: "message",
+      topic: "render.reject",
+      body: { runId: runId, sceneId: sceneId, code: code }
+    })
+  },
+
+  rejectUnpreparedAsset(message) {
+    var body = message.body || {}
+    this.sendAssetResult(this.safeAsset(body.asset), this.safeRun(body.run), "error", 0, "", "ASSET_PREPARE_REQUIRED")
     this.rememberSuccess(message.id)
     this.sendACK(message.id)
   },
@@ -297,6 +369,12 @@ export default {
   },
 
   validBeginBody(body) {
+    if (this.isH1BeginBody(body)) {
+      return typeof body.asset === "string" && /^h1-[0-9a-f]{16}$/.test(body.asset) &&
+        renderProtocol.validateAssetBegin(body, this.preparedRender).ok &&
+        body.mime === body.format && body.mime === this.preparedRender.format &&
+        this.validRun(body.run)
+    }
     return typeof body.asset === "string" && /^m1-[0-9a-f]{16}$/.test(body.asset) &&
       this.validInteger(body.bytes) && body.bytes > 0 && body.bytes <= this.MAX_ASSET_BYTES &&
       this.validInteger(body.width) && body.width === this.MAP_WIDTH &&
@@ -325,7 +403,12 @@ export default {
       mime: body.mime,
       sha256: body.sha256,
       run: body.run,
-      uri: "internal://files/" + body.asset + ".png",
+      renderer: this.isH1BeginBody(body) ? body.renderer : "raster",
+      format: this.isH1BeginBody(body) ? body.format : "image/png",
+      formatVersion: this.isH1BeginBody(body) ? body.formatVersion : 0,
+      primitives: this.isH1BeginBody(body) ? body.primitives : 0,
+      scene: this.isH1BeginBody(body) ? body.scene : "",
+      uri: "internal://files/" + body.asset + (this.isH1BeginBody(body) && body.renderer === "vector" ? ".bbmv" : ".png"),
       receivedBytes: 0
     }
     var activate = function () {
@@ -484,6 +567,7 @@ export default {
       this.failAsset(message, "ASSET_DIGEST_MISMATCH")
       return
     }
+    if (transfer.renderer === "vector") this.preparedRender = null
     var asset = transfer.asset
     var bytes = transfer.bytes
     var prefix = transfer.sha256.slice(0, 8)
@@ -552,6 +636,7 @@ export default {
     var owned = this.releaseMapOperation(message.id)
     if (!owned && code !== "ASSET_BUSY") return
     this.removeInFlight(message.id)
+    if (owned && this.isH1BeginBody(body)) this.preparedRender = null
     if (code === "ASSET_BUSY") {
       var rejectedAsset = this.safeAsset(message.body.asset)
       this.sendAssetResult(rejectedAsset, this.safeRun(message.body.run), "error", 0, "", code)
@@ -575,6 +660,7 @@ export default {
     var run = transfer.run
     var bytes = transfer.receivedBytes
     var prefix = transfer.sha256.slice(0, 8)
+    if (transfer.renderer === "vector") this.preparedRender = null
     this.activeTransfer = null
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
@@ -602,7 +688,7 @@ export default {
   },
 
   safeAsset(asset) {
-    return typeof asset === "string" && /^m1-[0-9a-f]{16}$/.test(asset) ? asset : ""
+    return typeof asset === "string" && /^(?:m1|h1)-[0-9a-f]{16}$/.test(asset) ? asset : ""
   },
 
   safeRun(run) {
@@ -675,6 +761,12 @@ export default {
       topic: "map.asset.result",
       body: body
     })
+  },
+
+  nextBandMessageID() {
+    var id = "b-" + Date.now() + "-" + this.nextID
+    this.nextID = this.nextID + 1
+    return id
   },
 
   sendEnvelope(message) {

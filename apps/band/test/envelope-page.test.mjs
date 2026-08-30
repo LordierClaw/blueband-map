@@ -13,13 +13,20 @@ const RUN_B = "run-fedcba9876543210"
 
 async function loadPage(connection, file, crypto) {
   const ux = await readFile(new URL("../src/pages/index/index.ux", import.meta.url), "utf8")
+  const protocolSource = await readFile(new URL("../src/common/render-protocol.js", import.meta.url), "utf8")
+  const renderProtocol = new Function(
+    protocolSource
+      .replace(/export \{[^}]+\}\n/, "")
+      .replace("export default", "return")
+  )()
   const script = ux.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/import interconnect from ["']@system\.interconnect["']/, "")
     .replace(/import file from ["']@system\.file["']/, "")
     .replace(/import crypto from ["']@system\.crypto["']/, "")
+    .replace(/import renderProtocol from ["']\.\.\/\.\.\/common\/render-protocol\.js["']/, "")
     .replace("export default", "return")
-  const component = new Function("interconnect", "file", "crypto", script)(
-    { instance() { return connection } }, file, crypto
+  const component = new Function("interconnect", "file", "crypto", "renderProtocol", script)(
+    { instance() { return connection } }, file, crypto, renderProtocol
   )
   const page = structuredClone(component.private)
   for (const [name, value] of Object.entries(component)) if (name !== "private") page[name] = value
@@ -75,6 +82,90 @@ test("map transfer requires one bounded run ID and result round-trips it exactly
     status: "ok"
   })
   assertBoundedBandEnvelopes(page, sent)
+})
+
+test("H1 renderer requires matching prepare before asset begin and emits ready", async () => {
+  const { page, sent, file } = await readyHarness()
+  const prepare = {
+    runId: RUN,
+    sceneId: "scene-0123456789",
+    renderer: "vector",
+    format: "application/vnd.blueband.map-vector-v1",
+    formatVersion: 1,
+    width: 212,
+    height: 360,
+    bytes: 4,
+    sha256: DIGEST,
+    primitives: 8
+  }
+  page.receiveMessage({ data: envelope("prepare-1", "render.prepare", prepare) })
+  assert.deepEqual(sent.find(message => message.topic === "render.ready").body, {
+    runId: RUN,
+    sceneId: "scene-0123456789",
+    renderer: "vector",
+    formatVersion: 1,
+    width: 212,
+    height: 360,
+    bytes: 4,
+    primitives: 8
+  })
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "prepare-1").length, 1)
+
+  page.receiveMessage({ data: envelope("h1-begin", "map.asset.begin", {
+    asset: `h1-${DIGEST.slice(0, 16)}`,
+    bytes: 4,
+    width: 212,
+    height: 360,
+    mime: prepare.format,
+    format: prepare.format,
+    renderer: prepare.renderer,
+    formatVersion: 1,
+    sha256: DIGEST,
+    primitives: 8,
+    run: RUN,
+    scene: prepare.sceneId
+  }) })
+  assert.equal(page.activeTransfer?.renderer, "vector")
+  assert.equal(file.writes.length, 0)
+})
+
+test("H1 asset begin without matching prepare is rejected before file allocation", async () => {
+  const { page, sent, file } = await readyHarness()
+  page.receiveMessage({ data: envelope("unprepared", "map.asset.begin", {
+    asset: `h1-${DIGEST.slice(0, 16)}`,
+    bytes: 4,
+    width: 212,
+    height: 360,
+    mime: "application/vnd.blueband.map-vector-v1",
+    format: "application/vnd.blueband.map-vector-v1",
+    renderer: "vector",
+    formatVersion: 1,
+    sha256: DIGEST,
+    primitives: 8,
+    run: RUN,
+    scene: "scene-0123456789"
+  }) })
+  assert.equal(page.activeTransfer, null)
+  assert.equal(file.accesses.length, 0)
+  assert.equal(file.writes.length, 0)
+  assert.equal(sent.some(message => message.topic === "render.ready"), false)
+})
+
+test("H1 prepare while an asset is active rejects as busy", async () => {
+  const { page, sent } = await pendingPublicationHarness()
+  page.receiveMessage({ data: envelope("busy-prepare", "render.prepare", {
+    runId: RUN,
+    sceneId: "scene-0123456789",
+    renderer: "raster",
+    format: "image/png",
+    formatVersion: 1,
+    width: 212,
+    height: 360,
+    bytes: 4,
+    sha256: DIGEST,
+    primitives: 0
+  }) })
+  assert.equal(sent.find(message => message.topic === "render.reject").body.code, "busy")
 })
 
 test("rejects missing invalid or changed map run correlation", async () => {
