@@ -10,7 +10,8 @@ printf 'safe=true\n' >"$fixture_root/config.txt"
 git -C "$fixture_root" add config.txt
 "$project_root/scripts/verify-no-secrets.sh" "$fixture_root"
 
-printf 'AUTH_KEY=00112233445566778899aabbccddeeff\n' >"$fixture_root/unsafe.env"
+synthetic_key=$(printf 'a%.0s' {1..32})
+printf 'AUTH_KEY=%s\n' "$synthetic_key" >"$fixture_root/unsafe.env"
 git -C "$fixture_root" add -f unsafe.env
 set +e
 output=$("$project_root/scripts/verify-no-secrets.sh" "$fixture_root" 2>&1)
@@ -19,7 +20,7 @@ set -e
 
 test "$status" -ne 0
 grep -q 'unsafe.env' <<<"$output"
-if grep -q '00112233445566778899aabbccddeeff' <<<"$output"; then
+if grep -q "$synthetic_key" <<<"$output"; then
   echo 'secret gate printed matched secret content' >&2
   exit 1
 fi

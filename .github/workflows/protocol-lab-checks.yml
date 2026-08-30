@@ -1,0 +1,25 @@
+name: Protocol laboratory checks
+
+on:
+  push:
+    paths: ['tools/protocol-lab/**', '.github/workflows/protocol-lab-checks.yml']
+  pull_request:
+    paths: ['tools/protocol-lab/**', '.github/workflows/protocol-lab-checks.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protocol-lab-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run protocol laboratory tests
+        run: make test-lab

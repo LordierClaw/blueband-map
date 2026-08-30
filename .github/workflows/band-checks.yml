@@ -1,0 +1,25 @@
+name: Band package checks
+
+on:
+  push:
+    paths: ['apps/band/**', '.github/workflows/band-checks.yml']
+  pull_request:
+    paths: ['apps/band/**', '.github/workflows/band-checks.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: band-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run Band package tests
+        run: make test-rpk

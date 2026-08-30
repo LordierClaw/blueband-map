@@ -522,7 +522,7 @@ final class InterconnectSessionTests: XCTestCase {
             idGenerator: { "i-noncooperative-retention" },
             sendCommand: { command in try await sender.send(command) }
         )
-        weak let weakSession = session
+        weak var weakSession = session
         try await session?.receive(.statusRequest(identity))
 
         var result: Task<Result<String, Swift.Error>, Never>? = Task { [session] in
