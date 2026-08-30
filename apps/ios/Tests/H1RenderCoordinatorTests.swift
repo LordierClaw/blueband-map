@@ -32,7 +32,24 @@ final class H1RenderCoordinatorTests: XCTestCase {
 
         await coordinator.start(mode: .vectorVietmap, tileMapKey: "not-exported")
 
-        XCTAssertEqual(coordinator.state, .failed(mode: .vectorVietmap, code: "PROVIDER_HTTP_403"))
+        XCTAssertEqual(coordinator.state, .failed(mode: .vectorVietmap, code: "STYLE_HTTP_403"))
+        let startedCount = await sender.startedCount
+        XCTAssertEqual(startedCount, 0)
+    }
+
+    func testTileHTTPStatusIsSeparatedFromStyleWithoutProviderBodyOrKey() async {
+        let sender = H1TestSender()
+        let coordinator = H1RenderCoordinator(
+            session: sender,
+            assetProvider: { _, _, _ in throw H1AssetFactory.Error.tileHTTPStatus(404) },
+            resultTimeout: .seconds(10),
+            runIDGenerator: { "h1-run-000000000001" },
+            sceneIDGenerator: { "scene-000000000001" }
+        )
+
+        await coordinator.start(mode: .vectorVietmap, tileMapKey: "not-exported")
+
+        XCTAssertEqual(coordinator.state, .failed(mode: .vectorVietmap, code: "TILE_HTTP_404"))
         let startedCount = await sender.startedCount
         XCTAssertEqual(startedCount, 0)
     }

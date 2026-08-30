@@ -685,7 +685,7 @@ final class H1RenderCoordinator {
             }
         case let error as VietmapStyleError:
             switch error {
-            case let .httpStatus(status): return providerHTTPCode(status)
+            case let .httpStatus(status): return stageHTTPCode("STYLE", status: status)
             case .wrongContentType: return "PROVIDER_MIME"
             case .missingTileMapKey: return "TILEMAP_KEY_MISSING"
             case .invalidJSON, .missingTiles, .noRoadLayers: return "PROVIDER_DATA"
@@ -693,7 +693,7 @@ final class H1RenderCoordinator {
             }
         case let error as H1AssetFactory.Error:
             switch error {
-            case let .tileHTTPStatus(status): return providerHTTPCode(status)
+            case let .tileHTTPStatus(status): return stageHTTPCode("TILE", status: status)
             case .tileWrongContentType: return "PROVIDER_MIME"
             case .missingTileMapConfiguration: return "TILEMAP_KEY_MISSING"
             case .tileEmpty, .tileHasNoRoads: return "PROVIDER_DATA"
@@ -709,6 +709,10 @@ final class H1RenderCoordinator {
 
     private func providerHTTPCode(_ status: Int) -> String {
         (100...599).contains(status) ? "PROVIDER_HTTP_\(status)" : "PROVIDER_HTTP"
+    }
+
+    private func stageHTTPCode(_ stage: String, status: Int) -> String {
+        (100...599).contains(status) ? "\(stage)_HTTP_\(status)" : "\(stage)_HTTP"
     }
 
     private func transferCode(for error: Swift.Error) -> String {

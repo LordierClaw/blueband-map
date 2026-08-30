@@ -73,7 +73,7 @@ struct H1AssetFactory: Sendable {
                 throw Error.missingTileMapConfiguration
             }
             let template = try await styleClient.discover(tileMapKey: tileMapKey)
-            let zoom = request.zoom
+            let zoom = Self.clampedZoom(request.zoom, template: template)
             let coordinate = Self.tileCoordinate(
                 latitude: request.latitude,
                 longitude: request.longitude,
@@ -97,7 +97,10 @@ struct H1AssetFactory: Sendable {
             guard response.statusCode == 200 else {
                 throw Error.tileHTTPStatus(response.statusCode)
             }
-            guard Self.isVectorTileContentType(response.header(named: "Content-Type")) else {
+            guard Self.isVectorTileContentType(
+                response.header(named: "Content-Type"),
+                url: tileURL
+            ) else {
                 throw Error.tileWrongContentType
             }
             guard !response.body.isEmpty else { throw Error.tileEmpty }
@@ -147,16 +150,31 @@ struct H1AssetFactory: Sendable {
         )
     }
 
-    private static func isVectorTileContentType(_ value: String?) -> Bool {
+    private static func clampedZoom(_ requestedZoom: Int, template: VectorTileTemplate) -> Int {
+        var zoom = requestedZoom
+        if let minimumZoom = template.minimumZoom { zoom = max(zoom, minimumZoom) }
+        if let maximumZoom = template.maximumZoom { zoom = min(zoom, maximumZoom) }
+        return zoom
+    }
+
+    private static func isVectorTileContentType(_ value: String?, url: URL) -> Bool {
         guard let value else { return false }
         let mediaType = value
             .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        return [
+        if [
             "application/vnd.mapbox-vector-tile",
             "application/x-protobuf",
             "application/octet-stream",
-        ].contains(mediaType)
+        ].contains(mediaType) {
+            return true
+        }
+        return mediaType == "text/plain"
+            && url.scheme?.lowercased() == "https"
+            && url.host?.lowercased() == "maps.vietmap.vn"
+            && url.user == nil
+            && url.password == nil
+            && url.path.lowercased().hasSuffix(".pbf")
     }
 }
