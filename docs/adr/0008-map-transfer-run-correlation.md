@@ -16,10 +16,10 @@ Chunk sizing reserves the maximum 24-byte run ID even when the current run is sh
 The independent Swift and Band JavaScript tests use these exact body vectors:
 
 ```json
-{"asset":"m1-0123456789abcdef","bytes":4,"height":360,"mime":"image/png","run":"run-0123456789abcdef","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","width":212}
-{"asset":"m1-0123456789abcdef","data":"AAECAw==","offset":0,"run":"run-0123456789abcdef"}
-{"asset":"m1-0123456789abcdef","run":"run-0123456789abcdef"}
-{"asset":"m1-0123456789abcdef","bytes":4,"run":"run-0123456789abcdef","sha256Prefix":"01234567","status":"ok"}
+{"asset":"m1-054edec1d0211f62","bytes":4,"height":360,"mime":"image/png","run":"run-0123456789abcdef","sha256":"054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8","width":212}
+{"asset":"m1-054edec1d0211f62","data":"AAECAw==","offset":0,"run":"run-0123456789abcdef"}
+{"asset":"m1-054edec1d0211f62","run":"run-0123456789abcdef"}
+{"asset":"m1-054edec1d0211f62","bytes":4,"run":"run-0123456789abcdef","sha256Prefix":"054edec1","status":"ok"}
 ```
 
 An `ASSET_RUN_MISMATCH` result carries the rejected message's run, allowing the owner of a newer run to ignore a stale prior message rather than fail the current attempt.

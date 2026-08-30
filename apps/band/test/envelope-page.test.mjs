@@ -3,10 +3,10 @@ import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import test from "node:test"
 
-const ASSET = "m1-0123456789abcdef"
+const ASSET = "m1-054edec1d0211f62"
 const ASSET_B = "m1-fedcba9876543210"
 const URI = `internal://files/${ASSET}.png`
-const DIGEST = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const DIGEST = "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8"
 const RUN = "run-0123456789abcdef"
 const RUN_B = "run-fedcba9876543210"
 
@@ -45,6 +45,8 @@ function beginBody(overrides = {}) {
 }
 
 test("map transfer requires one bounded run ID and result round-trips it exactly", async () => {
+  assert.equal(createHash("sha256").update(Buffer.from([0, 1, 2, 3])).digest("hex"), DIGEST)
+  assert.equal(ASSET, `m1-${DIGEST.slice(0, 16)}`)
   const { page, sent } = await readyHarness()
   const begin = envelope("run-begin", "map.asset.begin", beginBody({ bytes: 4 }))
   const chunk = envelope("run-chunk", "map.asset.chunk", {
@@ -58,13 +60,19 @@ test("map transfer requires one bounded run ID and result round-trips it exactly
   page.mapComplete(pendingToken(page))
 
   const result = sent.findLast(message => message.topic === "map.asset.result")
-  assert.equal(result.body.run, RUN)
   assert.deepEqual(begin.body, {
     asset: ASSET, bytes: 4, width: 212, height: 360,
     mime: "image/png", sha256: DIGEST, run: RUN
   })
   assert.deepEqual(chunk.body, { asset: ASSET, offset: 0, data: "AAECAw==", run: RUN })
   assert.deepEqual(end.body, { asset: ASSET, run: RUN })
+  assert.deepEqual(result.body, {
+    asset: ASSET,
+    bytes: 4,
+    run: RUN,
+    sha256Prefix: "054edec1",
+    status: "ok"
+  })
   assertBoundedBandEnvelopes(page, sent)
 })
 
@@ -250,7 +258,7 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
   assert.deepEqual(crypto.hashCalls, [{ uri: URI, algo: "SHA256" }])
   assert.equal(page.mapReady, true)
   assert.equal(page.mapPath, URI)
-  assert.equal(page.mapHashPrefix, "01234567")
+  assert.equal(page.mapHashPrefix, "054edec1")
   assert.deepEqual(sent.at(-1), { v: 1, id: "end-1", src: "band", type: "ack" })
   assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
   const token = pendingToken(page)
@@ -260,7 +268,7 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
     run: RUN,
     status: "ok",
     bytes: 8,
-    sha256Prefix: "01234567"
+    sha256Prefix: "054edec1"
   })
   assert.equal(sent.at(-1).topic, "map.asset.result")
   assert.match(sent.at(-1).id, /^b-[0-9]+-[0-9]+$/)
@@ -403,7 +411,7 @@ test("reports ASSET_RENDER only when image rendering fails and consumes lifecycl
     run: RUN,
     status: "error",
     bytes: 4,
-    sha256Prefix: "01234567",
+    sha256Prefix: "054edec1",
     code: "ASSET_RENDER"
   })
   assert.equal(file.deletes.filter(uri => uri === URI).length, 1)

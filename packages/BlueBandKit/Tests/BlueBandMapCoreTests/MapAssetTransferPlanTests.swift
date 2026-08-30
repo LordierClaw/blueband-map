@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 import BlueBandCore
+import Crypto
 @testable import BlueBandMapCore
 
 final class MapAssetTransferPlanTests: XCTestCase {
@@ -191,24 +192,109 @@ final class MapAssetTransferPlanTests: XCTestCase {
     }
 
     func testIndependentRunCorrelatedBodyVectorIsExact() throws {
-        let asset = try MapAsset.png(
-            data: pngData(byteCount: 29, width: 212, height: 360),
-            expectedWidth: 212,
-            expectedHeight: 360
+        let documentedAssetID = "m1-054edec1d0211f62"
+        let documentedDigest = "054edec1d0211f624fed0cbca9d4f9400b0e491c43742af2c5b0abebf0c990d8"
+        let documentedRunID = "run-0123456789abcdef"
+        let fixture = ExactApplicationMapAssetFixture(
+            data: Data([0, 1, 2, 3]),
+            width: 212,
+            height: 360,
+            runID: documentedRunID
         )
-        let steps = try MapAssetTransferPlan.make(asset: asset, runID: "run-vector-0001")
+        let steps = fixture.transferSteps
 
-        XCTAssertEqual(steps.first?.body["run"], .string("run-vector-0001"))
+        XCTAssertEqual(fixture.assetID, documentedAssetID)
+        XCTAssertEqual(fixture.sha256, documentedDigest)
+        XCTAssertEqual(steps.first?.body, [
+            "asset": .string(documentedAssetID),
+            "bytes": .number(4),
+            "height": .number(360),
+            "mime": .string("image/png"),
+            "run": .string(documentedRunID),
+            "sha256": .string(documentedDigest),
+            "width": .number(212),
+        ])
         XCTAssertEqual(steps.dropFirst().first?.body, [
-            "asset": .string(asset.id),
-            "data": .string(asset.data.base64EncodedString()),
+            "asset": .string(documentedAssetID),
+            "data": .string("AAECAw=="),
             "offset": .number(0),
-            "run": .string("run-vector-0001"),
+            "run": .string(documentedRunID),
         ])
         XCTAssertEqual(steps.last?.body, [
-            "asset": .string(asset.id),
-            "run": .string("run-vector-0001"),
+            "asset": .string(documentedAssetID),
+            "run": .string(documentedRunID),
         ])
+
+        let resultBody: [String: JSONValue] = [
+            "asset": .string(documentedAssetID),
+            "bytes": .number(4),
+            "run": .string(documentedRunID),
+            "sha256Prefix": .string("054edec1"),
+            "status": .string("ok"),
+        ]
+        let resultEnvelope = ApplicationEnvelope.message(
+            id: "b-result-vector",
+            source: .band,
+            topic: "map.asset.result",
+            body: resultBody
+        )
+        XCTAssertEqual(resultEnvelope.body, resultBody)
+
+        for step in steps {
+            let envelope = ApplicationEnvelope.message(
+                id: "i-vector",
+                source: .ios,
+                topic: step.topic,
+                body: step.body
+            )
+            XCTAssertLessThanOrEqual(try envelope.encoded().count, ApplicationEnvelope.maximumEncodedSize)
+        }
+        XCTAssertLessThanOrEqual(
+            try resultEnvelope.encoded().count,
+            ApplicationEnvelope.maximumEncodedSize
+        )
+    }
+
+    private struct ExactApplicationMapAssetFixture {
+        let data: Data
+        let width: Int
+        let height: Int
+        let runID: String
+        let sha256: String
+        let assetID: String
+
+        init(data: Data, width: Int, height: Int, runID: String) {
+            self.data = data
+            self.width = width
+            self.height = height
+            self.runID = runID
+            sha256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            assetID = "m1-" + String(sha256.prefix(16))
+        }
+
+        var transferSteps: [MapTransferStep] {
+            [
+                MapTransferStep(topic: "map.asset.begin", body: [
+                    "asset": .string(assetID),
+                    "bytes": .number(Double(data.count)),
+                    "height": .number(Double(height)),
+                    "mime": .string("image/png"),
+                    "run": .string(runID),
+                    "sha256": .string(sha256),
+                    "width": .number(Double(width)),
+                ]),
+                MapTransferStep(topic: "map.asset.chunk", body: [
+                    "asset": .string(assetID),
+                    "data": .string(data.base64EncodedString()),
+                    "offset": .number(0),
+                    "run": .string(runID),
+                ]),
+                MapTransferStep(topic: "map.asset.end", body: [
+                    "asset": .string(assetID),
+                    "run": .string(runID),
+                ]),
+            ]
+        }
     }
 
     private func string(_ key: String, in body: [String: JSONValue]) throws -> String {
