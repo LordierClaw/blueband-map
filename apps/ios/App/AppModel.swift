@@ -165,7 +165,9 @@ final class AppModel: ObservableObject {
                     guard generation == scanGeneration, !Task.isCancelled else { break }
                     candidates = batch
                 }
-            } catch where !Task.isCancelled { errorMessage = safeMessage(for: error) }
+            } catch {
+                if !Task.isCancelled { errorMessage = safeMessage(for: error) }
+            }
             if Task.isCancelled { await stopScan(generation: generation); return }
             if generation == scanGeneration, sessionState == .scanning { sessionState = .idle }
         } onCancel: {
