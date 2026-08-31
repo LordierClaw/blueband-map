@@ -4,20 +4,29 @@ This handoff applies only to the exact artifacts below. CI and live provider che
 
 ## Artifact identity
 
-- Source commit: `01100865f402d306c6cda2a7ae0c35b8f8ae5084`
+- Source commit: `f9aa484918d029cdbb496ee4ee1978dd3f07798b`
 - IPA: `artifacts/h1-hybrid/BlueBandMap-unsigned.ipa`
 - IPA version/build: `0.1.4 (5)`
-- IPA bytes / SHA-256: `782211` / `b7127112b9c5e34694ac95d9dbbfa4bb5194f1dd2829da9168e209eeee3d6201`
-- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.5.rpk`
-- RPK version/code: `0.2.5 (7)`
-- RPK bytes / SHA-256: `23139` / `43583ebcb09219579abbfb04eda4a351de3ca7e0abb1a77d550a87f4295f82fd`
-- Update **both** IPA and RPK. Fully remove the previous RPK first so Vela cannot reuse a cached package.
+- IPA bytes / SHA-256: `782211` / `8744e887b99ef0de2a79ae02076dc16c4972fe856bb349f51193d12bfd276c18`
+- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.6.rpk`
+- RPK version/code: `0.2.6 (8)`
+- RPK bytes / SHA-256: `24902` / `74408b469f50a45958f60e9872a139bd9a74331b9da656019e563967a8abe820`
+- This fix changes only the RPK. If IPA `0.1.4 (5)` is already installed, do not reinstall it. Fully remove the previous RPK before installing `0.2.6 (8)` so Vela cannot reuse a cached package.
 
 The IPA is unsigned. Keep signing credentials, profiles and private keys outside this repository.
 
 ## What was fixed
 
-The supplied run logs proved three independent failures:
+The latest three owner logs all reached asset validation and transfer start, then failed on the first chunk with `ASSET_BASE64_INVALID` for real raster, real vector and synthetic vector payloads. The shared failure was the Band page's use of `@system.crypto`: [Xiaomi's official compatibility table](https://iot.mi.com/vela/quickapp/en/features/security/crypto.html) marks that module unsupported on Xiaomi Smart Band 10. The Node harness mocked `crypto.atob` and `crypto.hashDigest`, which falsely made the old implementation pass locally.
+
+RPK `0.2.6 (8)` therefore:
+
+1. Removes the unsupported `system.crypto` feature/import completely.
+2. Decodes Base64 directly into `Uint8Array`, following Xiaomi's documented pure-JavaScript approach.
+3. Verifies SHA-256 incrementally while each file chunk is accepted, using only a fixed 64-byte block buffer instead of rereading or retaining the whole payload.
+4. Removes crypto injection and fake crypto implementations from the RPK test harness. The regression test now transfers binary bytes without any crypto module and verifies the actual stored bytes and digest.
+
+Earlier supplied logs also proved three independent failures that remain fixed:
 
 1. Raster and Synthetic 8 reached a Band `status=ok`, but the returned byte count did not match the transferred payload. The RPK success function had six parameters and depended on optional JavaScript arguments. It now has four parameters and returns the already validated publication metadata directly.
 2. The exported JSON was truncated at exactly 1,025 bytes. Export is now compact, sorted JSON below 1,024 bytes while internal run records remain detailed.
@@ -27,7 +36,7 @@ Vietmap's current `vlc-20260824` tile encoding did not decode with the transform
 
 Fresh live checks with the saved keys returned:
 
-- Static Map: HTTP 200, `image/png`, 212×360, 21,567 bytes.
+- Static Map: HTTP 200, `image/png`, 212×360, 21,896 bytes.
 - Current TileMap style: HTTP 200, `application/json`, 113,407 bytes.
 - Compatible legacy tile used during diagnosis: HTTP 200, 2,339,760 bytes; production Swift decoding produced a non-empty road scene for the fixed POC coordinate.
 
@@ -47,7 +56,7 @@ No key, provider URL, raw tile body, UUID or BLE secret is included in an H1 exp
 - iPhone 13 Pro Max on the intended iOS 26 build.
 - Xiaomi Smart Band 10 on the latest firmware; Mi Fitness fully closed during the session.
 - AuthKey, Vietmap Service key and Vietmap TileMap key show `SAVED` in Config.
-- Old Band package fully uninstalled, then RPK `0.2.5 (7)` installed.
+- Old Band package fully uninstalled, then RPK `0.2.6 (8)` installed.
 - IPA `0.1.4 (5)` installed and signed through the tester's normal process.
 - Test while stationary.
 
@@ -56,7 +65,7 @@ No key, provider URL, raw tile body, UUID or BLE secret is included in an H1 exp
 Run one mode at a time. After any terminal failure, disconnect and reconnect before the next attempt.
 
 1. Open the Band app.
-   - Expected: `BLUEBAND MAP`, a ready/link status and `RPK 0.2.5` appear immediately.
+   - Expected: `BLUEBAND MAP`, a ready/link status and `RPK 0.2.6` appear immediately.
    - Stop if the screen is black, frozen or displays another version.
 2. Connect from the compact device picker and complete authentication/trust.
    - Expected iPhone state: `Đã xác thực`.
@@ -67,7 +76,7 @@ Run one mode at a time. After any terminal failure, disconnect and reconnect bef
 4. Disconnect/reconnect and run `Raster · Indexed PNG`.
    - Expected: zero provider calls, a visible four-colour raster and displayed/success.
 5. Disconnect/reconnect and run `Raster · Vietmap Static Map`.
-   - Expected: one provider call, approximately 21,567 payload bytes, a recognizable map and displayed/success.
+   - Expected: one provider call, a roughly 20–25 KiB payload, a recognizable map and displayed/success.
 6. Disconnect/reconnect for each of `Synthetic 20` and `Synthetic 40`.
    - Expected primitive counts: 20 and 40. Record responsiveness and ACK p95; 40 is the H1 ceiling test.
 7. Disconnect/reconnect and run `Vector · Vietmap TileMap` last.
