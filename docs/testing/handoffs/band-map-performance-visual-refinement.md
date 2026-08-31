@@ -4,7 +4,8 @@
 
 | Item | Value |
 |---|---|
-| Source commit | `9e869d001b32e818bb6939ddb23e8c40d436f3c0` |
+| IPA source commit | `9e869d001b32e818bb6939ddb23e8c40d436f3c0` |
+| RPK source commit | `7bee25c413635d66271972906147b4b03397731b` |
 | iOS | `0.3.0 (13)` |
 | RPK | `0.4.0 (13)` |
 | iOS CI | [GitHub Actions run 33422881440](https://github.com/LordierClaw/blueband-map/actions/runs/33422881440) |
@@ -15,7 +16,7 @@ The IPA was produced only by GitHub Actions. The RPK was produced through the ca
 | Artifact | Local path | Bytes | SHA-256 |
 |---|---|---:|---|
 | Unsigned IPA | `artifacts/band-map-performance/ipa-0.3.0/BlueBandMap-unsigned.ipa` | 3,398,941 | `db97f83f677a7c0cb6f3ed3481bc18b4a8c30453db1dbd58da2018010c4c6d44` |
-| Debug RPK | `artifacts/band-map-performance/rpk/dev.lordierclaw.bluebandmap.band.debug.0.4.0.rpk` | 29,970 | `a2173657eaa00139532b099b0b0181a3f51790b0af4a6c428869a532e9134e6d` |
+| Debug RPK | `artifacts/band-map-performance/rpk/dev.lordierclaw.bluebandmap.band.debug.0.4.0.rpk` | 30,082 | `bdde998815ed7d6eedd393fe33160b2bcda234c2c51240a32cdffac071890b97` |
 
 IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.3.0 (13)`, minimum iOS 17, iPhone-only device family, an arm64 Mach-O executable, no `_CodeSignature`, and no embedded provisioning profile. RPK inspection confirmed package `dev.lordierclaw.bluebandmap.band`, version `0.4.0 (13)`.
 
@@ -36,7 +37,7 @@ IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.3.0 (1
 - Replaces the rectangular instruction card with the B1 212×96 full-width PNG8 fade HUD, one-line street name, exact-size maneuver images, and exceptional status line.
 - Replaces the 10 px dot with eight 26×32 PNG8 directional chevrons. Every orientation has a transparent margin and requires no runtime rotation, SVG, or clipping.
 - Validates and shows the prepare preview immediately, hides diagnostics behind it, preserves it through successful publication, and restores confirmed guidance if a refresh is cancelled, disconnected, or fails.
-- Buffers at most one early windowed chunk and appends it only after its predecessor; live updates for the confirmed scene refresh the rollback state without replacing the pending preview.
+- Buffers at most three early chunks for the supported window ceiling of four and appends them only in offset order; live updates for the confirmed scene refresh the rollback state without replacing the pending preview.
 - Packages and verifies every HUD/marker resource and bumps RPK from `0.3.0 (12)` to `0.4.0 (13)`.
 
 No backend service was added or changed. iOS directly requests the Vietmap dark-style endpoint and performs the final layer reduction, route drawing, and PNG8 encoding locally.
