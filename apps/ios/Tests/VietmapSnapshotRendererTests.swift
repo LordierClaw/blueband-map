@@ -7,7 +7,7 @@ import BlueBandMapCore
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
 
-    func testSanitizedLightStyleKeepsOnlyWearableMapContext() throws {
+    func testSanitizedDarkStyleKeepsOnlyWearableMapContext() throws {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "vietmap-light-style-layers", withExtension: "json"))
         let layers = try JSONDecoder().decode([Layer].self, from: Data(contentsOf: url))
         let retained = layers.filter { VietmapStyleLayerPolicy.keeps(id: $0.id, type: $0.type, zoom: 16) }.map(\.id)
@@ -18,6 +18,17 @@ final class VietmapSnapshotRendererTests: XCTestCase {
             "road_minor_casing", "road_minor", "road_primary_casing", "road_primary",
             "bridge_primary", "road_primary_label", "road_secondary_label",
         ])
+    }
+
+    func testUsesOfficialDarkStyleAndDeterministicLowEntropyPaints() throws {
+        XCTAssertEqual(
+            VietmapSnapshotRenderer.styleURL(tileMapKey: "fixture-key")?.absoluteString,
+            "https://maps.vietmap.vn/maps/styles/dm/style.json?apikey=fixture-key"
+        )
+        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "background", type: "background"), "#050e16")
+        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "water", type: "fill"), "#004f6e")
+        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "road_primary", type: "line"), "#607062")
+        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "road_primary_label", type: "symbol"), "#f4f3e5")
     }
 
     func testDegradedProfilesRemoveLowPriorityStyleLayers() {
@@ -66,8 +77,8 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         )
 
         XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.kind), [
-            .traveled, .upcomingHalo, .upcoming, .maneuver,
+            .traveled, .upcoming, .maneuver,
         ])
-        XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [4, 8, 5, 9])
+        XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [4, 5, 9])
     }
 }

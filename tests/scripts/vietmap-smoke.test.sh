@@ -16,6 +16,7 @@ cat >"$fake_curl" <<'FAKE'
 set -euo pipefail
 config=$(cat)
 grep -Fq "${FAKE_KEY:?}" <<<"$config"
+if [[ "$FAKE_MODE" == style ]]; then grep -Fq '/maps/styles/dm/style.json' <<<"$config"; fi
 printf '%s\n' "${FAKE_MODE:?}" >>"${FAKE_CALLS:?}"
 while (($#)); do
   case "$1" in
@@ -45,6 +46,9 @@ for mode in route style; do
   rm -f -- "$record"
 done
 [[ $(wc -l <"$calls") -eq 2 ]]
+
+grep -Fq '/maps/styles/dm/style.json' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift
+! grep -Fq 'upcomingHalo' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift
 
 chmod 640 "$fixture_root/key"
 ! scripts/vietmap-smoke.sh route "$fixture_root/key" >/dev/null 2>&1

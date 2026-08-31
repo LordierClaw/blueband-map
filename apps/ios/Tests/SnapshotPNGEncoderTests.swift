@@ -5,12 +5,15 @@ import BlueBandMapCore
 @testable import BlueBandMap
 
 final class SnapshotPNGEncoderTests: XCTestCase {
-    func testEncodesFullScreenIndexedPNGUsingFirstAdmittedProfile() throws {
+    func testEncodesFullScreenIndexedPNGUsingFirstTransferOptimizedProfile() throws {
         let image = try solidImage(width: 212, height: 520)
-        let output = try SnapshotPNGEncoder.encode(image)
+        let output = try SnapshotPNGEncoder.encode(
+            image,
+            profiles: SnapshotPaletteProfile.transferOptimizedOrder
+        )
 
-        XCTAssertEqual(output.profile, .colors32Labels)
-        XCTAssertEqual(output.colorCount, 32)
+        XCTAssertEqual(output.profile, .colors16Labels)
+        XCTAssertEqual(output.colorCount, 16)
         XCTAssertLessThanOrEqual(output.data.count, RenderProtocol.maximumPayloadBytes)
         let source = try XCTUnwrap(CGImageSourceCreateWithData(output.data as CFData, nil))
         let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))

@@ -453,8 +453,9 @@ final class AppModel: ObservableObject {
         let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
         let maneuverIndex = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
         var prepared: (snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)?
+        var candidates: [(snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)] = []
         var rejectedBytes = 0
-        for profile in SnapshotPaletteProfile.allCases {
+        for profile in SnapshotPaletteProfile.transferOptimizedOrder {
             let snapshot = try await snapshotRenderer.render(VietmapSnapshotRequest(
                 route: route,
                 progressIndex: progress.pointIndex,
@@ -465,11 +466,19 @@ final class AppModel: ObservableObject {
                 profile: profile
             ))
             do {
-                prepared = (snapshot, try SnapshotPNGEncoder.encode(snapshot.image, profiles: [profile]))
-                break
+                let encoded = try SnapshotPNGEncoder.encode(snapshot.image, profiles: [profile])
+                candidates.append((snapshot, encoded))
+                if encoded.data.count <= SnapshotPayloadAdmission.preferredMaximumBytes {
+                    prepared = (snapshot, encoded)
+                    break
+                }
             } catch let SnapshotPNGEncoder.Error.payloadTooLarge(bytes) {
                 rejectedBytes = bytes
             }
+        }
+        if prepared == nil,
+           let selected = SnapshotPayloadAdmission.choose(candidates.map { ($0.encoded.profile, $0.encoded.data.count) }) {
+            prepared = candidates.first { $0.encoded.profile == selected }
         }
         guard let prepared else { throw SnapshotPNGEncoder.Error.payloadTooLarge(rejectedBytes) }
         let snapshot = prepared.snapshot, encoded = prepared.encoded

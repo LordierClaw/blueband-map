@@ -148,13 +148,40 @@ enum VietmapStyleLayerPolicy {
     }
 }
 
+enum VietmapDarkStyle {
+    static func colorHex(id: String, type: String) -> String {
+        let id = id.lowercased()
+        switch type.lowercased() {
+        case "background": return "#050e16"
+        case "fill" where id.contains("water") || id.contains("ocean"): return "#004f6e"
+        case "fill" where id.contains("park") || id.contains("grass") || id.contains("wood"): return "#206239"
+        case "fill": return "#101c23"
+        case "line" where id.contains("primary") || id.contains("motorway") || id.contains("trunk"): return "#607062"
+        case "line": return "#3a4b4b"
+        case "symbol": return "#f4f3e5"
+        default: return "#1c2b32"
+        }
+    }
+
+    static func color(id: String, type: String) -> UIColor {
+        let hex = colorHex(id: id, type: type).dropFirst()
+        let value = UInt32(hex, radix: 16) ?? 0
+        return UIColor(
+            red: CGFloat((value >> 16) & 0xff) / 255,
+            green: CGFloat((value >> 8) & 0xff) / 255,
+            blue: CGFloat(value & 0xff) / 255,
+            alpha: 1
+        )
+    }
+}
+
 struct VietmapRouteOverlay {
-    enum Kind: Equatable { case traveled, upcomingHalo, upcoming, maneuver }
+    enum Kind: Equatable { case traveled, upcoming, maneuver }
     struct Command: Equatable { let kind: Kind; let width: CGFloat }
 
     static func commands(for request: VietmapSnapshotRequest) -> [Command] {
-        [Command(kind: .traveled, width: 4), Command(kind: .upcomingHalo, width: 8),
-         Command(kind: .upcoming, width: 5), Command(kind: .maneuver, width: 9)]
+        [Command(kind: .traveled, width: 4), Command(kind: .upcoming, width: 5),
+         Command(kind: .maneuver, width: 9)]
     }
 
     static func draw(_ request: VietmapSnapshotRequest, on overlay: MGLMapSnapshotOverlay) {
@@ -164,7 +191,6 @@ struct VietmapRouteOverlay {
         context.setLineJoin(.round)
         drawPath(Array(request.route.points.prefix(request.progressIndex + 1)), color: UIColor(white: 0.24, alpha: 1).cgColor, width: 4, overlay: overlay)
         let upcoming = Array(request.route.points.dropFirst(request.progressIndex))
-        drawPath(upcoming, color: UIColor(white: 0.04, alpha: 0.95).cgColor, width: 8, overlay: overlay)
         drawPath(upcoming, color: UIColor(red: 0, green: 0.9, blue: 1, alpha: 1).cgColor, width: 5, overlay: overlay)
         let point = overlay.point(for: coordinate(request.nextManeuver))
         context.setStrokeColor(UIColor(red: 0, green: 0.9, blue: 1, alpha: 1).cgColor)
@@ -220,7 +246,7 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
 
     func prewarm(tileMapKey: String) {
         guard prewarmer == nil,
-              let styleURL = styleURL(tileMapKey: tileMapKey) else { return }
+              let styleURL = Self.styleURL(tileMapKey: tileMapKey) else { return }
         let camera = MGLMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 0, longitude: 0), altitude: 0, pitch: 0, heading: 0)
         let options = MGLMapSnapshotOptions(styleURL: styleURL, camera: camera, size: CGSize(width: 1, height: 1))
         options.scale = 1
@@ -241,7 +267,7 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     func render(_ request: VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput {
         guard snapshotter == nil else { throw Error.busy }
         let configuration = try VietmapSnapshotConfiguration.make(request)
-        guard let styleURL = styleURL(tileMapKey: request.tileMapKey) else { throw Error.invalidRequest }
+        guard let styleURL = Self.styleURL(tileMapKey: request.tileMapKey) else { throw Error.invalidRequest }
         let camera = MGLMapCamera(
             lookingAtCenter: CLLocationCoordinate2D(latitude: configuration.center.latitude, longitude: configuration.center.longitude),
             altitude: 0,
@@ -297,6 +323,17 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
                 style.removeLayer(layer)
                 continue
             }
+            let color = NSExpression(forConstantValue: VietmapDarkStyle.color(id: layer.identifier, type: type))
+            if let layer = layer as? MGLBackgroundStyleLayer { layer.backgroundColor = color }
+            if let layer = layer as? MGLFillStyleLayer {
+                layer.fillColor = color
+                layer.fillOutlineColor = color
+            }
+            if let layer = layer as? MGLLineStyleLayer { layer.lineColor = color }
+            if let layer = layer as? MGLSymbolStyleLayer {
+                layer.textColor = color
+                layer.textHaloColor = NSExpression(forConstantValue: VietmapDarkStyle.color(id: "background", type: "background"))
+            }
             if type == "fill" { retainedFillLayers += 1 }
             if type == "line" { retainedLineLayers += 1 }
             if type == "symbol" { retainedSymbolLayers += 1 }
@@ -346,10 +383,10 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
 
     private func nowMilliseconds() -> Int { Int(Date().timeIntervalSince1970 * 1_000) }
 
-    private func styleURL(tileMapKey: String) -> URL? {
+    static func styleURL(tileMapKey: String) -> URL? {
         let key = tileMapKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty, key.utf8.count <= 512 else { return nil }
-        var components = URLComponents(string: "https://maps.vietmap.vn/maps/styles/tm/style.json")!
+        var components = URLComponents(string: "https://maps.vietmap.vn/maps/styles/dm/style.json")!
         components.queryItems = [URLQueryItem(name: "apikey", value: key)]
         return components.url
     }

@@ -27,7 +27,7 @@ if [[ "$mode" == route ]]; then
   endpoint="https://maps.vietmap.vn/api/route/v4?apikey=$key&point=10.759157,106.675859&point=10.771000,106.690000&points_encoded=true&vehicle=motorcycle"
   maximum_bytes=$((256 * 1024))
 else
-  endpoint="https://maps.vietmap.vn/maps/styles/tm/style.json?apikey=$key"
+  endpoint="https://maps.vietmap.vn/maps/styles/dm/style.json?apikey=$key"
   maximum_bytes=$((2 * 1024 * 1024))
 fi
 
