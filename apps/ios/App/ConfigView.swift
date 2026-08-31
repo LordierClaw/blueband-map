@@ -11,6 +11,7 @@ struct ConfigView: View {
                 authKeySection
                 tileMapKeySection
                 serviceKeySection
+                destinationSection
                 rememberedBandSection
                 if let error = model.errorMessage {
                     Section("Lỗi an toàn") {
@@ -85,6 +86,18 @@ struct ConfigView: View {
                 Text("Chưa có band đã nhớ").foregroundStyle(.secondary)
             }
             Button("Đóng") { dismiss() }
+        }
+    }
+
+    private var destinationSection: some View {
+        Section("Điểm đến") {
+            TextField("Latitude", text: $model.destinationLatitudeInput)
+                .keyboardType(.numbersAndPunctuation)
+            TextField("Longitude", text: $model.destinationLongitudeInput)
+                .keyboardType(.numbersAndPunctuation)
+            Button("Lưu điểm đến") { model.saveDestination() }
+            Text("Nhập tọa độ thật; bản này chưa có tìm kiếm địa điểm.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

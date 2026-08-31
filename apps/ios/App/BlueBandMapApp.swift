@@ -27,8 +27,7 @@ struct BlueBandMapApp: App {
             trustedRPKStore: trustStore,
             expectedPackage: BlueBandProduct.rpkPackage
         )
-        let staticMapProvider = VietmapStaticMapClient(transport: vietmapTransport)
-        let h1AssetFactory = H1AssetFactory(
+        let routeCardAssetFactory = RouteCardAssetFactory(
             styleClient: VietmapStyleClient(transport: vietmapTransport),
             tileTransport: vietmapTransport
         )
@@ -39,10 +38,10 @@ struct BlueBandMapApp: App {
             trustedRPKStore: trustStore,
             central: central,
             session: session,
-            staticMapProvider: staticMapProvider,
-            m1Session: BandSessionM1Sender(session: session),
-            h1Session: BandSessionH1Sender(session: session),
-            h1AssetProvider: h1AssetFactory.provider
+            routeClient: VietmapRouteClient(transport: vietmapTransport),
+            assetFactory: routeCardAssetFactory,
+            locationClient: ForegroundLocationClient(),
+            routeCardSession: BandSessionRouteCardSender(session: session)
         ))
     }
 

@@ -11,10 +11,10 @@ final class RenderRunTests: XCTestCase {
             transferMilliseconds: 70,
             validateMilliseconds: 4,
             renderMilliseconds: 3,
-            bytes: 4_096,
-            chunks: 16,
+            bytes: 1_024,
+            chunks: 7,
             retries: 1,
-            primitives: 20,
+            primitives: 0,
             providerCalls: 1,
             ackDurationsMilliseconds: [4, 10, 20, 40],
             terminalCode: "displayed"
@@ -23,7 +23,7 @@ final class RenderRunTests: XCTestCase {
         XCTAssertEqual(metrics.ackP50Milliseconds, 10)
         XCTAssertEqual(metrics.ackP95Milliseconds, 40)
         XCTAssertEqual(metrics.ackMaxMilliseconds, 40)
-        XCTAssertEqual(metrics.chunks, 16)
+        XCTAssertEqual(metrics.chunks, 7)
         XCTAssertEqual(metrics.providerCalls, 1)
     }
 
@@ -44,7 +44,7 @@ final class RenderRunTests: XCTestCase {
         ] {
             XCTAssertFalse(text.contains(privateValue), "Export leaked \(privateValue)")
         }
-        XCTAssertTrue(text.contains("h1-run-0123456789"))
+        XCTAssertTrue(text.contains("nav-run-0123456789"))
         XCTAssertTrue(text.contains("ackP95Ms"))
     }
 
@@ -57,8 +57,8 @@ final class RenderRunTests: XCTestCase {
             transferMilliseconds: 45_196,
             validateMilliseconds: 0,
             renderMilliseconds: 239,
-            bytes: 21_567,
-            chunks: 120,
+            bytes: 1_024,
+            chunks: 7,
             retries: 0,
             primitives: 0,
             providerCalls: 1,
@@ -89,7 +89,7 @@ final class RenderRunTests: XCTestCase {
             chunks: 0,
             retries: 0,
             primitives: 0,
-            providerCalls: 0,
+            providerCalls: 1,
             ackDurationsMilliseconds: [],
             terminalCode: "failed"
         )) { error in
@@ -99,9 +99,9 @@ final class RenderRunTests: XCTestCase {
 
     private func makeRecord() throws -> RenderRunRecord {
         let identity = try RenderRunIdentity(
-            runID: "h1-run-0123456789",
+            runID: "nav-run-0123456789",
             sceneID: "scene-0123456789",
-            renderer: .vector,
+            renderer: .raster,
             formatVersion: 1,
             width: 212,
             height: 360,
@@ -115,11 +115,11 @@ final class RenderRunTests: XCTestCase {
             transferMilliseconds: 70,
             validateMilliseconds: 4,
             renderMilliseconds: 3,
-            bytes: 4_096,
-            chunks: 16,
+            bytes: 1_024,
+            chunks: 7,
             retries: 1,
-            primitives: 20,
-            providerCalls: 1,
+            primitives: 0,
+            providerCalls: 0,
             ackDurationsMilliseconds: [4, 10, 20, 40],
             terminalCode: "displayed"
         )

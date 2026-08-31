@@ -1,5 +1,8 @@
 # H1 native road renderer — owner hardware handoff
 
+Status: **historical and superseded by the live route-card handoff**. The
+artifacts and test sequence below document the retired H1 experiment only.
+
 CI proves compilation and deterministic behavior. Only the owner test on the iPhone and Smart Band 10 proves hardware acceptance.
 
 ## Artifact identity

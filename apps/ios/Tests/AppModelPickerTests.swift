@@ -87,6 +87,7 @@ final class AppModelPickerTests: XCTestCase {
             cipher: cipher,
             trustedRPKStore: trustStore
         )
+        let transport = URLSessionHTTPTransport()
         return AppModel(
             keyStore: PickerAuthKeyStore(mode: authMode),
             vietmapKeyStore: PickerVietmapKeyStore(),
@@ -94,8 +95,12 @@ final class AppModelPickerTests: XCTestCase {
             trustedRPKStore: trustStore,
             central: central,
             session: session,
-            staticMapProvider: PickerStaticMapProvider(),
-            m1Session: PickerM1Session(),
+            routeClient: VietmapRouteClient(transport: transport),
+            assetFactory: RouteCardAssetFactory(
+                styleClient: VietmapStyleClient(transport: transport),
+                tileTransport: transport
+            ),
+            locationClient: ForegroundLocationClient(),
             scanDuration: .seconds(3_600)
         )
     }
@@ -188,16 +193,4 @@ private actor PickerCentral: BandCentralProtocol {
 
 private enum PickerCentralError: Swift.Error {
     case unexpectedConnect
-}
-
-private struct PickerStaticMapProvider: StaticMapProviding {
-    func fetch(_ request: StaticMapRequest, serviceKey: String) async throws -> MapAsset {
-        throw PickerCentralError.unexpectedConnect
-    }
-}
-
-private struct PickerM1Session: M1SessionSending {
-    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws {
-        throw PickerCentralError.unexpectedConnect
-    }
 }

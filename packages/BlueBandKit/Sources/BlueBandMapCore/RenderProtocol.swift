@@ -3,12 +3,10 @@ import BlueBandCore
 
 public enum RenderKind: String, Codable, CaseIterable, Sendable {
     case raster
-    case vector
 }
 
 public enum RenderFormat: String, Codable, Sendable {
     case raster = "image/png"
-    case vector = "application/vnd.blueband.map-vector-v1"
 }
 
 public enum RenderRejectCode: String, Codable, CaseIterable, Sendable {
@@ -43,8 +41,8 @@ public enum RenderProtocol {
     public static let formatVersion = 1
     public static let viewportWidth = 212
     public static let viewportHeight = 360
-    public static let maximumPayloadBytes = 64 * 1_024
-    public static let maximumPrimitives = 60
+    public static let maximumPayloadBytes = 1_024
+    public static let maximumPrimitives = 0
     public static let maximumIdentifierBytes = 24
 
     public static func isValidIdentifier(_ value: String) -> Bool {
@@ -77,7 +75,7 @@ public enum RenderProtocol {
         guard width == viewportWidth, height == viewportHeight else {
             throw RenderProtocolError.invalidDimensions
         }
-        guard format == (renderer == .raster ? RenderFormat.raster.rawValue : RenderFormat.vector.rawValue) else {
+        guard renderer == .raster, format == RenderFormat.raster.rawValue else {
             throw RenderProtocolError.invalidFormat
         }
         guard formatVersion == Self.formatVersion else {

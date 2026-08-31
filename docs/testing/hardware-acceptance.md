@@ -8,7 +8,7 @@ Status: **not yet executed for this new foundation**.
 |---|---|---|
 | Verify IPA/RPK SHA-256 | Matches workflow `SHA256SUMS` | Not run |
 | Install unsigned iOS app | Launches under free Apple ID provisioning | Not run |
-| Clean-install RPK | Shows `RPK 0.1.0` | Not run |
+| Clean-install RPK | Shows `RPK 0.2.9` and route-card waiting state | Not run |
 | Foreground scan | Band 10 is selectable | Not run |
 | FE95/5E/5F discovery | SPP configuration succeeds | Not run |
 | Auth and proof | Model, firmware, battery populated | Not run |
@@ -116,25 +116,22 @@ Allowed fields include build, phase, device class, OS version, user-recorded fir
 
 Never export AuthKey, Vietmap keys, full CoreBluetooth peripheral identifiers, nonces, HMACs, derived keys, raw encrypted payloads, private signing material or unredacted captures.
 
-### M1 run ownership and HTTPS acceptance cases
+### Live route-card acceptance cases
 
-Run these with a controlled fixture build and redacted diagnostics. Do not use a real key or live Vietmap request for redirect injection.
+Run these with the real route response and redacted diagnostics. No mock or
+synthetic map is accepted as a runtime result.
 
 | Case | Procedure | Expected result | Result |
 |---|---|---|---|
 | Stale prior result, same asset | Complete attempt A terminally, explicitly start attempt B with identical PNG bytes, then deliver A's delayed `map.asset.result` before B's current result. | The asset IDs may match, but A's run ID is ignored. B remains transferring or waiting until its own run result arrives, then reaches only B's terminal state. | Not run |
 | Current-run failure cleanup and retry | During a controlled current run, force one Band file-write failure, then wait for its semantic result and ACK before explicitly retrying with a fresh run. | Band removes the partial file and clears working state before publishing `ASSET_WRITE_FAILED` and ACK. The fresh run begins without `ASSET_BUSY` and makes exactly one new provider call. | Not run |
 | Stale failure preserves current run | Keep run B active, then inject a controlled chunk from run A with the same asset ID. Continue B after the rejection. | Band returns `ASSET_RUN_MISMATCH` for A without deleting or clearing B; B continues and reaches only B's terminal result. | Not run |
-| Ambiguous transfer failure recovery | Force an iOS-local send/ACK failure after Band may own the transfer, then press M1 before and after a full disconnect/reconnect cycle. | The first retry reports `TRANSFER_RECONNECT_REQUIRED`, remains disabled in UI, and makes zero provider calls. After reconnect, one explicit press makes exactly one provider call. | Not run |
-| Result timeout and recovery | ACK every transfer step but withhold the Band render result through the bounded wait; press M1, then complete a disconnect/reconnect cycle and press again. | The run becomes `ASSET_RESULT_TIMEOUT`; no automatic retry occurs. The pre-reconnect press reports `TRANSFER_RECONNECT_REQUIRED` with zero provider calls. The post-reconnect press owns a new run and makes exactly one provider call. | Not run |
-| Redirect rejection and call budget | Point the controlled provider fixture at one HTTPS redirect response and press M1 once. | The iOS transport does not follow the redirect, buffers no oversized response, reports a bounded provider failure, and observes exactly one provider request with no retry. | Not run |
-
-### H1 result bridge acceptance cases
-
-| Case | Procedure | Expected result | Result |
-|---|---|---|---|
-| Bridge-safe aggregate result | Clean-install the current IPA and RPK, reconnect, then run raster static, raster indexed, and synthetic vector 8 in separate sessions. Export each sanitized H1 log. | Every transferred result contains string `status` equal to `ok` or `error`; no result contains Boolean `success`. A successful publication reaches `displayed` rather than `ASSET_RESULT_INVALID`. | Not run |
-| Legacy result schema | With a controlled fixture, inject a current-run `render.result` containing Boolean `success` and no string `status`. | iOS terminates that run with `ASSET_RESULT_INVALID`; it does not accept two result schemas or continue the same run. | Not run |
+| Useful first frame | Start five configured routes in succession while stationary. | Each first frame is a real route, PNG ≤1,024 bytes, at most seven data chunks, and p95 time is ≤5 seconds. | Not run |
+| Live marker/update | Walk or drive a controlled route with a passenger observing the Band. | Cyan route remains continuous, marker follows `x/y`, and the next maneuver/distance is recognizable within two seconds in at least four of five samples. | Not run |
+| GPS low | Block or attenuate GPS for several fixes. | Band shows `GPS LOW` and keeps the last good marker/progress; it does not jump to mock coordinates. | Not run |
+| TileMap failure | Deny style/tile access after Route v4 succeeds. | Route-only PNG is published with `LIMITED MAP`; navigation remains usable. | Not run |
+| Reroute and arrival | Leave the route for three good fixes, then return within 25 m of destination. | One reroute is requested after the 15-second cooldown; arrival shows `ARRIVED` within 25 m. | Not run |
+| Disconnect cleanup | Disconnect during transfer and during live updates, then reconnect. | Partial ownership is cleared, stale scene/sequence updates are ignored, and no freeze, black screen or reboot occurs in 30 minutes. | Not run |
 
 ### Road-test safety
 

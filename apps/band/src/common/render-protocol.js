@@ -1,9 +1,9 @@
 const LIMITS = Object.freeze({
   envelopeBytes: 512,
-  payloadBytes: 64 * 1024,
+  payloadBytes: 1024,
   width: 212,
   height: 360,
-  maximumPrimitives: 60,
+  maximumPrimitives: 0,
   formatVersion: 1,
   maximumIdentifierBytes: 24
 })
@@ -53,10 +53,9 @@ function reject(code) {
 function validatePrepare(body, options = {}) {
   if (options.prepared) return reject("busy")
   if (!body || typeof body !== "object" || Array.isArray(body)) return reject("unsupportedRenderer")
-  if (body.renderer !== "raster" && body.renderer !== "vector") return reject("unsupportedRenderer")
+  if (body.renderer !== "raster") return reject("unsupportedRenderer")
   if (body.formatVersion !== LIMITS.formatVersion) return reject("unsupportedFormatVersion")
-  if ((body.renderer === "raster" && body.format !== "image/png") ||
-    (body.renderer === "vector" && body.format !== "application/vnd.blueband.map-vector-v1")) {
+  if (body.format !== "image/png") {
     return reject("unsupportedFormatVersion")
   }
   if (body.width !== LIMITS.width || body.height !== LIMITS.height) return reject("invalidDimensions")

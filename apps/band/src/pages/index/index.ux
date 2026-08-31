@@ -10,16 +10,17 @@
     </div>
 
     <div class="connected" if="{{ connected }}">
-      <text class="title small">BLUEBAND MAP</text>
-      <text class="online">IOS CONNECTED</text>
-      <text class="map-ready" if="{{ mapReady && mapRenderer === 'raster' }}">M1 MAP READY</text>
-      <text class="map-ready vector-ready" if="{{ mapReady && mapRenderer === 'vector' }}">H1 VECTOR READY</text>
-      <text class="map-hash" if="{{ mapReady }}">SHA256 {{ mapHashPrefix }}</text>
-      <image class="map" if="{{ mapReady && mapRenderer === 'raster' }}" src="{{ mapPath }}" @complete="mapComplete(mapToken)" @error="mapError(mapToken)" />
-      <div class="vector-map" if="{{ vectorReady }}">
-        <div class="vector-segment" for="{{ vectorSegments }}" style="{{ $item.style }}"></div>
-        <div class="vector-current" if="{{ vectorCurrentStyle }}" style="{{ vectorCurrentStyle }}"></div>
+      <div class="nav-header" if="{{ mapReady }}">
+        <text class="nav-arrow">{{ navArrow }}</text>
+        <text class="nav-distance">{{ navDistance }}</text>
+        <text class="nav-street">{{ navStreet }}</text>
+        <text class="nav-status">{{ navStatus }}</text>
       </div>
+      <div class="map-frame" if="{{ mapReady }}">
+        <image class="map" src="{{ mapPath }}" @complete="mapComplete(mapToken)" @error="mapError(mapToken)" />
+        <div class="nav-marker" style="{{ navMarkerStyle }}"></div>
+      </div>
+      <text class="online" if="{{ !mapReady }}">IOS CONNECTED • WAITING ROUTE</text>
       <div class="diagnostics" if="{{ showDiagnostics }}">
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
@@ -176,10 +177,10 @@ function sha256Finish(context) {
 // the tested host-side modules without adding runtime imports to the RPK page.
 var renderProtocolLimits = {
   envelopeBytes: 512,
-  payloadBytes: 64 * 1024,
+  payloadBytes: 1024,
   width: 212,
   height: 360,
-  maximumPrimitives: 60,
+  maximumPrimitives: 0,
   formatVersion: 1,
   maximumIdentifierBytes: 24
 }
@@ -220,10 +221,9 @@ function renderProtocolValidatePrepare(body, options) {
   options = options || {}
   if (options.prepared) return renderProtocolReject("busy")
   if (!body || typeof body !== "object" || Array.isArray(body)) return renderProtocolReject("unsupportedRenderer")
-  if (body.renderer !== "raster" && body.renderer !== "vector") return renderProtocolReject("unsupportedRenderer")
+  if (body.renderer !== "raster") return renderProtocolReject("unsupportedRenderer")
   if (body.formatVersion !== renderProtocolLimits.formatVersion) return renderProtocolReject("unsupportedFormatVersion")
-  if ((body.renderer === "raster" && body.format !== "image/png") ||
-    (body.renderer === "vector" && body.format !== "application/vnd.blueband.map-vector-v1")) {
+  if (body.format !== "image/png") {
     return renderProtocolReject("unsupportedFormatVersion")
   }
   if (body.width !== renderProtocolLimits.width || body.height !== renderProtocolLimits.height) {
@@ -278,167 +278,11 @@ var renderProtocol = {
   validateAssetBegin: renderProtocolValidateAssetBegin
 }
 
-var vectorSceneLimits = {
-  width: 212,
-  height: 360,
-  maximumSegments: 60,
-  headerBytes: 22,
-  segmentBytes: 9
-}
-
-function vectorSceneAsBytes(value) {
-  if (value instanceof Uint8Array) return value
-  if (value instanceof ArrayBuffer) return new Uint8Array(value)
-  if (value && value.buffer instanceof ArrayBuffer && typeof value.byteLength === "number") {
-    return new Uint8Array(value.buffer, value.byteOffset || 0, value.byteLength)
-  }
-  return null
-}
-
-function vectorSceneReadUInt16(bytes, offset) {
-  return bytes[offset] | (bytes[offset + 1] << 8)
-}
-
-function vectorSceneReadUInt32(bytes, offset) {
-  return (bytes[offset] | (bytes[offset + 1] << 8) |
-    (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0
-}
-
-function vectorSceneInside(point) {
-  return point.x < vectorSceneLimits.width && point.y < vectorSceneLimits.height
-}
-
-function vectorSceneDecodeBBMV(value) {
-  var bytes = vectorSceneAsBytes(value)
-  if (!bytes || bytes.length < vectorSceneLimits.headerBytes) return { ok: false, code: "invalidLength" }
-  var magic = [0x42, 0x42, 0x4d, 0x56]
-  for (var magicIndex = 0; magicIndex < magic.length; magicIndex += 1) {
-    if (bytes[magicIndex] !== magic[magicIndex]) return { ok: false, code: "invalidMagic" }
-  }
-  if (bytes[4] !== 1) return { ok: false, code: "unsupportedVersion" }
-
-  var width = vectorSceneReadUInt16(bytes, 5)
-  var height = vectorSceneReadUInt16(bytes, 7)
-  if (width !== vectorSceneLimits.width || height !== vectorSceneLimits.height) {
-    return { ok: false, code: "invalidViewport" }
-  }
-  var roadCount = bytes[9]
-  var routeCount = bytes[10]
-  var segmentCount = roadCount + routeCount
-  if (segmentCount > vectorSceneLimits.maximumSegments) return { ok: false, code: "tooManySegments" }
-  if (bytes.length !== vectorSceneLimits.headerBytes + segmentCount * vectorSceneLimits.segmentBytes) {
-    return { ok: false, code: "invalidLength" }
-  }
-
-  var currentPosition = {
-    x: vectorSceneReadUInt16(bytes, 11),
-    y: vectorSceneReadUInt16(bytes, 13)
-  }
-  if (!vectorSceneInside(currentPosition)) return { ok: false, code: "outOfViewport" }
-  var heading = vectorSceneReadUInt16(bytes, 15)
-  if (heading > 359) return { ok: false, code: "invalidHeading" }
-  var maneuver = bytes[17]
-  if (maneuver > 4) return { ok: false, code: "invalidManeuver" }
-
-  var segments = []
-  var offset = vectorSceneLimits.headerBytes
-  for (var index = 0; index < segmentCount; index += 1) {
-    var start = {
-      x: vectorSceneReadUInt16(bytes, offset),
-      y: vectorSceneReadUInt16(bytes, offset + 2)
-    }
-    var end = {
-      x: vectorSceneReadUInt16(bytes, offset + 4),
-      y: vectorSceneReadUInt16(bytes, offset + 6)
-    }
-    var lineClass = bytes[offset + 8]
-    if (lineClass > 2) return { ok: false, code: "invalidSegmentClass" }
-    if (!vectorSceneInside(start) || !vectorSceneInside(end)) return { ok: false, code: "outOfViewport" }
-    segments.push({ start: start, end: end, lineClass: lineClass })
-    offset += vectorSceneLimits.segmentBytes
-  }
-
-  return {
-    ok: true,
-    scene: {
-      currentPosition: currentPosition,
-      heading: heading,
-      maneuver: maneuver,
-      distanceMeters: vectorSceneReadUInt32(bytes, 18),
-      roadSegmentCount: roadCount,
-      routeSegmentCount: routeCount,
-      segments: segments
-    }
-  }
-}
-
-function vectorSceneNativeSegments(scene) {
-  if (!scene || !Array.isArray(scene.segments) || scene.segments.length > vectorSceneLimits.maximumSegments) return []
-  var colors = ["#9bb2c9", "#d7e7f7", "#5dffb0"]
-  var edgeColors = ["#45627e", "#7897b8", "#168cff"]
-  var segments = []
-  for (var index = 0; index < scene.segments.length; index += 1) {
-    var segment = scene.segments[index]
-    var dx = segment.end.x - segment.start.x
-    var dy = segment.end.y - segment.start.y
-    var length = Math.min(vectorSceneLimits.width, Math.max(3, Math.round(Math.sqrt(dx * dx + dy * dy)) + 2))
-    var angle = Math.round(Math.atan2(dy, dx) * 180 / Math.PI * 10) / 10
-    var color = colors[segment.lineClass] || colors[0]
-    var edgeColor = edgeColors[segment.lineClass] || edgeColors[0]
-    var thickness = segment.lineClass === 2 ? 7 : (segment.lineClass === 1 ? 6 : 5)
-    var left = Math.round(((segment.start.x + segment.end.x - length) / 2) * 10) / 10
-    var top = Math.round(((segment.start.y + segment.end.y - thickness) / 2) * 10) / 10
-    segments.push({
-      key: "segment-" + index,
-      left: left,
-      top: top,
-      width: length,
-      height: thickness,
-      angle: angle,
-      color: color,
-      edgeColor: edgeColor,
-      style: {
-        position: "absolute",
-        left: left + "px",
-        top: top + "px",
-        width: length + "px",
-        height: thickness + "px",
-        backgroundColor: color,
-        borderWidth: "1px",
-        borderStyle: "solid",
-        borderColor: edgeColor,
-        borderRadius: "2px",
-        transform: JSON.stringify({ rotate: angle + "deg" })
-      }
-    })
-  }
-  return segments
-}
-
-function vectorSceneNativeMarker(scene) {
-  if (!scene || !vectorSceneInside(scene.currentPosition)) return null
-  var x = scene.currentPosition.x
-  var y = scene.currentPosition.y
-  return {
-    left: x - 4,
-    top: y - 4,
-    style: "position:absolute;left:" + (x - 4) + "px;top:" + (y - 4) +
-      "px;width:8px;height:8px;border-radius:4px;background-color:#168cff;"
-  }
-}
-
-var vectorScene = {
-  LIMITS: vectorSceneLimits,
-  decodeBBMV: vectorSceneDecodeBBMV,
-  sceneToNativeSegments: vectorSceneNativeSegments,
-  sceneToNativeMarker: vectorSceneNativeMarker
-}
-
 export default {
   private: {
     MAX_ENVELOPE_BYTES: 512,
     MAX_RECENT_IDS: 64,
-    MAX_ASSET_BYTES: 64 * 1024,
+    MAX_ASSET_BYTES: 1024,
     MAP_WIDTH: 212,
     MAP_HEIGHT: 360,
     connection: null,
@@ -463,9 +307,13 @@ export default {
     mapHashPrefix: "",
     mapRenderer: "",
     mapToken: "",
-    vectorReady: false,
-    vectorSegments: [],
-    vectorCurrentStyle: "",
+    navScene: "",
+    navSequence: -1,
+    navArrow: "↑",
+    navDistance: "—",
+    navStreet: "",
+    navStatus: "WAITING",
+    navMarkerStyle: "left:102px;top:316px;",
     pendingPublication: null,
     preparedRender: null,
     confirmedMap: null,
@@ -584,6 +432,9 @@ export default {
 
   resetMapLifecycle() {
     this.lifecycleEpoch = this.lifecycleEpoch + 1
+    this.navScene = ""
+    this.navSequence = -1
+    this.navStatus = "WAITING"
     var cleanupURI = this.pendingPublication ? this.pendingPublication.uri :
       (this.activeTransfer ? this.activeTransfer.uri : this.unconfirmedURI)
     var preserveURI = this.confirmedMap ? this.confirmedMap.uri : ""
@@ -600,26 +451,13 @@ export default {
       this.mapHashPrefix = this.confirmedMap.sha256Prefix
       this.mapReady = true
       this.mapRenderer = this.confirmedMap.renderer || "raster"
-      if (this.mapRenderer === "vector") {
-        this.vectorReady = true
-        this.vectorSegments = this.confirmedMap.vectorSegments || []
-        this.vectorCurrentStyle = this.confirmedMap.vectorCurrentStyle || ""
-        this.mapToken = ""
-      } else {
-        this.vectorReady = false
-        this.vectorSegments = []
-        this.vectorCurrentStyle = ""
-        this.mapToken = this.confirmedMap.token
-      }
+      this.mapToken = this.confirmedMap.token
     } else {
       this.mapPath = ""
       this.mapHashPrefix = ""
       this.mapRenderer = ""
       this.mapReady = false
       this.mapToken = ""
-      this.vectorReady = false
-      this.vectorSegments = []
-      this.vectorCurrentStyle = ""
       this.showDiagnostics = true
     }
     if (shouldDelete) this.deleteBestEffort(cleanupURI)
@@ -685,6 +523,10 @@ export default {
       return
     }
     if (this.inFlightIDs.indexOf(message.id) >= 0) return
+    if (message.topic === "nav.update") {
+      this.handleNavigationUpdate(message)
+      return
+    }
     if (message.topic === "render.prepare") {
       this.handleRenderPrepare(message)
       return
@@ -694,7 +536,7 @@ export default {
         this.failAsset(message, "ASSET_BUSY")
         return
       }
-      if (message.topic === "map.asset.begin" && this.isH1BeginBody(message.body)) {
+      if (message.topic === "map.asset.begin") {
         var admission = renderProtocol.validateAssetBegin(message.body, this.preparedRender)
         if (!admission.ok) {
           this.rejectUnpreparedAsset(message)
@@ -716,9 +558,36 @@ export default {
     this.sendACK(message.id)
   },
 
-  isH1BeginBody(body) {
+  isRouteCardBeginBody(body) {
     return !!body && (body.renderer !== undefined || body.format !== undefined ||
       body.scene !== undefined || body.formatVersion !== undefined)
+  },
+
+  handleNavigationUpdate(message) {
+    var body = message.body
+    var maneuvers = ["straight", "left", "right", "uTurn", "roundabout", "arrive"]
+    var statuses = ["navigating", "gpsLow", "limitedMap", "rerouting", "arrived"]
+    var currentScene = this.confirmedMap && this.confirmedMap.scene
+    var valid = body && body.scene === currentScene && this.validInteger(body.seq) && body.seq > this.navSequence &&
+      this.validInteger(body.x) && body.x >= 0 && body.x < this.MAP_WIDTH &&
+      this.validInteger(body.y) && body.y >= 0 && body.y < this.MAP_HEIGHT &&
+      this.validInteger(body.distanceM) && body.distanceM >= 0 &&
+      typeof body.street === "string" && this.utf8Length(body.street) <= 48 &&
+      maneuvers.indexOf(body.maneuver) >= 0 && statuses.indexOf(body.status) >= 0
+    if (valid) {
+      var arrows = { straight: "↑", left: "←", right: "→", uTurn: "↶", roundabout: "↻", arrive: "●" }
+      var labels = { navigating: "NAVIGATING", gpsLow: "GPS LOW", limitedMap: "LIMITED MAP", rerouting: "REROUTING", arrived: "ARRIVED" }
+      this.navScene = body.scene
+      this.navSequence = body.seq
+      this.navArrow = arrows[body.maneuver]
+      this.navDistance = body.status === "arrived" ? "ARRIVED" : body.distanceM + " m"
+      this.navStreet = body.street
+      this.navStatus = labels[body.status]
+      this.navMarkerStyle = "left:" + Math.max(0, Math.min(204, body.x - 4)) + "px;top:" +
+        Math.max(0, Math.min(352, body.y - 4)) + "px;"
+    }
+    this.rememberSuccess(message.id)
+    this.sendACK(message.id)
   },
 
   handleRenderPrepare(message) {
@@ -792,24 +661,15 @@ export default {
   },
 
   validBeginBody(body) {
-    if (this.isH1BeginBody(body)) {
-      return typeof body.asset === "string" && /^h1-[0-9a-f]{16}$/.test(body.asset) &&
-        renderProtocol.validateAssetBegin(body, this.preparedRender).ok &&
-        body.mime === body.format && body.mime === this.preparedRender.format &&
-        this.validRun(body.run)
-    }
-    return typeof body.asset === "string" && /^m1-[0-9a-f]{16}$/.test(body.asset) &&
-      this.validInteger(body.bytes) && body.bytes > 0 && body.bytes <= this.MAX_ASSET_BYTES &&
-      this.validInteger(body.width) && body.width === this.MAP_WIDTH &&
-      this.validInteger(body.height) && body.height === this.MAP_HEIGHT &&
-      body.mime === "image/png" && typeof body.sha256 === "string" &&
-      /^[0-9a-f]{64}$/.test(body.sha256) && this.validRun(body.run)
+    return this.isRouteCardBeginBody(body) && typeof body.asset === "string" &&
+      /^nav-[0-9a-f]{16}$/.test(body.asset) &&
+      renderProtocol.validateAssetBegin(body, this.preparedRender).ok &&
+      body.mime === body.format && body.mime === "image/png" && this.validRun(body.run)
   },
 
   beginAsset(message) {
     var page = this
     var body = message.body
-    var h1 = this.isH1BeginBody(body)
     var epoch = this.lifecycleEpoch
     if (!this.validBeginBody(body)) {
       this.failAsset(message, "ASSET_BEGIN_INVALID")
@@ -827,15 +687,15 @@ export default {
       mime: body.mime,
       sha256: body.sha256,
       run: body.run,
-      h1: h1,
-      renderer: h1 ? body.renderer : "raster",
-      format: h1 ? body.format : "image/png",
-      formatVersion: h1 ? body.formatVersion : 0,
-      primitives: h1 ? body.primitives : 0,
-      scene: h1 ? body.scene : "",
-      preparedAt: h1 && this.preparedRender ? this.preparedRender.preparedAt : 0,
+      routeCard: true,
+      renderer: "raster",
+      format: "image/png",
+      formatVersion: 1,
+      primitives: 0,
+      scene: body.scene,
+      preparedAt: this.preparedRender ? this.preparedRender.preparedAt : 0,
       startedAt: Date.now(),
-      uri: "internal://files/" + body.asset + (h1 && body.renderer === "vector" ? ".bbmv" : ".png"),
+      uri: "internal://files/" + body.asset + ".png",
       digest: sha256Create(),
       buffer: new Uint8Array(body.bytes),
       receivedBytes: 0,
@@ -851,9 +711,6 @@ export default {
       page.mapHashPrefix = ""
       page.mapRenderer = ""
       page.mapToken = ""
-      page.vectorReady = false
-      page.vectorSegments = []
-      page.vectorCurrentStyle = ""
       page.showDiagnostics = true
       page.succeedAsset(message.id)
     }
@@ -921,6 +778,10 @@ export default {
       this.failAsset(message, "ASSET_MISMATCH")
       return
     }
+    if (body.scene !== transfer.scene) {
+      this.failAsset(message, "ASSET_SCENE_MISMATCH")
+      return
+    }
     if (body.run !== transfer.run) {
       this.failAsset(message, "ASSET_RUN_MISMATCH")
       return
@@ -952,6 +813,10 @@ export default {
     }
     if (message.body.asset !== transfer.asset) {
       this.failAsset(message, "ASSET_MISMATCH")
+      return
+    }
+    if (message.body.scene !== transfer.scene) {
+      this.failAsset(message, "ASSET_SCENE_MISMATCH")
       return
     }
     if (message.body.run !== transfer.run) {
@@ -1001,11 +866,6 @@ export default {
     var bytes = transfer.bytes
     var prefix = transfer.sha256.slice(0, 8)
     transfer.validatedAt = Date.now()
-    if (transfer.renderer === "vector") {
-      transfer.renderStartedAt = Date.now()
-      this.readVectorAsset(message, transfer)
-      return
-    }
     var token = "render-" + this.lifecycleEpoch + "-" + this.nextRenderToken
     this.nextRenderToken = this.nextRenderToken + 1
     this.mapPath = transfer.uri
@@ -1013,9 +873,6 @@ export default {
     this.mapReady = true
     this.mapRenderer = "raster"
     this.mapToken = token
-    this.vectorReady = false
-    this.vectorSegments = []
-    this.vectorCurrentStyle = ""
     this.showDiagnostics = false
     this.pendingPublication = {
       asset: asset,
@@ -1026,7 +883,7 @@ export default {
       operationID: message.id,
       token: token,
       epoch: this.lifecycleEpoch,
-      h1: transfer.h1,
+      routeCard: transfer.routeCard,
       renderer: transfer.renderer,
       formatVersion: transfer.formatVersion,
       primitives: transfer.primitives,
@@ -1038,122 +895,6 @@ export default {
     }
     this.activeTransfer = null
     this.holdSuccessfulAsset(message.id)
-  },
-
-  readVectorAsset(message, transfer) {
-    var page = this
-    var epoch = this.lifecycleEpoch
-    var readStartedAt = Date.now()
-    var failRead = function () {
-      if (page.ownsMapOperation(message.id, epoch) && page.activeTransfer === transfer) {
-        page.failAsset(message, "ASSET_VECTOR_READ_FAILED")
-      }
-    }
-    try {
-      file.readArrayBuffer({
-        uri: transfer.uri,
-        position: 0,
-        length: transfer.bytes,
-        success: function (result) {
-          if (!page.ownsMapOperation(message.id, epoch) || page.activeTransfer !== transfer) return
-          var buffer = result && result.buffer !== undefined ? result.buffer : result
-          var decoded = vectorScene.decodeBBMV(buffer)
-          if (!decoded.ok || decoded.scene.segments.length !== transfer.primitives) {
-            page.failAsset(message, decoded.ok ? "ASSET_VECTOR_COUNT" : "ASSET_VECTOR_" + decoded.code.toUpperCase())
-            return
-          }
-          var segments = vectorScene.sceneToNativeSegments(decoded.scene)
-          var marker = vectorScene.sceneToNativeMarker(decoded.scene)
-          if (!marker || segments.length > vectorScene.LIMITS.maximumSegments) {
-            page.failAsset(message, "ASSET_VECTOR_RENDER")
-            return
-          }
-          page.completeVectorPublication(message, transfer, segments, marker.style, Date.now() - readStartedAt)
-          buffer = null
-        },
-        fail: failRead
-      })
-    } catch (error) {
-      failRead()
-    }
-  },
-
-  completeVectorPublication(message, transfer, segments, markerStyle, renderMs) {
-    var prefix = transfer.sha256.slice(0, 8)
-    var token = "vector-" + this.lifecycleEpoch + "-" + this.nextRenderToken
-    this.nextRenderToken = this.nextRenderToken + 1
-    this.unconfirmedURI = transfer.uri
-    this.unconfirmedTouched = true
-    this.mapPath = ""
-    this.mapHashPrefix = prefix
-    this.mapRenderer = "vector"
-    this.mapToken = ""
-    this.mapReady = true
-    this.vectorReady = true
-    this.vectorSegments = segments
-    this.vectorCurrentStyle = markerStyle
-    this.showDiagnostics = false
-    this.pendingPublication = {
-      asset: transfer.asset,
-      run: transfer.run,
-      bytes: transfer.bytes,
-      sha256Prefix: prefix,
-      uri: transfer.uri,
-      operationID: message.id,
-      token: token,
-      epoch: this.lifecycleEpoch,
-      h1: true,
-      renderer: "vector",
-      formatVersion: transfer.formatVersion,
-      primitives: transfer.primitives,
-      scene: transfer.scene,
-      vectorSegments: segments,
-      vectorCurrentStyle: markerStyle,
-      preparedAt: transfer.preparedAt,
-      transferStartedAt: transfer.startedAt,
-      validatedAt: transfer.validatedAt,
-      renderStartedAt: transfer.renderStartedAt,
-      renderMs: renderMs
-    }
-    this.activeTransfer = null
-    this.holdSuccessfulAsset(message.id)
-    var priorMap = this.confirmedMap
-    var page = this
-    var publish = function () { page.publishVector(message.id) }
-    if (priorMap && priorMap.uri !== transfer.uri) {
-      var retiredURI = priorMap.uri
-      this.retiredMapURI = retiredURI
-      if (!this.scheduleDelete(retiredURI, function () {
-        if (page.retiredMapURI === retiredURI) page.retiredMapURI = ""
-        publish()
-      }, function () {
-        if (page.retiredMapURI === retiredURI) page.retiredMapURI = ""
-        publish()
-      })) publish()
-      return
-    }
-    publish()
-  },
-
-  publishVector(operationID) {
-    var publication = this.pendingPublication
-    if (!publication || publication.operationID !== operationID ||
-      this.lifecycleEpoch !== publication.epoch || this.activeMapOperationID !== operationID) return
-    this.pendingPublication = null
-    this.unconfirmedURI = ""
-    this.unconfirmedTouched = false
-    this.confirmedMap = {
-      uri: publication.uri,
-      renderer: "vector",
-      sha256Prefix: publication.sha256Prefix,
-      token: publication.token,
-      vectorSegments: publication.vectorSegments,
-      vectorCurrentStyle: publication.vectorCurrentStyle
-    }
-    this.statusText = "H1 VECTOR READY"
-    if (!this.releaseMapOperation(operationID)) return
-    this.sendRenderResult(publication, true, publication.renderMs, "")
-    this.preparedRender = null
   },
 
   removeInFlight(id) {
@@ -1200,7 +941,7 @@ export default {
     var owned = this.releaseMapOperation(message.id)
     if (!owned && code !== "ASSET_BUSY") return
     this.removeInFlight(message.id)
-    if (owned && this.isH1BeginBody(body)) this.preparedRender = null
+    if (owned && this.isRouteCardBeginBody(body)) this.preparedRender = null
     if (code === "ASSET_BUSY") {
       var rejectedAsset = this.safeAsset(message.body.asset)
       this.sendAssetResult(rejectedAsset, this.safeRun(message.body.run), "error", 0, "", code)
@@ -1224,7 +965,7 @@ export default {
     var run = transfer.run
     var bytes = transfer.receivedBytes
     var prefix = transfer.sha256.slice(0, 8)
-    if (transfer.h1) this.preparedRender = null
+    if (transfer.routeCard) this.preparedRender = null
     this.activeTransfer = null
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
@@ -1233,17 +974,13 @@ export default {
     this.mapHashPrefix = ""
     this.mapRenderer = ""
     this.mapToken = ""
-    this.vectorReady = false
-    this.vectorSegments = []
-    this.vectorCurrentStyle = ""
     this.showDiagnostics = true
 
     var publish = function () {
       if (!page.ownsMapOperation(message.id, epoch)) return
       if (!page.releaseMapOperation(message.id)) return
       page.removeInFlight(message.id)
-      if (transfer.h1) page.sendRenderResult(transfer, false, 0, code, bytes, prefix)
-      else page.sendAssetResult(asset, run, "error", bytes, prefix, code)
+      page.sendRenderResult(transfer, false, 0, code, bytes, prefix)
       page.rememberSuccess(message.id)
       page.sendACK(message.id)
     }
@@ -1257,7 +994,7 @@ export default {
   },
 
   safeAsset(asset) {
-    return typeof asset === "string" && /^(?:m1|h1)-[0-9a-f]{16}$/.test(asset) ? asset : ""
+    return typeof asset === "string" && /^nav-[0-9a-f]{16}$/.test(asset) ? asset : ""
   },
 
   safeRun(run) {
@@ -1273,9 +1010,6 @@ export default {
     this.mapHashPrefix = ""
     this.mapRenderer = ""
     this.mapToken = ""
-    this.vectorReady = false
-    this.vectorSegments = []
-    this.vectorCurrentStyle = ""
     this.showDiagnostics = true
   },
 
@@ -1337,7 +1071,7 @@ export default {
   },
 
   sendRenderResult(publication, success, renderMs, errorCode) {
-    if (!publication || !publication.h1) return
+    if (!publication || !publication.routeCard) return
     var safeMilliseconds = function (value) {
       return typeof value === "number" && isFinite(value) && value >= 0 && value <= 60000 ? Math.floor(value) : 0
     }
@@ -1348,7 +1082,7 @@ export default {
     var body = {
       runId: renderProtocol.validIdentifier(publication.run) ? publication.run : "",
       sceneId: renderProtocol.validIdentifier(publication.scene) ? publication.scene : "",
-      renderer: publication.renderer === "vector" ? "vector" : "raster",
+      renderer: "raster",
       formatVersion: publication.formatVersion === 1 ? 1 : 0,
       status: success === true ? "ok" : "error",
       bytes: publication.bytes,
@@ -1451,21 +1185,25 @@ export default {
       uri: publication.uri,
       sha256Prefix: publication.sha256Prefix,
       token: publication.token,
-      renderer: publication.renderer || "raster"
+      renderer: publication.renderer || "raster",
+      scene: publication.scene || ""
     }
-    this.statusText = publication.h1 ? "H1 RASTER READY" : "M1 MAP READY"
+    this.navScene = publication.scene || ""
+    this.navSequence = -1
+    this.navArrow = "↑"
+    this.navDistance = "—"
+    this.navStreet = ""
+    this.navStatus = "WAITING"
+    this.navMarkerStyle = "left:102px;top:316px;"
+    this.statusText = "ROUTE CARD READY"
     var page = this
     var publish = function () {
       if (page.pendingPublication !== publication || page.lifecycleEpoch !== publication.epoch ||
         page.activeMapOperationID !== publication.operationID) return
       page.pendingPublication = null
       if (!page.releaseMapOperation(publication.operationID)) return
-      if (publication.h1) {
-        page.sendRenderResult(publication, true, Date.now() - publication.renderStartedAt, "")
-        page.preparedRender = null
-      } else {
-        page.sendAssetResult(publication.asset, publication.run, "ok", publication.bytes, publication.sha256Prefix)
-      }
+      page.sendRenderResult(publication, true, Date.now() - publication.renderStartedAt, "")
+      page.preparedRender = null
     }
     if (priorMap && priorMap.uri !== publication.uri) {
       var retiredURI = priorMap.uri
@@ -1492,26 +1230,13 @@ export default {
       this.mapHashPrefix = this.confirmedMap.sha256Prefix
       this.mapReady = true
       this.mapRenderer = this.confirmedMap.renderer || "raster"
-      if (this.mapRenderer === "vector") {
-        this.vectorReady = true
-        this.vectorSegments = this.confirmedMap.vectorSegments || []
-        this.vectorCurrentStyle = this.confirmedMap.vectorCurrentStyle || ""
-        this.mapToken = ""
-      } else {
-        this.vectorReady = false
-        this.vectorSegments = []
-        this.vectorCurrentStyle = ""
-        this.mapToken = this.confirmedMap.token
-      }
+      this.mapToken = this.confirmedMap.token
     } else {
       this.mapReady = false
       this.mapPath = ""
       this.mapHashPrefix = ""
       this.mapRenderer = ""
       this.mapToken = ""
-      this.vectorReady = false
-      this.vectorSegments = []
-      this.vectorCurrentStyle = ""
     }
     this.showDiagnostics = true
     this.logText = "Map image display failed."
@@ -1523,15 +1248,8 @@ export default {
       page.unconfirmedURI = ""
       page.unconfirmedTouched = false
       if (!page.releaseMapOperation(publication.operationID)) return
-      if (publication.h1) {
-        page.sendRenderResult(publication, false, Date.now() - publication.renderStartedAt, "ASSET_RENDER")
-        page.preparedRender = null
-      } else {
-        page.sendAssetResult(
-          publication.asset, publication.run, "error", publication.bytes,
-          publication.sha256Prefix, "ASSET_RENDER"
-        )
-      }
+      page.sendRenderResult(publication, false, Date.now() - publication.renderStartedAt, "ASSET_RENDER")
+      page.preparedRender = null
     }
     this.scheduleDelete(publication.uri, publish, publish)
   }
@@ -1541,21 +1259,22 @@ export default {
 <style>
 .page { width: 212px; height: 520px; background-color: #07162b; }
 .waiting, .connected { width: 212px; height: 520px; padding-top: 54px; flex-direction: column; align-items: center; }
-.connected { padding-top: 18px; }
+.connected { padding-top: 0; }
 .mark { width: 72px; height: 72px; border-radius: 18px; justify-content: center; align-items: center; background-color: #168cff; }
 .mark-text { font-size: 46px; font-weight: bold; color: #ffffff; }
 .title { margin-top: 18px; font-size: 25px; font-weight: bold; color: #ffffff; }
-.small { margin-top: 0; font-size: 22px; }
 .status, .online { margin-top: 12px; font-size: 16px; font-weight: bold; color: #5dffb0; }
 .detail { margin-top: 14px; width: 180px; height: 76px; font-size: 15px; lines: 4; text-align: center; color: #a9bdd6; }
 .check, .button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
-.map-ready { margin-top: 8px; font-size: 16px; font-weight: bold; color: #5dffb0; }
-.vector-ready { color: #7fc8ff; }
-.map-hash { margin-top: 3px; font-size: 12px; color: #a9bdd6; }
-.map { margin-top: 8px; width: 212px; height: 360px; object-fit: contain; }
-.vector-map { margin-top: 8px; width: 212px; height: 360px; position: relative; background-color: #0b2038; }
-.vector-segment, .vector-current { position: absolute; }
+.nav-header { width: 212px; height: 160px; padding: 8px 12px; position: relative; background-color: #07162b; }
+.nav-arrow { width: 72px; height: 72px; font-size: 62px; font-weight: bold; color: #00e5ff; }
+.nav-distance { position: absolute; left: 82px; top: 12px; width: 120px; font-size: 32px; font-weight: bold; text-align: right; color: #ffffff; }
+.nav-street { position: absolute; left: 12px; top: 92px; width: 188px; height: 28px; font-size: 19px; lines: 1; color: #ffffff; }
+.nav-status { position: absolute; left: 12px; top: 126px; width: 188px; font-size: 15px; font-weight: bold; color: #5dffb0; }
+.map-frame { width: 212px; height: 360px; position: relative; background-color: #050e16; }
+.map { width: 212px; height: 360px; object-fit: contain; }
+.nav-marker { position: absolute; width: 8px; height: 8px; border-radius: 4px; background-color: #ffffff; }
 .diagnostics { width: 212px; flex-direction: column; align-items: center; }
 .log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }
 .clear { margin-top: 10px; width: 184px; height: 40px; border-radius: 20px; font-size: 14px; color: #a9bdd6; background-color: #1f3652; }

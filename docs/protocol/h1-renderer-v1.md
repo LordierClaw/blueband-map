@@ -1,4 +1,7 @@
-# H1 renderer protocol v1
+# H1 renderer protocol v1 (historical)
+
+This comparison protocol is retained as test evidence only. Runtime uses the
+single raster route-card contract in [route-card-v1](route-card-v1.md).
 
 These are application-envelope topics. They do not modify the Xiaomi wire protocol.
 

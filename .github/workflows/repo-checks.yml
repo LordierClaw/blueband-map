@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Run fast repository checks
-        run: make test-ci-metadata && make lint
+        run: make lint
       - name: Download and verify pinned Gitleaks
         env:
           GITLEAKS_VERSION: 8.30.0

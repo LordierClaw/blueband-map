@@ -43,16 +43,16 @@ public struct IndexedRaster: Equatable, Sendable {
     }
 
     public mutating func drawLine(
-        from start: ScenePoint,
-        to end: ScenePoint,
+        from start: ScreenPoint,
+        to end: ScreenPoint,
         color: Palette,
         thickness: Int = 1
     ) {
         let radius = max(0, thickness / 2)
-        var x0 = Int(start.x)
-        var y0 = Int(start.y)
-        let x1 = Int(end.x)
-        let y1 = Int(end.y)
+        var x0 = start.x
+        var y0 = start.y
+        let x1 = end.x
+        let y1 = end.y
         let dx = abs(x1 - x0)
         let sx = x0 < x1 ? 1 : -1
         let dy = -abs(y1 - y0)
@@ -78,33 +78,41 @@ public struct IndexedRaster: Equatable, Sendable {
         }
     }
 
-    public static func render(scene: NavigationScene) throws -> IndexedRaster {
+    public static func render(routeCard: RouteCardScene) throws -> IndexedRaster {
         var raster = try IndexedRaster()
-        for segment in scene.segments where segment.lineClass != .route {
-            raster.drawLine(
-                from: segment.start,
-                to: segment.end,
-                color: .minor,
-                thickness: segment.lineClass == .major ? 5 : 3
-            )
+        for road in routeCard.sideRoads {
+            raster.drawPolyline(road.points, color: road.isMajor ? .major : .minor, thickness: road.isMajor ? 2 : 1)
         }
-        for segment in scene.segments where segment.lineClass != .route {
-            raster.drawLine(
-                from: segment.start,
-                to: segment.end,
-                color: .major,
-                thickness: segment.lineClass == .major ? 3 : 1
-            )
+        for line in routeCard.traveledRoute {
+            raster.drawPolyline(line.points, color: .minor, thickness: 3)
         }
-        for segment in scene.segments where segment.lineClass == .route {
-            raster.drawLine(from: segment.start, to: segment.end, color: .route, thickness: 5)
+        for line in routeCard.upcomingRoute {
+            raster.drawPolyline(line.points, color: .route, thickness: 5)
         }
-        try raster.setPixel(
-            x: Int(scene.currentPosition.x),
-            y: Int(scene.currentPosition.y),
-            color: .current
-        )
+        raster.drawDot(at: routeCard.maneuverPoint, color: .route, radius: 4)
         return raster
+    }
+
+    private mutating func drawPolyline(_ points: [ScreenPoint], color: Palette, thickness: Int) {
+        guard points.count >= 2 else { return }
+        for pair in zip(points, points.dropFirst()) {
+            drawLine(
+                from: pair.0,
+                to: pair.1,
+                color: color,
+                thickness: thickness
+            )
+        }
+    }
+
+    private mutating func drawDot(at point: ScreenPoint, color: Palette, radius: Int) {
+        for y in max(0, point.y - radius)...min(height - 1, point.y + radius) {
+            for x in max(0, point.x - radius)...min(width - 1, point.x + radius) {
+                if (x - point.x) * (x - point.x) + (y - point.y) * (y - point.y) <= radius * radius {
+                    pixels[y * width + x] = color.rawValue
+                }
+            }
+        }
     }
 
 }

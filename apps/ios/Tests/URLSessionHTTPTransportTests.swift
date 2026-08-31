@@ -8,14 +8,14 @@ import BlueBandMapCore
 
 final class URLSessionHTTPTransportTests: XCTestCase {
     override func tearDown() {
-        M1URLProtocol.handler = nil
+        TestURLProtocol.handler = nil
         super.tearDown()
     }
 
     func testUsesEphemeralCacheCookieDisabledTimeoutConfiguration() {
         let transport = URLSessionHTTPTransport(
             timeout: 7,
-            protocolClasses: [M1URLProtocol.self]
+            protocolClasses: [TestURLProtocol.self]
         )
         let configuration = transport.makeConfiguration()
 
@@ -30,7 +30,7 @@ final class URLSessionHTTPTransportTests: XCTestCase {
 
     func testBuildsExactRequestAndStreamsSuccessfulResponse() async throws {
         let expectedBody = Data("request-body".utf8)
-        M1URLProtocol.handler = { protocolInstance in
+        TestURLProtocol.handler = { protocolInstance in
             XCTAssertEqual(protocolInstance.request.httpMethod, "POST")
             XCTAssertEqual(protocolInstance.requestBody, expectedBody)
             XCTAssertEqual(protocolInstance.request.value(forHTTPHeaderField: "apikey"), "service-key")
@@ -41,7 +41,7 @@ final class URLSessionHTTPTransportTests: XCTestCase {
             protocolInstance.load(Data([3, 4]))
             protocolInstance.finish()
         }
-        let transport = URLSessionHTTPTransport(protocolClasses: [M1URLProtocol.self])
+        let transport = URLSessionHTTPTransport(protocolClasses: [TestURLProtocol.self])
 
         let response = try await transport.execute(MapHTTPRequest(
             method: "POST",
@@ -56,8 +56,8 @@ final class URLSessionHTTPTransportTests: XCTestCase {
     }
 
     func testRejectsRedirectWithoutIssuingRedirectedRequest() async {
-        let requestCount = M1LockedCounter()
-        M1URLProtocol.handler = { protocolInstance in
+        let requestCount = TestLockedCounter()
+        TestURLProtocol.handler = { protocolInstance in
             requestCount.increment()
             let redirect = URLRequest(url: URL(string: "https://redirected.example/map.png")!)
             let response = HTTPURLResponse(
@@ -72,7 +72,7 @@ final class URLSessionHTTPTransportTests: XCTestCase {
                 redirectResponse: response
             )
         }
-        let transport = URLSessionHTTPTransport(protocolClasses: [M1URLProtocol.self])
+        let transport = URLSessionHTTPTransport(protocolClasses: [TestURLProtocol.self])
 
         do {
             _ = try await transport.execute(request())
@@ -84,14 +84,14 @@ final class URLSessionHTTPTransportTests: XCTestCase {
     }
 
     func testRejectsOversizedContentLengthBeforeLoadingBody() async {
-        M1URLProtocol.handler = { protocolInstance in
+        TestURLProtocol.handler = { protocolInstance in
             protocolInstance.respond(status: 200, headers: [
-                "Content-Length": String(MapAsset.maximumPNGBytes + 1),
+                "Content-Length": String(256 * 1_024 + 1),
                 "Content-Type": "image/png",
             ])
             protocolInstance.finish()
         }
-        let transport = URLSessionHTTPTransport(protocolClasses: [M1URLProtocol.self])
+        let transport = URLSessionHTTPTransport(protocolClasses: [TestURLProtocol.self])
 
         do {
             _ = try await transport.execute(request())
@@ -102,13 +102,13 @@ final class URLSessionHTTPTransportTests: XCTestCase {
     }
 
     func testRejectsStreamingBodyAsSoonAsCapIsExceededWithoutContentLength() async {
-        M1URLProtocol.handler = { protocolInstance in
+        TestURLProtocol.handler = { protocolInstance in
             protocolInstance.respond(status: 200, headers: ["Content-Type": "image/png"])
-            protocolInstance.load(Data(repeating: 0, count: MapAsset.maximumPNGBytes))
+            protocolInstance.load(Data(repeating: 0, count: 256 * 1_024))
             protocolInstance.load(Data([1]))
             protocolInstance.finish()
         }
-        let transport = URLSessionHTTPTransport(protocolClasses: [M1URLProtocol.self])
+        let transport = URLSessionHTTPTransport(protocolClasses: [TestURLProtocol.self])
 
         do {
             _ = try await transport.execute(request())
@@ -119,12 +119,12 @@ final class URLSessionHTTPTransportTests: XCTestCase {
     }
 
     func testUsesRequestSpecificResponseCap() async {
-        M1URLProtocol.handler = { protocolInstance in
+        TestURLProtocol.handler = { protocolInstance in
             protocolInstance.respond(status: 200, headers: ["Content-Type": "application/json"])
             protocolInstance.load(Data(repeating: 0, count: 65))
             protocolInstance.finish()
         }
-        let transport = URLSessionHTTPTransport(protocolClasses: [M1URLProtocol.self])
+        let transport = URLSessionHTTPTransport(protocolClasses: [TestURLProtocol.self])
         do {
             _ = try await transport.execute(MapHTTPRequest(
                 method: "GET",
@@ -149,8 +149,8 @@ final class URLSessionHTTPTransportTests: XCTestCase {
     }
 }
 
-private final class M1URLProtocol: URLProtocol {
-    static var handler: ((M1URLProtocol) -> Void)?
+private final class TestURLProtocol: URLProtocol {
+    static var handler: ((TestURLProtocol) -> Void)?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -186,7 +186,7 @@ private final class M1URLProtocol: URLProtocol {
     func finish() { client?.urlProtocolDidFinishLoading(self) }
 }
 
-private final class M1LockedCounter: @unchecked Sendable {
+private final class TestLockedCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var storage = 0
     var value: Int {

@@ -2,12 +2,12 @@ import Foundation
 import BlueBandCore
 import BlueBandMapCore
 
-protocol H1SessionSending: Sendable {
+protocol RouteCardSessionSending: Sendable {
     @discardableResult
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String
 }
 
-struct BandSessionH1Sender: H1SessionSending, Sendable {
+struct BandSessionRouteCardSender: RouteCardSessionSending, Sendable {
     let session: BandSession
 
     @discardableResult
@@ -16,16 +16,10 @@ struct BandSessionH1Sender: H1SessionSending, Sendable {
     }
 }
 
-typealias H1AssetProvider = @Sendable (
-    _ mode: H1TestMode,
-    _ serviceKey: String?,
-    _ tileMapKey: String?
-) async throws -> RenderAsset
-
 @MainActor
-final class H1RenderCoordinator {
+final class RouteCardRenderCoordinator {
     private enum PrepareResponse: Sendable {
-        case ready(H1BandReady)
+        case ready(RouteCardBandReady)
         case reject(String)
     }
 
@@ -36,7 +30,7 @@ final class H1RenderCoordinator {
         case waitingForBand
     }
 
-    private struct H1BandReady: Sendable {
+    private struct RouteCardBandReady: Sendable {
         let runID: String
         let sceneID: String
         let renderer: RenderKind
@@ -47,7 +41,7 @@ final class H1RenderCoordinator {
         let primitives: Int
     }
 
-    private struct H1BandResult: Sendable {
+    private struct RouteCardBandResult: Sendable {
         let runID: String
         let sceneID: String
         let renderer: RenderKind
@@ -62,14 +56,14 @@ final class H1RenderCoordinator {
 
     private struct PendingTransfer: Sendable {
         let token: UUID
-        let mode: H1TestMode
+        let mode: RouteCardMode
         let runID: String
         let sceneID: String
         let asset: RenderAsset
         let steps: [RenderTransferStep]
         var phase: TransferPhase
         var bufferedPrepareResponse: PrepareResponse?
-        var bufferedResult: H1BandResult?
+        var bufferedResult: RouteCardBandResult?
     }
 
     private struct RunContext {
@@ -92,43 +86,42 @@ final class H1RenderCoordinator {
         var nextEventSequence = 0
     }
 
-    let session: any H1SessionSending
-    let assetProvider: H1AssetProvider
+    let session: any RouteCardSessionSending
     let clock: any BlueBandClock
     let resultTimeout: Duration
     let runIDGenerator: @Sendable () -> String
     let sceneIDGenerator: @Sendable () -> String
 
-    private(set) var state: H1State = .idle
+    private(set) var state: RouteCardTransferState = .idle
     private(set) var requiresReconnect = false
     private(set) var lastRunRecord: RenderRunRecord?
+    private(set) var lastDisplayedSceneID: String?
 
     private var operationToken: UUID?
     private var operationTask: Task<Void, Never>?
     private var pending: PendingTransfer?
     private var runContext: RunContext?
     private var prepareContinuation: CheckedContinuation<PrepareResponse?, Never>?
-    private var resultContinuation: CheckedContinuation<H1BandResult?, Never>?
+    private var resultContinuation: CheckedContinuation<RouteCardBandResult?, Never>?
     private var resultTimeoutTask: Task<Void, Never>?
     private var disconnectObserved = false
 
     init(
-        session: any H1SessionSending,
-        assetProvider: @escaping H1AssetProvider,
+        session: any RouteCardSessionSending,
         clock: any BlueBandClock = ContinuousBlueBandClock(),
         resultTimeout: Duration = .seconds(15),
-        runIDGenerator: @escaping @Sendable () -> String = { H1RenderCoordinator.makeRunID() },
-        sceneIDGenerator: @escaping @Sendable () -> String = { H1RenderCoordinator.makeSceneID() }
+        runIDGenerator: @escaping @Sendable () -> String = { RouteCardRenderCoordinator.makeRunID() },
+        sceneIDGenerator: @escaping @Sendable () -> String = { RouteCardRenderCoordinator.makeSceneID() }
     ) {
         self.session = session
-        self.assetProvider = assetProvider
         self.clock = clock
         self.resultTimeout = resultTimeout
         self.runIDGenerator = runIDGenerator
         self.sceneIDGenerator = sceneIDGenerator
     }
 
-    func start(mode: H1TestMode, serviceKey: String? = nil, tileMapKey: String? = nil) async {
+    func start(asset: RenderAsset) async {
+        let mode = RouteCardMode.routeCard
         guard operationToken == nil else { return }
         guard !requiresReconnect else {
             state = .failed(mode: mode, code: "TRANSFER_RECONNECT_REQUIRED")
@@ -163,10 +156,9 @@ final class H1RenderCoordinator {
             await self.perform(
                 token: token,
                 mode: mode,
+                asset: asset,
                 runID: runID,
-                sceneID: sceneID,
-                serviceKey: serviceKey,
-                tileMapKey: tileMapKey
+                sceneID: sceneID
             )
         }
         operationTask = task
@@ -216,7 +208,7 @@ final class H1RenderCoordinator {
         requiresReconnect = false
     }
 
-    func failBeforeStart(mode: H1TestMode, code: String) {
+    func failBeforeStart(mode: RouteCardMode, code: String) {
         guard operationToken == nil else { return }
         state = .failed(mode: mode, code: code)
     }
@@ -234,28 +226,16 @@ final class H1RenderCoordinator {
 
     private func perform(
         token: UUID,
-        mode: H1TestMode,
+        mode: RouteCardMode,
+        asset: RenderAsset,
         runID: String,
-        sceneID: String,
-        serviceKey: String?,
-        tileMapKey: String?
+        sceneID: String
     ) async {
-        guard ownsLive(token) else { return }
-        let providerStarted = Self.nowMilliseconds()
-        let asset: RenderAsset
-        do {
-            runContext?.providerCalls += 1
-            asset = try await assetProvider(mode, serviceKey, tileMapKey)
-        } catch {
-            finishOwned(code: providerCode(for: error), token: token, requiresReconnect: false)
-            return
-        }
         guard ownsLive(token) else { return }
         guard assetMatchesMode(asset, mode: mode) else {
             finishOwned(code: "ASSET_INVALID", token: token, requiresReconnect: false)
             return
         }
-        runContext?.providerMilliseconds = max(0, Self.nowMilliseconds() - providerStarted)
         runContext?.asset = asset
 
         let validationStarted = Self.nowMilliseconds()
@@ -366,7 +346,7 @@ final class H1RenderCoordinator {
             if string(body, key: "runId") == pending.runID { finish(code: "ASSET_RESULT_INVALID", requiresReconnect: true) }
             return
         }
-        let ready = H1BandReady(
+        let ready = RouteCardBandReady(
             runID: runID,
             sceneID: sceneID,
             renderer: renderer,
@@ -418,13 +398,14 @@ final class H1RenderCoordinator {
         }
     }
 
-    private func handleResult(_ result: H1BandResult, token: UUID) {
+    private func handleResult(_ result: RouteCardBandResult, token: UUID) {
         guard ownsLive(token), let pending, pending.token == token else { return }
         if let mismatch = resultMetadataMismatchCode(result, asset: pending.asset) {
             finishOwned(code: mismatch, token: token, requiresReconnect: true)
             return
         }
         if result.success {
+            lastDisplayedSceneID = pending.sceneID
             runContext?.renderMilliseconds = result.renderMilliseconds
             state = .displayed(
                 mode: pending.mode,
@@ -446,7 +427,7 @@ final class H1RenderCoordinator {
         }
     }
 
-    private func resultMetadataMismatchCode(_ result: H1BandResult, asset: RenderAsset) -> String? {
+    private func resultMetadataMismatchCode(_ result: RouteCardBandResult, asset: RenderAsset) -> String? {
         if result.renderer != asset.kind { return "RESULT_RENDERER_MISMATCH" }
         if result.formatVersion != asset.formatVersion { return "RESULT_FORMAT_MISMATCH" }
         if result.bytes != asset.byteCount { return "RESULT_BYTES_MISMATCH" }
@@ -478,10 +459,10 @@ final class H1RenderCoordinator {
         }
     }
 
-    private func waitForResult(token: UUID) async -> H1BandResult? {
+    private func waitForResult(token: UUID) async -> RouteCardBandResult? {
         scheduleResultTimeout(token: token)
         return await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<H1BandResult?, Never>) in
+            await withCheckedContinuation { (continuation: CheckedContinuation<RouteCardBandResult?, Never>) in
                 guard ownsLive(token), let pending, pending.token == token else {
                     continuation.resume(returning: nil)
                     return
@@ -520,9 +501,7 @@ final class H1RenderCoordinator {
     private func finish(code: String, requiresReconnect: Bool) {
         guard let token = operationToken, runContext != nil else { return }
         if requiresReconnect { self.requiresReconnect = true }
-        let failedMode = pending?.mode ?? (
-            runContext?.identity.renderer == .vector ? .vectorTileMap40 : .rasterStaticCompact
-        )
+        let failedMode = pending?.mode ?? .routeCard
         state = .failed(mode: failedMode, code: code)
         resultTimeoutTask?.cancel()
         resultTimeoutTask = nil
@@ -597,7 +576,7 @@ final class H1RenderCoordinator {
         continuation.resume(returning: response)
     }
 
-    private func resumeResult(with result: H1BandResult?) {
+    private func resumeResult(with result: RouteCardBandResult?) {
         guard let continuation = resultContinuation else { return }
         resultContinuation = nil
         continuation.resume(returning: result)
@@ -607,14 +586,14 @@ final class H1RenderCoordinator {
         operationToken == token && runContext?.token == token
     }
 
-    private func readyMatches(_ ready: H1BandReady, prepare: RenderPrepareBody) -> Bool {
+    private func readyMatches(_ ready: RouteCardBandReady, prepare: RenderPrepareBody) -> Bool {
         ready.runID == prepare.runID && ready.sceneID == prepare.sceneID &&
             ready.renderer == prepare.renderer && ready.formatVersion == prepare.formatVersion &&
             ready.width == prepare.width && ready.height == prepare.height &&
             ready.bytes == prepare.bytes && ready.primitives == prepare.primitives
     }
 
-    private func parseResult(_ body: [String: JSONValue], pending: PendingTransfer) -> H1BandResult? {
+    private func parseResult(_ body: [String: JSONValue], pending: PendingTransfer) -> RouteCardBandResult? {
         guard let runID = string(body, key: "runId"), runID == pending.runID,
               let sceneID = string(body, key: "sceneId"), sceneID == pending.sceneID,
               let renderer = renderKind(body, key: "renderer"),
@@ -643,7 +622,7 @@ final class H1RenderCoordinator {
         default:
             return nil
         }
-        return H1BandResult(
+        return RouteCardBandResult(
             runID: runID,
             sceneID: sceneID,
             renderer: renderer,
@@ -681,49 +660,6 @@ final class H1RenderCoordinator {
         }
     }
 
-    private func providerCode(for error: Swift.Error) -> String {
-        switch error {
-        case let error as VietmapStaticMapError:
-            switch error {
-            case .rateLimited: return "PROVIDER_RATE_LIMITED"
-            case let .httpStatus(status): return providerHTTPCode(status)
-            case .wrongContentType: return "PROVIDER_MIME"
-            case .invalidRequest, .missingServiceKey: return "PROVIDER_REQUEST"
-            }
-        case let error as VietmapStyleError:
-            switch error {
-            case let .httpStatus(status): return stageHTTPCode("STYLE", status: status)
-            case .wrongContentType: return "STYLE_MIME"
-            case .missingTileMapKey: return "TILEMAP_KEY_MISSING"
-            case .invalidJSON, .missingTiles, .noRoadLayers: return "PROVIDER_DATA"
-            default: return "PROVIDER_REQUEST"
-            }
-        case let error as H1AssetFactory.Error:
-            switch error {
-            case let .tileHTTPStatus(status): return stageHTTPCode("TILE", status: status)
-            case .tileWrongContentType: return "TILE_MIME"
-            case .missingTileMapConfiguration: return "TILEMAP_KEY_MISSING"
-            case .tileEmpty, .tileHasNoRoads: return "PROVIDER_DATA"
-            }
-        case is CancellationError:
-            return "TRANSFER_CANCELLED"
-        case RenderTransferPlan.Error.tooManyChunks:
-            return "ASSET_TOO_MANY_CHUNKS"
-        case is RenderAsset.Error, is MapAsset.Error, is RenderTransferPlan.Error:
-            return "ASSET_INVALID"
-        default:
-            return "PROVIDER_REQUEST"
-        }
-    }
-
-    private func providerHTTPCode(_ status: Int) -> String {
-        (100...599).contains(status) ? "PROVIDER_HTTP_\(status)" : "PROVIDER_HTTP"
-    }
-
-    private func stageHTTPCode(_ stage: String, status: Int) -> String {
-        (100...599).contains(status) ? "\(stage)_HTTP_\(status)" : "\(stage)_HTTP"
-    }
-
     private func transferCode(for error: Swift.Error) -> String {
         switch error {
         case is CancellationError:
@@ -740,18 +676,12 @@ final class H1RenderCoordinator {
         }
     }
 
-    private func assetMatchesMode(_ asset: RenderAsset, mode: H1TestMode) -> Bool {
-        guard asset.kind == mode.renderer else { return false }
-        switch mode {
-        case .vectorTileMap40, .vectorTileMap60:
-            return asset.primitives <= mode.expectedPrimitives
-        case .rasterStaticCompact, .rasterTileMap:
-            return asset.primitives == 0
-        }
+    private func assetMatchesMode(_ asset: RenderAsset, mode: RouteCardMode) -> Bool {
+        asset.kind == mode.renderer && asset.primitives == 0
     }
 
     nonisolated static func makeRunID() -> String {
-        "h1-run-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(16))
+        "nav-run-" + String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(16))
     }
 
     nonisolated static func makeSceneID() -> String {

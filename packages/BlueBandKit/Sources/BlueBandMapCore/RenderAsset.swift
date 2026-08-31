@@ -44,13 +44,13 @@ public struct RenderAsset: Equatable, Sendable {
         }
 
         self.kind = kind
-        self.format = kind == .raster ? .raster : .vector
+        self.format = .raster
         self.formatVersion = formatVersion
         self.width = width
         self.height = height
         self.data = data
         self.sha256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        self.id = "h1-" + String(self.sha256.prefix(16))
+        self.id = "nav-" + String(self.sha256.prefix(16))
         self.primitives = primitives
     }
 }

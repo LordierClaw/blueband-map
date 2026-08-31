@@ -21,7 +21,7 @@ public enum RenderTransferPlan {
 
     public static let maximumRunIDBytes = RenderProtocol.maximumIdentifierBytes
     public static let maximumSceneIDBytes = RenderProtocol.maximumIdentifierBytes
-    public static let maximumDataChunks = 60
+    public static let maximumDataChunks = 7
     private static let envelopeID = String(repeating: "\\", count: 32)
     private static let maximumChunkBytes = 320
 

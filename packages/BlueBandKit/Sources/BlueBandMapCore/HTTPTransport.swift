@@ -12,7 +12,7 @@ public struct MapHTTPRequest: Equatable, Sendable {
         url: URL,
         headers: [String: String],
         body: Data,
-        maximumResponseBytes: Int = MapAsset.maximumPNGBytes
+        maximumResponseBytes: Int = 256 * 1_024
     ) {
         self.method = method
         self.url = url

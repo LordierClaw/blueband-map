@@ -4,29 +4,29 @@ import BlueBandCore
 @testable import BlueBandMapCore
 
 final class RenderProtocolTests: XCTestCase {
-    private let runID = "h1-run-0123456789"
+    private let runID = "nav-run-0123456789"
     private let sceneID = "scene-0123456789"
 
     func testPrepareReadyRejectAndResultBodiesHaveStableFields() throws {
         let asset = try RenderAsset(
-            kind: .vector,
+            kind: .raster,
             formatVersion: 1,
             width: 212,
             height: 360,
             data: Data(repeating: 0xA5, count: 128),
-            primitives: 8
+            primitives: 0
         )
         let prepare = try RenderPrepareBody(runID: runID, sceneID: sceneID, asset: asset)
 
         XCTAssertEqual(prepare.runID, runID)
         XCTAssertEqual(prepare.sceneID, sceneID)
-        XCTAssertEqual(prepare.renderer, .vector)
-        XCTAssertEqual(prepare.format, RenderFormat.vector.rawValue)
+        XCTAssertEqual(prepare.renderer, .raster)
+        XCTAssertEqual(prepare.format, RenderFormat.raster.rawValue)
         XCTAssertEqual(prepare.formatVersion, 1)
         XCTAssertEqual(prepare.width, 212)
         XCTAssertEqual(prepare.height, 360)
         XCTAssertEqual(prepare.bytes, 128)
-        XCTAssertEqual(prepare.primitives, 8)
+        XCTAssertEqual(prepare.primitives, 0)
         XCTAssertEqual(prepare.sha256.count, 64)
         XCTAssertTrue(prepare.sha256.allSatisfy { $0.isHexDigit && !$0.isUppercase })
         XCTAssertEqual(Set(prepare.jsonBody().keys), [
@@ -36,7 +36,7 @@ final class RenderProtocolTests: XCTestCase {
 
         let ready = RenderReadyBody(runID: runID, sceneID: sceneID, prepare: prepare)
         XCTAssertEqual(ready.jsonBody()["runId"], .string(runID))
-        XCTAssertEqual(ready.jsonBody()["renderer"], .string("vector"))
+        XCTAssertEqual(ready.jsonBody()["renderer"], .string("raster"))
 
         let reject = RenderRejectBody(
             runID: runID,
@@ -48,22 +48,22 @@ final class RenderProtocolTests: XCTestCase {
         let result = RenderResultBody(
             runID: runID,
             sceneID: sceneID,
-            renderer: .vector,
+            renderer: .raster,
             formatVersion: 1,
             success: true,
             bytes: 128,
-            primitives: 8,
+            primitives: 0,
             validateMilliseconds: 2,
             renderMilliseconds: 4
         )
         XCTAssertEqual(result.jsonBody(), [
             "runId": .string(runID),
             "sceneId": .string(sceneID),
-            "renderer": .string("vector"),
+            "renderer": .string("raster"),
             "formatVersion": .number(1),
             "status": .string("ok"),
             "bytes": .number(128),
-            "primitives": .number(8),
+            "primitives": .number(0),
             "validateMs": .number(2),
             "renderMs": .number(4),
         ])
@@ -98,12 +98,12 @@ final class RenderProtocolTests: XCTestCase {
         }
 
         XCTAssertThrowsError(try RenderAsset(
-            kind: .vector,
+            kind: .raster,
             formatVersion: 1,
             width: 212,
             height: 360,
             data: Data([0x01]),
-            primitives: 61
+            primitives: 1
         )) { error in
             XCTAssertEqual(error as? RenderAsset.Error, .tooManyPrimitives)
         }
@@ -121,7 +121,7 @@ final class RenderProtocolTests: XCTestCase {
     }
 
     func testRenderTransferStepsStayWithinEnvelopeAndReconstructData() throws {
-        let data = Data(repeating: 0x37, count: 2_048)
+        let data = Data(repeating: 0x37, count: 1_024)
         let asset = try RenderAsset(
             kind: .raster,
             formatVersion: 1,
@@ -156,37 +156,23 @@ final class RenderProtocolTests: XCTestCase {
         XCTAssertEqual(steps.first?.body["primitives"], .number(0))
     }
 
-    func testRenderTransferUsesActualIdentifiersAndRejectsMoreThanSixtyDataChunks() throws {
-        let actualRunID = "h1-run-0123456789abcdef"
+    func testRenderTransferUsesActualIdentifiersAndStaysWithinSevenDataChunks() throws {
+        let actualRunID = "nav-run-0123456789abcdef"
         let actualSceneID = "scene-0123456789abcdef"
         let compact = try RenderAsset(
             kind: .raster,
             formatVersion: 1,
             width: 212,
             height: 360,
-            data: Data(repeating: 0x37, count: 7_014),
+            data: Data(repeating: 0x37, count: 1_024),
             primitives: 0
         )
         let steps = try RenderTransferPlan.make(asset: compact, runID: actualRunID, sceneID: actualSceneID)
         let firstChunk = try XCTUnwrap(steps.first { $0.topic == "map.asset.chunk" })
         guard case let .string(encoded)? = firstChunk.body["data"] else { return XCTFail("missing chunk data") }
-        XCTAssertEqual(Data(base64Encoded: encoded)?.count, 189)
+        XCTAssertEqual(Data(base64Encoded: encoded)?.count, 186)
         XCTAssertLessThanOrEqual(steps.count - 2, RenderTransferPlan.maximumDataChunks)
 
-        let slow = try RenderAsset(
-            kind: .raster,
-            formatVersion: 1,
-            width: 212,
-            height: 360,
-            data: Data(repeating: 0x37, count: 12_000),
-            primitives: 0
-        )
-        XCTAssertThrowsError(try RenderTransferPlan.make(
-            asset: slow,
-            runID: actualRunID,
-            sceneID: actualSceneID
-        )) { error in
-            XCTAssertEqual(error as? RenderTransferPlan.Error, .tooManyChunks)
-        }
+        XCTAssertLessThanOrEqual(steps.count - 2, 7)
     }
 }

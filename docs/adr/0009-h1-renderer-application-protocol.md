@@ -1,8 +1,8 @@
 # ADR 0009: H1 renderer application protocol
 
-**Status:** Accepted
+**Status:** Superseded by ADR 0010
 **Date:** 2026-08-30
-**Scope:** H1 iPhone-to-Band renderer comparison
+**Scope:** Historical H1 iPhone-to-Band renderer comparison
 
 ## Decision
 

@@ -35,7 +35,7 @@ final class VietmapStyleClientTests: XCTestCase {
         let recordedRequests = await transport.requests()
         let request = try XCTUnwrap(recordedRequests.first)
         XCTAssertEqual(request.maximumResponseBytes, 2 * 1_024 * 1_024)
-        XCTAssertEqual(request.url.path, "/mt/tm/style.json")
+        XCTAssertEqual(request.url.path, "/maps/styles/tm/style.json")
         XCTAssertTrue(request.url.absoluteString.contains("apikey=tile-test-key"))
     }
 

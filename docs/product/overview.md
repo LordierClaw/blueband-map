@@ -9,7 +9,7 @@ iPhone = navigation brain
 Band   = thin navigation display
 ```
 
-The iPhone owns location, routing, route progress, reroute, map asset preparation, tile/atlas cache, camera decisions and recovery. The Band stores only the active working assets, moves and rotates the local scene, displays route/navigation information, handles limited pan and view switching, and vibrates for turns.
+The iPhone owns location, routing, route progress, reroute, map asset preparation, the in-memory style/tile cache, camera decisions and recovery. The Band stores only the active route-card PNG, displays route/navigation information, and moves a native marker for turns.
 
 ## Why development is POC-gated
 
@@ -51,26 +51,21 @@ Fast path
 location/route progress → compact camera/nav state → Band local transform/UI
 ```
 
-The project does not stream a newly captured full map image for every GPS update. It first proves street imagery with Static Map PNG and proves true tile behavior with Satellite XYZ. A supported long-term street source is selected only after Vietmap confirms raster availability or a phone-side vector-to-raster atlas passes its own POC.
+The project does not stream a newly captured full map image for every GPS update. It renders one 212×360 indexed PNG route card from the real Route v4 polyline and selected phone-side vector tiles, then sends only compact marker/instruction updates at up to 1 Hz. Static Map and Band-side vector payloads are not runtime paths.
 
 ## Phase roadmap
 
 | Gate | Proof |
 |---|---|
 | M0 | Preserve existing hardware-confirmed application-message baseline |
-| M1 | One real Vietmap street PNG through fetch, BLE, file and Band image decode |
-| M2 | Correct 2×3 raster XYZ grid, cache and transfer-window measurements |
-| M3 | Wider bounded scene, four-direction pan and recenter |
-| M4 | Local translation/rotation, fixed puck and measured Near/Far camera rates |
-| M5 | Incremental working-set refill, retain, eviction and bounded recovery |
-| N1 | Vietmap Route v4 motorcycle contract on iPhone |
-| N2 | Hardware selection of transparent PNG or CSS-segment route overlay |
-| N3 | Deterministic end-to-end navigation replay with duplicate-safe haptics |
+| N1 | Vietmap Route v4 motorcycle contract, polyline decode and progress matching |
+| N2 | Live route-card PNG with selected side roads and bounded transfer |
+| N3 | Compact `nav.update` marker/instruction state and recovery statuses |
 | N4 | Live GPS motorcycle navigation and controlled reroute road test |
 | U1 | iOS/Band lifecycle, background and state-snapshot recovery matrix |
 | U2 | Coherent configure-once motorcycle navigation vertical slice |
 
-M1 status: **Implementation ready for owner hardware acceptance; not hardware-confirmed.** M2 and all later phases remain unstarted.
+Current route-card status: **Implementation ready for owner hardware acceptance; not hardware-confirmed.** Hardware timing/readability/stability gates remain open.
 
 Detailed gates, stop conditions and evidence rules are in the [approved POC roadmap design](../superpowers/specs/2026-08-29-blueband-map-poc-roadmap-design.md).
 

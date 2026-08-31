@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor bootstrap test test-swift test-rpk test-lab test-ios-metadata test-ci-metadata test-vietmap-smoke vietmap-smoke-static vietmap-smoke-style test-handoff lint clean
+.PHONY: help doctor bootstrap test test-swift test-rpk test-lab test-ios-metadata test-vietmap-smoke vietmap-smoke-route vietmap-smoke-style test-handoff lint clean
 
 help:
 	@echo "BlueBand Map development targets"
@@ -10,9 +10,8 @@ help:
 	@echo "  make test-swift   Test portable Swift packages"
 	@echo "  make test-rpk     Test and build the Band 10 RPK"
 	@echo "  make test-lab     Test the protocol laboratory"
-	@echo "  make test-ci-metadata Test CI workflow metadata"
 	@echo "  make test-vietmap-smoke Test provider smoke script with fake curl"
-	@echo "  make vietmap-smoke-static One bounded Vietmap Static Map request"
+	@echo "  make vietmap-smoke-route One bounded Vietmap Route v4 request"
 	@echo "  make vietmap-smoke-style One bounded Vietmap TileMap style request"
 	@echo "  make test-handoff Test immutable POC handoff packaging"
 	@echo "  make lint         Run local static checks"
@@ -24,7 +23,7 @@ doctor:
 bootstrap:
 	docker compose pull swift node-rpk node-lab
 
-test: test-swift test-rpk test-lab test-ios-metadata test-ci-metadata test-handoff
+test: test-swift test-rpk test-lab test-ios-metadata test-vietmap-smoke test-handoff
 
 test-swift:
 	docker compose run --rm -e SWIFT_TEST_ARGS="$(SWIFT_TEST_ARGS)" swift bash -lc 'swift test $${SWIFT_TEST_ARGS}'
@@ -38,14 +37,11 @@ test-lab:
 test-ios-metadata:
 	bash tools/ios/test-project-metadata.sh
 
-test-ci-metadata:
-	bash tests/scripts/ci-workflows.test.sh
-
 test-vietmap-smoke:
 	bash tests/scripts/vietmap-smoke.test.sh
 
-vietmap-smoke-static:
-	scripts/vietmap-smoke.sh static local/vietmap-service-key
+vietmap-smoke-route:
+	scripts/vietmap-smoke.sh route local/vietmap-service-key
 
 vietmap-smoke-style:
 	scripts/vietmap-smoke.sh style local/vietmap-tilemap-key
