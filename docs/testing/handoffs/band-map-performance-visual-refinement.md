@@ -4,18 +4,18 @@
 
 | Item | Value |
 |---|---|
-| Source commit | `2ab53f990bd8230ce128dd419929da5fef7e14c0` |
+| Source commit | `9e869d001b32e818bb6939ddb23e8c40d436f3c0` |
 | iOS | `0.3.0 (13)` |
 | RPK | `0.4.0 (13)` |
-| iOS CI | [GitHub Actions run 33421025418](https://github.com/LordierClaw/blueband-map/actions/runs/33421025418) |
+| iOS CI | [GitHub Actions run 33422881440](https://github.com/LordierClaw/blueband-map/actions/runs/33422881440) |
 | Hardware status | Build-verified; Smart Band 10 retest pending |
 
 The IPA was produced only by GitHub Actions. The RPK was produced through the canonical Docker/Make workflow. Both artifact directories are ignored by Git.
 
 | Artifact | Local path | Bytes | SHA-256 |
 |---|---|---:|---|
-| Unsigned IPA | `artifacts/band-map-performance/ipa-0.3.0/BlueBandMap-unsigned.ipa` | 3,396,903 | `79c0b1344d4f91d659161164e0bff1eb7578bea8f78802468ae42887b0cb2605` |
-| Debug RPK | `artifacts/band-map-performance/rpk/dev.lordierclaw.bluebandmap.band.debug.0.4.0.rpk` | 29,693 | `a4eaf80ed194b7ca236a5b4341424c867ca5897268559fe90cfc31033337a949` |
+| Unsigned IPA | `artifacts/band-map-performance/ipa-0.3.0/BlueBandMap-unsigned.ipa` | 3,398,941 | `db97f83f677a7c0cb6f3ed3481bc18b4a8c30453db1dbd58da2018010c4c6d44` |
+| Debug RPK | `artifacts/band-map-performance/rpk/dev.lordierclaw.bluebandmap.band.debug.0.4.0.rpk` | 29,970 | `a2173657eaa00139532b099b0b0181a3f51790b0af4a6c428869a532e9134e6d` |
 
 IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.3.0 (13)`, minimum iOS 17, iPhone-only device family, an arm64 Mach-O executable, no `_CodeSignature`, and no embedded provisioning profile. RPK inspection confirmed package `dev.lordierclaw.bluebandmap.band`, version `0.4.0 (13)`.
 
@@ -28,7 +28,7 @@ IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.3.0 (1
 - Tries the three 16-color transfer profiles in degradation order, stops at the first PNG at most 4,096 bytes, and otherwise sends the smallest valid PNG up to 8,192 bytes.
 - Adds a bounded instruction preview to `render.prepare`, so the Band can show maneuver, distance, and street before the map finishes transferring.
 - Sends an eight-sector heading bucket for the M1 marker.
-- Changes the default application ACK window to two. Complete SPP frames remain serialized on the BLE wire, preventing concurrent CoreBluetooth writes and chunk reordering while allowing two application acknowledgements to overlap.
+- Changes the default application ACK window to two. Complete SPP frames remain serialized on the BLE wire; the coordinator advances only over contiguous acknowledgements while allowing two application acknowledgements to overlap.
 - Bumps iOS from `0.2.1 (12)` to `0.3.0 (13)`.
 
 ### RPK-affecting
@@ -36,15 +36,16 @@ IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.3.0 (1
 - Replaces the rectangular instruction card with the B1 212×96 full-width PNG8 fade HUD, one-line street name, exact-size maneuver images, and exceptional status line.
 - Replaces the 10 px dot with eight 26×32 PNG8 directional chevrons. Every orientation has a transparent margin and requires no runtime rotation, SVG, or clipping.
 - Validates and shows the prepare preview immediately, hides diagnostics behind it, preserves it through successful publication, and restores confirmed guidance if a refresh is cancelled, disconnected, or fails.
+- Buffers at most one early windowed chunk and appends it only after its predecessor; live updates for the confirmed scene refresh the rollback state without replacing the pending preview.
 - Packages and verifies every HUD/marker resource and bumps RPK from `0.3.0 (12)` to `0.4.0 (13)`.
 
 No backend service was added or changed. iOS directly requests the Vietmap dark-style endpoint and performs the final layer reduction, route drawing, and PNG8 encoding locally.
 
 ## Automated evidence
 
-- Canonical local suites passed: 143 portable Swift tests, 19 RPK tests, and 19 protocol-lab tests.
+- Canonical local suites passed: 143 portable Swift tests, 20 RPK tests, and 19 protocol-lab tests.
 - Vietmap smoke tests, iOS metadata, handoff checks, shell syntax, secret scan, lint, and `git diff --check` passed.
-- GitHub Actions run 33421025418 passed simulator tests, an unsigned arm64 device build, artifact inspection, and IPA upload.
+- GitHub Actions run 33422881440 passed simulator tests, an unsigned arm64 device build, artifact inspection, and IPA upload.
 - Automated evidence does not prove Smart Band 10 latency or visual acceptance.
 
 ## Manual test plan
