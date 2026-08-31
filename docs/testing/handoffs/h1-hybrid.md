@@ -1,89 +1,93 @@
-# H1 hybrid renderer — owner hardware handoff
+# H1 bounded hybrid renderer — owner hardware handoff
 
-This handoff applies only to the exact artifacts below. CI and live provider checks do not prove Xiaomi Smart Band 10 hardware acceptance; the owner test is the acceptance boundary.
+This packet applies only to the artifacts listed below. CI proves compilation and deterministic behavior; only the owner test on the iPhone and Smart Band 10 can prove hardware acceptance.
 
 ## Artifact identity
 
-- Source commit: `b5329cff1a2329a8ccd9e805ddd4d1498e0272f5`
+- Source commit: `464b3def233ed89165f8c2014e2ad51c8fba3222`
 - IPA: `artifacts/h1-hybrid/BlueBandMap-unsigned.ipa`
-- IPA version/build: `0.1.5 (6)`
-- IPA bytes / SHA-256: `785236` / `9b0032d00c9b5c338e597c6cc5f7ffd998ba22bd1970ee1d5d84f0cadbec7186`
-- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.8.rpk`
-- RPK version/code: `0.2.8 (10)`
-- RPK bytes / SHA-256: `25019` / `8777472b683d99c9b6d3b823097db78412c8af96914ba29588618f00c4c5af8b`
-- Both artifacts changed. Replace IPA `0.1.4 (5)` and fully remove the old RPK before installing `0.2.8 (10)`.
+- IPA version/build: `0.1.6 (7)`
+- IPA bytes / SHA-256: `806331` / `db5993108cb541f2b250796a17b3e3f44c65c05978a263c3b5cdcd2ab1c2a50a`
+- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.9.rpk`
+- RPK version/code: `0.2.9 (11)`
+- RPK bytes / SHA-256: `25136` / `638d8263d55d5bb274e85feaad01ef301a558e73e0727f25f5c2c5099508e90c`
+- Both files changed. Replace both previous artifacts; uninstall the old RPK before installing `0.2.9 (11)`.
 
 The IPA is unsigned. Keep signing credentials, profiles and private keys outside this repository.
 
-## What was fixed from the latest owner evidence
+## What changed
 
-The owner run proved all three modes now reach `displayed`. It also exposed three correctness/performance problems:
+- Removed the 212×360 Static Map baseline. Its observed 21,567-byte payload required about 117 data chunks and is no longer selectable.
+- Every H1 run now has a hard limit of 60 `map.asset.chunk` messages. A larger payload fails locally with `ASSET_TOO_MANY_CHUNKS` before transfer.
+- Chunk sizing now uses the actual run and scene IDs. The 512-byte application envelope carries 186–189 binary bytes per data chunk; raising the old 320-byte candidate cap alone cannot increase it.
+- Static Compact requests 159×270 at zoom 16 and applies adaptive 16-color quantization on the iPhone before transfer.
+- TileMap Raster decodes the real Vietmap legacy vector tile, selects/simplifies up to 200 nearby connected road segments, and produces one four-color 212×360 indexed PNG on the iPhone.
+- TileMap Vector has separate 40- and 60-road budgets. Nearly straight geometry is merged before selection; walking paths are removed; nearby connected streets are preferred.
+- Band vector roads use one lightweight node per segment with a border and fill, producing two visible road edges without doubling the node count.
+- Vector errors remain terminal and never silently fall back to raster.
 
-1. Synthetic 40 was intentionally generated as isolated random dashes. It now renders a deterministic connected road grid, so it measures Band line capacity without resembling corrupt geometry.
-2. TileMap projected MVT extent units directly as screen pixels and decoded every line layer. The real 2.34 MB tile contains `transportation`, boundaries, waterways and thousands of unrelated features. The iPhone now converts the 4096-unit MVT extent to 256 tile pixels and keeps only road source layers selected by the live Vietmap style.
-3. Static Map transferred 21,567 bytes in 120 steps. ACK latency rose from roughly 150 ms to roughly 420 ms after ACK 24 because the Band performed one filesystem write per data chunk. RPK `0.2.8 (10)` allocates one bounded buffer (maximum 64 KiB), ACKs after copy/hash, then writes the complete validated payload once.
+## Measured transfer budget
 
-The static payload itself remains the exact 212×360 Vietmap PNG in this build. Live API measurements at the POC coordinate were 21,567 bytes for 212×360, 12,376 bytes for 159×270 and 7,091 bytes for 106×180. A half-resolution real-map mode is deferred until the owner confirms whether scaled text and roads remain readable.
+Measurements used the live POC coordinate, actual ID lengths and the exact 512-byte JSON envelope.
 
-Long exports now retain aggregate p50/p95/max metrics and at most 32 ACK samples, keeping the shared JSON valid and below 1,024 bytes. No key, provider URL, raw tile body, UUID or BLE secret is exported.
+| Candidate | Payload | Data chunks | Decision |
+|---|---:|---:|---|
+| Static original 212×360 | 21,567 B | about 117 | removed |
+| Static 159×270 z16, provider PNG | 14,546 B | 79 | removed |
+| Static Compact 159×270 z16, 16 colors | about 7,014 B | 38 | retained |
+| TileMap Raster, real tile and 200-road scene | about 3,394 B | 19 | retained |
+| TileMap Vector 40 | at most 382 B | at most 3 | retained |
+| TileMap Vector 60 | at most 562 B | at most 4 | retained as stress mode |
 
-## H1 contract
-
-- The iPhone selects exactly one renderer before transfer.
-- The Band must answer `render.prepare` with `render.ready` before asset chunks are sent.
-- Raster uses a 212×360 PNG. Vector uses BBMV v1 with no more than 40 line primitives.
-- Vector never silently falls back to raster.
-- Transfer remains stop-and-wait and preserves the verified Xiaomi BLE/SPP/auth bytes.
-- Success requires an exact semantic result: renderer, format, bytes, primitives and hash prefix.
+Provider PNG sizes can vary, but the runtime 60-chunk gate is authoritative.
 
 ## Preconditions
 
 - iPhone 13 Pro Max on the intended iOS 26 build.
 - Xiaomi Smart Band 10 on the latest firmware; Mi Fitness fully closed during the session.
 - AuthKey, Vietmap Service key and Vietmap TileMap key show `SAVED` in Config.
-- Old Band package fully uninstalled, then RPK `0.2.8 (10)` installed.
-- IPA `0.1.5 (6)` installed and signed through the tester's normal process.
+- RPK `0.2.9 (11)` and IPA `0.1.6 (7)` installed.
 - Test while stationary.
 
 ## Test sequence and expected output
 
-Run one mode at a time. After any terminal failure, disconnect and reconnect before the next attempt.
+Run one mode at a time. Disconnect and reconnect after every terminal failure. Export the JSON after every run.
 
 1. Open the Band app.
-   - Expected: `BLUEBAND MAP`, a ready/link status and `RPK 0.2.8` appear immediately.
-   - Stop if the screen is black, frozen or displays another version.
-2. Connect from the compact device picker and complete authentication/trust.
+   - Expected: `BLUEBAND MAP`, link status and `RPK 0.2.9` appear immediately.
+   - Stop if the screen is black, frozen or shows another version.
+2. Connect from the device dialog and complete authentication/trust.
    - Expected iPhone state: `Đã xác thực`.
-3. Run `Vector · Synthetic 40 lines`.
-   - Expected: `382 / 40`, displayed/success, a connected rectangular road grid and a responsive Band. Isolated diagonal dashes are a failure.
-4. Disconnect/reconnect and run `Vector · Vietmap TileMap`.
-   - Expected: one tile processed on iPhone, 1–40 primitives, displayed/success and recognizable connected road fragments around the center marker. Boundaries/waterways filling the screen or the old widely scattered dashes are failures.
-5. Disconnect/reconnect and run `Raster · Vietmap Static Map`.
-   - Expected: 21,567 bytes and about 120 transfer steps for the current provider response, followed by the correct recognizable map.
-   - Primary measurement: ACKs after sample 24 should no longer plateau near 420 ms. Total time should improve, but hardware evidence determines the accepted threshold.
-6. Tap `Export log H1` after every terminal run and save/share the JSON.
-   - Expected: the share sheet appears.
-   - Expected file: valid one-line JSON smaller than 1,024 bytes, with a complete 64-character `payloadSHA256` and no secret values.
+3. Run `Raster · Static Compact 16 colors`.
+   - Expected: a recognizable scaled Vietmap image, correct road layout, no more than 60 data chunks, `displayed`, and a responsive Band.
+4. Reconnect and run `Raster · TileMap 200 roads`.
+   - Expected: a lightweight four-color street map with connected junctions around the center marker; no scattered meaningless dashes; no more than 60 data chunks.
+5. Reconnect and run `Vector · TileMap 40 roads`.
+   - Expected: 1–40 primitives, connected double-edge/cased roads, `displayed`, and a responsive Band.
+6. Reconnect and run `Vector · TileMap 60 roads` last.
+   - Expected: 1–60 primitives and the same map structure with more local streets. Stop immediately and report `FAIL-HW` if the Band becomes black, freezes or reboots.
+7. Tap `Export log H1` after each terminal run.
+   - Expected: the iOS share sheet opens and exports valid sanitized JSON containing bytes, chunk count, total time and ACK metrics.
 
-If a provider mode fails before transfer, return its exact bounded code such as `STYLE_HTTP_###`, `TILE_HTTP_###`, `STYLE_MIME`, `TILE_MIME` or `PROVIDER_DATA`. Do not retry a rate-limited request.
+If a provider mode fails before transfer, return its bounded code such as `STYLE_HTTP_###`, `TILE_HTTP_###`, `STYLE_MIME`, `TILE_MIME`, `PROVIDER_DATA` or `ASSET_TOO_MANY_CHUNKS`. Do not retry a rate-limited request.
 
 ## Evidence to return
 
-For each mode, return:
+For every mode return:
 
 - terminal status or bounded error code;
-- bytes / primitives;
+- bytes / primitives and chunk count;
 - total time and ACK p95;
 - whether the Band remained responsive;
-- exported JSON file;
-- redacted screenshot of the Band result.
+- exported JSON;
+- clear Band screenshot.
 
 Never return AuthKey, Vietmap keys, CoreBluetooth UUIDs, raw BLE captures, nonces, HMACs, derived keys or signing material.
 
 Use one disposition:
 
-- `PASS-HW`: all six modes display successfully and exports are valid.
-- `FAIL-HW`: a reproducible crash, hang, render mismatch or provider failure occurred.
+- `PASS-HW`: all four modes display correctly and the Band remains responsive.
+- `FAIL-HW`: a reproducible crash, hang, reboot, render mismatch or provider failure occurred.
 - `BLOCKED-ENV`: artifact, signing, key, device or firmware prerequisites are unavailable.
 - `NEEDS-MEASURE`: behavior ran but required metrics/evidence are missing.
 
