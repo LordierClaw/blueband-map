@@ -20,11 +20,11 @@ final class IndexedPNGEncoderTests: XCTestCase {
         let scene = try RouteCardBuilder.build(route: route, progressIndex: 0, sideRoads: [])
         let png = try IndexedPNGEncoder.encode(try IndexedRaster.render(routeCard: scene))
 
-        XCTAssertLessThanOrEqual(png.count, 1_024)
+        XCTAssertLessThanOrEqual(png.count, RenderProtocol.maximumPayloadBytes)
         let source = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
         let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(image.width, 212)
-        XCTAssertEqual(image.height, 360)
+        XCTAssertEqual(image.height, 520)
     }
 
     func testReportedRouteGeometryStaysWithinTheHardwareBudget() throws {
@@ -46,6 +46,6 @@ final class IndexedPNGEncoderTests: XCTestCase {
         let source = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
         let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(image.width, 212)
-        XCTAssertEqual(image.height, 360)
+        XCTAssertEqual(image.height, 520)
     }
 }

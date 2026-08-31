@@ -14,6 +14,9 @@ settings:
 packages:
   BlueBandKit:
     path: ../../packages/BlueBandKit
+  VietMap:
+    url: https://github.com/vietmap-company/maps-sdk-ios.git
+    revision: 649eabcb21a36c3d0cfd871c07ccea641924fcdd
 
 targets:
   BlueBandMap:
@@ -33,6 +36,8 @@ targets:
         product: BlueBandCore
       - package: BlueBandKit
         product: BlueBandMapCore
+      - package: VietMap
+        product: VietMap
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lordierclaw.bluebandmap

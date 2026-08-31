@@ -1,0 +1,22 @@
+[
+  {"id":"background","type":"background"},
+  {"id":"ocean_planet","type":"fill"},
+  {"id":"island_polygon","type":"fill"},
+  {"id":"landcover_park","type":"fill"},
+  {"id":"landuse_residential","type":"fill"},
+  {"id":"landuse_school","type":"fill"},
+  {"id":"landuse_hospital","type":"fill"},
+  {"id":"building","type":"fill"},
+  {"id":"road_minor_casing","type":"line"},
+  {"id":"road_minor","type":"line"},
+  {"id":"road_primary_casing","type":"line"},
+  {"id":"road_primary","type":"line"},
+  {"id":"bridge_primary","type":"line"},
+  {"id":"road_primary_label","type":"symbol"},
+  {"id":"road_secondary_label","type":"symbol"},
+  {"id":"poi_hospital","type":"symbol"},
+  {"id":"transit_station","type":"symbol"},
+  {"id":"place_city","type":"symbol"},
+  {"id":"admin_country","type":"line"},
+  {"id":"building_3d","type":"fill-extrusion"}
+]
