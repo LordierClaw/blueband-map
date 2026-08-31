@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 - 2026-08-31
+
+- Fix the buffered `render.ready` timeout remaining active during a slow Band transfer.
+- Preserve the exact Band render terminal code in navigation diagnostics and place events before route instructions in exports.
+- Bump only iOS to `0.2.1 (12)`; RPK remains `0.3.0 (12)` because Band source is unchanged.
+
 All notable changes are recorded here. The iOS app, RPK, and application-envelope versions are tracked independently in release manifests.
 
 ## Unreleased

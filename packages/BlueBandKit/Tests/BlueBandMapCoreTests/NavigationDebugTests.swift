@@ -2,7 +2,7 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class NavigationDebugTests: XCTestCase {
-    func testExportIncludesRouteStepsAndRedactsExactCoordinates() {
+    func testExportIncludesRouteStepsAndRedactsExactCoordinates() throws {
         let output = NavigationDebugFormatter.export(
             state: "navigating",
             start: GeoPoint(latitude: 10.123456, longitude: 106.987654),
@@ -28,6 +28,10 @@ final class NavigationDebugTests: XCTestCase {
         XCTAssertTrue(output.contains("street=Đường A"))
         XCTAssertTrue(output.contains("street=Đường B"))
         XCTAssertTrue(output.contains("[12ms] #1 route.request heading=90"))
+        XCTAssertLessThan(
+            try XCTUnwrap(output.range(of: "events:")?.lowerBound),
+            try XCTUnwrap(output.range(of: "step[1]")?.lowerBound)
+        )
         XCTAssertFalse(output.contains("10.123456"))
         XCTAssertFalse(output.contains("106.987654"))
     }

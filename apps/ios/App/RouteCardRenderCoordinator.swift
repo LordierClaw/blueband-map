@@ -117,6 +117,11 @@ final class RouteCardRenderCoordinator {
     private(set) var lastRunRecord: RenderRunRecord?
     private(set) var lastDisplayedSceneID: String?
 
+    var failureCode: String? {
+        guard case let .failed(_, code) = state else { return nil }
+        return code
+    }
+
     private var operationToken: UUID?
     private var operationTask: Task<Void, Never>?
     private var pending: PendingTransfer?
@@ -462,6 +467,8 @@ final class RouteCardRenderCoordinator {
             return
         }
         if result.success {
+            resultTimeoutTask?.cancel()
+            resultTimeoutTask = nil
             lastDisplayedSceneID = pending.sceneID
             runContext?.renderMilliseconds = result.renderMilliseconds
             runContext?.bandWriteMilliseconds = result.prepareMilliseconds
@@ -507,6 +514,8 @@ final class RouteCardRenderCoordinator {
                     return
                 }
                 if let buffered = pending.bufferedPrepareResponse {
+                    prepareTimeoutTask?.cancel()
+                    prepareTimeoutTask = nil
                     self.pending?.bufferedPrepareResponse = nil
                     continuation.resume(returning: buffered)
                 } else {
@@ -529,6 +538,8 @@ final class RouteCardRenderCoordinator {
                     return
                 }
                 if let buffered = pending.bufferedResult {
+                    resultTimeoutTask?.cancel()
+                    resultTimeoutTask = nil
                     self.pending?.bufferedResult = nil
                     continuation.resume(returning: buffered)
                 } else {

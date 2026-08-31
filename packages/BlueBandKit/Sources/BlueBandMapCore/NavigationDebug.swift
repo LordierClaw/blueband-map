@@ -33,14 +33,6 @@ public enum NavigationDebugFormatter {
             "alternativePaths=\(alternativePathCount.map(String.init) ?? "—")",
             "instructionCount=\(instructions.count)",
         ]
-        for (index, instruction) in instructions.enumerated() {
-            lines.append(
-                "step[\(index + 1)] maneuver=\(instruction.maneuver.rawValue) " +
-                "distanceM=\(Int(instruction.distanceMeters.rounded())) " +
-                "interval=\(instruction.interval.lowerBound)...\(instruction.interval.upperBound) " +
-                "street=\(oneLine(instruction.streetName))"
-            )
-        }
         if entries.isEmpty {
             lines.append("events=none")
         } else {
@@ -51,6 +43,14 @@ public enum NavigationDebugFormatter {
                     "\(oneLine(entry.stage)) \(oneLine(entry.detail))"
                 )
             }
+        }
+        for (index, instruction) in instructions.enumerated() {
+            lines.append(
+                "step[\(index + 1)] maneuver=\(instruction.maneuver.rawValue) " +
+                "distanceM=\(Int(instruction.distanceMeters.rounded())) " +
+                "interval=\(instruction.interval.lowerBound)...\(instruction.interval.upperBound) " +
+                "street=\(oneLine(instruction.streetName))"
+            )
         }
         return lines.joined(separator: "\n") + "\n"
     }

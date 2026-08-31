@@ -6,6 +6,32 @@ import BlueBandMapCore
 
 @MainActor
 final class RouteCardRenderCoordinatorTests: XCTestCase {
+    func testBufferedReadyCancelsPrepareTimeoutBeforeSlowTransfer() async throws {
+        let session = WindowedRouteCardSession(chunkDelay: .milliseconds(5))
+        let coordinator = RouteCardRenderCoordinator(
+            session: session,
+            resultTimeout: .milliseconds(10),
+            transferWindow: 1,
+            runIDGenerator: { "nav-run-buffered" },
+            sceneIDGenerator: { "scene-buffered" }
+        )
+        await session.setReceiver { envelope in coordinator.consume(envelope) }
+        let asset = try RenderAsset(
+            kind: .raster,
+            formatVersion: RenderProtocol.formatVersion,
+            width: RenderProtocol.viewportWidth,
+            height: RenderProtocol.viewportHeight,
+            data: Data(repeating: 0x5A, count: 2_048),
+            primitives: 0
+        )
+
+        await coordinator.start(asset: asset)
+
+        guard case .displayed = coordinator.state else {
+            return XCTFail("buffered ready must not time out during transfer: \(coordinator.state)")
+        }
+    }
+
     func testPrepareResponseTimeoutTerminatesTheRun() async throws {
         let coordinator = RouteCardRenderCoordinator(
             session: NeverReadyRouteCardSession(),
@@ -26,6 +52,7 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         await coordinator.start(asset: asset)
 
         XCTAssertEqual(coordinator.state, .failed(mode: .routeCard, code: "ASSET_READY_TIMEOUT"))
+        XCTAssertEqual(coordinator.failureCode, "ASSET_READY_TIMEOUT")
         XCTAssertTrue(coordinator.requiresReconnect)
     }
 
@@ -88,6 +115,9 @@ private actor WindowedRouteCardSession: RouteCardSessionSending {
     private var prepareBody: [String: JSONValue] = [:]
     private var activeChunks = 0
     private(set) var maximumConcurrentChunks = 0
+    private let chunkDelay: Duration
+
+    init(chunkDelay: Duration = .milliseconds(5)) { self.chunkDelay = chunkDelay }
 
     func setReceiver(_ receiver: @escaping Receiver) { self.receiver = receiver }
 
@@ -103,7 +133,7 @@ private actor WindowedRouteCardSession: RouteCardSessionSending {
         } else if topic == "map.asset.chunk" {
             activeChunks += 1
             maximumConcurrentChunks = max(maximumConcurrentChunks, activeChunks)
-            try await Task.sleep(for: .milliseconds(5))
+            try await Task.sleep(for: chunkDelay)
             activeChunks -= 1
         } else if topic == "map.asset.end" {
             await receive(RenderProtocol.resultTopic, body: [

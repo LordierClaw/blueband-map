@@ -11,7 +11,7 @@ enum LiveNavigationState: Equatable, Sendable {
     case idle, waitingForGPS, routing, transferring, navigating, gpsLow, limitedMap, rerouting, arrived
     case failed(String)
 }
-enum NavigationRuntimeError: Swift.Error { case bandDisplayFailed }
+enum NavigationRuntimeError: Swift.Error { case bandDisplayFailed(String) }
 
 struct EchoEntry: Identifiable, Equatable, Sendable {
     let id: String
@@ -504,7 +504,9 @@ final class AppModel: ObservableObject {
             cacheState: snapshot.cacheState
         ))
         guard case .displayed = renderCoordinator.state,
-              let sceneID = renderCoordinator.lastDisplayedSceneID else { throw NavigationRuntimeError.bandDisplayFailed }
+              let sceneID = renderCoordinator.lastDisplayedSceneID else {
+            throw NavigationRuntimeError.bandDisplayFailed(renderCoordinator.failureCode ?? "BAND_RESULT_MISSING")
+        }
         activeSceneID = sceneID
         activeSnapshotConfiguration = snapshot.configuration
         activeManeuverUpperBound = instruction?.interval.upperBound
@@ -778,6 +780,8 @@ final class AppModel: ObservableObject {
         switch error {
         case let SnapshotPNGEncoder.Error.payloadTooLarge(bytes):
             "encodedBytes=\(bytes) budgetBytes=\(RenderProtocol.maximumPayloadBytes)"
+        case let NavigationRuntimeError.bandDisplayFailed(code):
+            "terminal=\(safeErrorCode(code))"
         default: ""
         }
     }
