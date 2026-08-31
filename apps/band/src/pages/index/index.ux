@@ -450,6 +450,7 @@ export default {
   },
 
   resetMapLifecycle() {
+    this.restorePreparedNavigation()
     this.lifecycleEpoch = this.lifecycleEpoch + 1
     this.navScene = ""
     this.navSequence = -1
@@ -466,7 +467,6 @@ export default {
     this.pendingPublication = null
     this.pendingMapPath = ""
     this.pendingMapToken = ""
-    this.preparedRender = null
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
     if (this.confirmedMap) {
@@ -484,6 +484,24 @@ export default {
       this.showDiagnostics = true
     }
     if (shouldDelete) this.deleteBestEffort(cleanupURI)
+  },
+
+  restorePreparedNavigation() {
+    var previous = this.preparedRender && this.preparedRender.previousNavigation
+    if (previous) {
+      this.navArrowPath = previous.arrowPath
+      this.navDistance = previous.distance
+      this.navStreet = previous.street
+      this.navStatus = previous.status
+      this.navStatusVisible = previous.statusVisible
+    } else {
+      this.navArrowPath = "/common/maneuver-straight.png"
+      this.navDistance = "—"
+      this.navStreet = ""
+      this.navStatus = "WAITING"
+      this.navStatusVisible = false
+    }
+    this.preparedRender = null
   },
 
   utf8Length(text) {
@@ -564,7 +582,7 @@ export default {
     if (message.topic === "render.cancel") {
       var cancelled = message.body && this.preparedRender &&
         message.body.runId === this.preparedRender.runId && message.body.sceneId === this.preparedRender.sceneId
-      if (cancelled) this.preparedRender = null
+      if (cancelled) this.restorePreparedNavigation()
       this.rememberSuccess(message.id)
       this.sendACK(message.id)
       return
@@ -640,6 +658,13 @@ export default {
       this.rememberSuccess(message.id)
       this.sendACK(message.id)
       return
+    }
+    result.prepared.previousNavigation = {
+      arrowPath: this.navArrowPath,
+      distance: this.navDistance,
+      street: this.navStreet,
+      status: this.navStatus,
+      statusVisible: this.navStatusVisible
     }
     this.preparedRender = result.prepared
     this.preparedRender.preparedAt = Date.now()
@@ -980,7 +1005,7 @@ export default {
     var owned = this.releaseMapOperation(message.id)
     if (!owned && code !== "ASSET_BUSY") return
     this.removeInFlight(message.id)
-    if (owned && this.isRouteCardBeginBody(body)) this.preparedRender = null
+    if (owned && this.isRouteCardBeginBody(body)) this.restorePreparedNavigation()
     if (code === "ASSET_BUSY") {
       var rejectedAsset = this.safeAsset(message.body.asset)
       this.sendAssetResult(rejectedAsset, this.safeRun(message.body.run), "error", 0, "", code)
@@ -1004,7 +1029,7 @@ export default {
     var run = transfer.run
     var bytes = transfer.receivedBytes
     var prefix = transfer.sha256.slice(0, 8)
-    if (transfer.routeCard) this.preparedRender = null
+    if (transfer.routeCard) this.restorePreparedNavigation()
     this.activeTransfer = null
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
@@ -1297,7 +1322,7 @@ export default {
       page.unconfirmedTouched = false
       if (!page.releaseMapOperation(publication.operationID)) return
       page.sendRenderResult(publication, false, Date.now() - publication.renderStartedAt, "ASSET_RENDER")
-      page.preparedRender = null
+      page.restorePreparedNavigation()
     }
     this.scheduleDelete(publication.uri, publish, publish)
   }

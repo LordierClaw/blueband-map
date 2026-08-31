@@ -189,8 +189,8 @@ function rotated(points, bucket) {
 
 for (let bucket = 0; bucket < 8; bucket += 1) {
   const marker = new Uint8Array(26 * 32)
-  fillPolygon(marker, 26, 32, rotated([[13, 1], [24, 28], [13, 22], [2, 28]], bucket), 1)
-  fillPolygon(marker, 26, 32, rotated([[13, 6], [19, 23], [13, 19], [7, 23]], bucket), 2)
+  fillPolygon(marker, 26, 32, rotated([[13, 6], [20, 24], [13, 20], [6, 24]], bucket), 1)
+  fillPolygon(marker, 26, 32, rotated([[13, 9], [17, 20], [13, 17], [9, 20]], bucket), 2)
   await writeIndexed(`marker-${bucket}.png`, 26, 32,
     [[0, 0, 0], [255, 255, 255], [0, 174, 239]], [0, 255, 255], marker)
 }

@@ -52,6 +52,8 @@ public actor BandTransport: BandTransportProtocol {
     private var nextSequence: UInt8 = 0
     private var isConfigured = false
     private var isClosed = false
+    private var writeLocked = false
+    private var writeWaiters: [CheckedContinuation<Void, Never>] = []
 
     public init(link: any BandLink) {
         self.link = link
@@ -151,6 +153,19 @@ public actor BandTransport: BandTransportProtocol {
     }
 
     private func write(_ frame: SPPFrame) async throws {
+        await acquireWrite()
+        do {
+            try Task.checkCancellation()
+            guard !isClosed else { throw Error.closed }
+            try await writeUnlocked(frame)
+            releaseWrite()
+        } catch {
+            releaseWrite()
+            throw error
+        }
+    }
+
+    private func writeUnlocked(_ frame: SPPFrame) async throws {
         let bytes = try frame.encode()
         let chunkSize = max(1, link.maximumWriteLength)
         var offset = 0
@@ -159,6 +174,19 @@ public actor BandTransport: BandTransportProtocol {
             try await link.write(Data(bytes[offset..<end]))
             offset = end
         }
+    }
+
+    private func acquireWrite() async {
+        guard writeLocked else {
+            writeLocked = true
+            return
+        }
+        await withCheckedContinuation { writeWaiters.append($0) }
+    }
+
+    private func releaseWrite() {
+        if writeWaiters.isEmpty { writeLocked = false }
+        else { writeWaiters.removeFirst().resume() }
     }
 
     private func failConfiguration(_ error: Swift.Error) {

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
+import { inflateSync } from "node:zlib"
 
 const root = new URL("../", import.meta.url)
 
@@ -70,6 +71,23 @@ test("generated HUD resources are indexed PNGs at their display size", async () 
     assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], dimensions)
     assert.equal(png[24], 8)
     assert.equal(png[25], 3)
+  }
+})
+
+test("direction markers keep a transparent margin in every heading", async () => {
+  for (let heading = 0; heading < 8; heading += 1) {
+    const png = await readFile(new URL(`src/common/marker-${heading}.png`, root))
+    const width = png.readUInt32BE(16), height = png.readUInt32BE(20)
+    const compressed = []
+    for (let offset = 8; offset < png.length;) {
+      const length = png.readUInt32BE(offset)
+      if (png.toString("ascii", offset + 4, offset + 8) === "IDAT") compressed.push(png.subarray(offset + 8, offset + 8 + length))
+      offset += length + 12
+    }
+    const rows = inflateSync(Buffer.concat(compressed))
+    const pixel = (x, y) => rows[y * (width + 1) + x + 1]
+    assert.ok(Array.from({ length: width }, (_, x) => pixel(x, 0) + pixel(x, height - 1)).every(value => value === 0))
+    assert.ok(Array.from({ length: height }, (_, y) => pixel(0, y) + pixel(width - 1, y)).every(value => value === 0))
   }
 })
 

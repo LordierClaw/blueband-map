@@ -75,6 +75,18 @@ final class BandTransportTests: XCTestCase {
         XCTAssertNoThrow(try SPPFrame.decode(chunks.reduce(Data(), +)))
     }
 
+    func testConcurrentMessagesNeverOverlapLinkWrites() async throws {
+        let (transport, link) = try await configuredTransport(writeDelay: .milliseconds(5))
+        await link.resetMaximumConcurrentWrites()
+
+        async let first: Void = transport.send(channel: 1, opcode: 1, body: Data(repeating: 0xAA, count: 32))
+        async let second: Void = transport.send(channel: 1, opcode: 1, body: Data(repeating: 0xBB, count: 32))
+        _ = try await (first, second)
+
+        let maximumConcurrentWrites = await link.maximumConcurrentWrites
+        XCTAssertEqual(maximumConcurrentWrites, 1)
+    }
+
     func testCloseFinishesIncomingAndClosesLink() async throws {
         let (transport, link) = try await configuredTransport()
         var iterator = await transport.incoming().makeAsyncIterator()
@@ -85,8 +97,11 @@ final class BandTransportTests: XCTestCase {
         XCTAssertNil(finalMessage)
     }
 
-    private func configuredTransport(maximumWriteLength: Int = 512) async throws -> (BandTransport, FakeBandLink) {
-        let link = FakeBandLink(maximumWriteLength: maximumWriteLength)
+    private func configuredTransport(
+        maximumWriteLength: Int = 512,
+        writeDelay: Duration? = nil
+    ) async throws -> (BandTransport, FakeBandLink) {
+        let link = FakeBandLink(maximumWriteLength: maximumWriteLength, writeDelay: writeDelay)
         let transport = BandTransport(link: link)
         async let configuring: Void = transport.configure()
         var request = Data()
@@ -105,17 +120,26 @@ private actor FakeBandLink: BandLink {
     private let stream: AsyncThrowingStream<Data, Error>
     private let continuation: AsyncThrowingStream<Data, Error>.Continuation
     private(set) var isClosed = false
+    private(set) var maximumConcurrentWrites = 0
+    private var activeWrites = 0
+    private let writeDelay: Duration?
 
-    init(maximumWriteLength: Int) {
+    init(maximumWriteLength: Int, writeDelay: Duration? = nil) {
         self.maximumWriteLength = maximumWriteLength
+        self.writeDelay = writeDelay
         var continuation: AsyncThrowingStream<Data, Error>.Continuation!
         stream = AsyncThrowingStream { continuation = $0 }
         self.continuation = continuation
     }
 
     func write(_ data: Data) async throws {
+        activeWrites += 1
+        maximumConcurrentWrites = max(maximumConcurrentWrites, activeWrites)
+        if let writeDelay { try await Task.sleep(for: writeDelay) }
         if waiters.isEmpty { pendingWrites.append(data) } else { waiters.removeFirst().resume(returning: data) }
+        activeWrites -= 1
     }
+    func resetMaximumConcurrentWrites() { maximumConcurrentWrites = activeWrites }
     func notifications() async -> AsyncThrowingStream<Data, Error> { stream }
     func close() async { isClosed = true; continuation.finish() }
     func emit(_ data: Data) { continuation.yield(data) }

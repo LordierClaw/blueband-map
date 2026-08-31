@@ -187,6 +187,26 @@ test("render.cancel releases a matching prepared generation", async () => {
   assert.equal(page.preparedRender, null)
 })
 
+test("cancelled refresh restores the confirmed scene guidance", async () => {
+  const { page } = await harness()
+  publish(page)
+  page.receiveMessage({ data: envelope("nav-old", "nav.update", {
+    scene: SCENE, seq: 1, x: 106, y: 320, heading: 2,
+    maneuver: "left", distanceM: 140, street: "Old Road", status: "navigating"
+  }) })
+  page.receiveMessage({ data: envelope("prepare-new", "render.prepare", prepare({
+    sceneId: "scene-refresh-01",
+    preview: { maneuver: "right", distanceM: 88, street: "New Road" }
+  })) })
+  page.receiveMessage({ data: envelope("cancel-new", "render.cancel", {
+    runId: RUN, sceneId: "scene-refresh-01"
+  }) })
+
+  assert.equal(page.navArrowPath, "/common/maneuver-left.png")
+  assert.equal(page.navDistance, "140 m")
+  assert.equal(page.navStreet, "Old Road")
+})
+
 test("disconnect clears transfer ownership and nav sequence without accepting queued messages", async () => {
   const { page, sent, connection } = await harness()
   publish(page)
