@@ -162,7 +162,7 @@ struct H1AssetFactory: Sendable {
             && url.host?.lowercased() == "maps.vietmap.vn"
             && url.user == nil
             && url.password == nil
-            && (url.path.lowercased().hasSuffix(".pbf") || url.path.hasPrefix("/mt/tile/"))
+            && (url.path.lowercased().hasSuffix(".pbf") || isLegacyVietmapTilePath(url.path))
         guard let value else { return isTrustedVectorTile }
         let mediaType = value
             .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
@@ -176,5 +176,17 @@ struct H1AssetFactory: Sendable {
             return true
         }
         return mediaType == "text/plain" && isTrustedVectorTile
+    }
+
+    private static func isLegacyVietmapTilePath(_ path: String) -> Bool {
+        let components = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count == 6,
+              components[0] == "mt",
+              components[1] == "tile",
+              components[2].hasPrefix("data-"),
+              !components[2].dropFirst("data-".count).isEmpty else {
+            return false
+        }
+        return components[3...5].allSatisfy { Int($0) != nil }
     }
 }

@@ -10,7 +10,7 @@ final class H1AssetFactoryTests: XCTestCase {
         let styleTransport = H1HTTPTransport(responses: [styleResponse(maximumZoom: 14)])
         let tileTransport = H1HTTPTransport(responses: [tileResponse(
             contentType: "text/plain; charset=utf-8",
-            body: H1VectorTileFixture.centeredLineTile()
+            body: H1VectorTileFixture.centeredLineTile(y: 1_783)
         )])
         let factory = makeFactory(styleTransport: styleTransport, tileTransport: tileTransport)
 
@@ -167,8 +167,8 @@ private actor H1HTTPTransport: MapHTTPTransport {
 }
 
 private enum H1VectorTileFixture {
-    static func centeredLineTile() -> Data {
-        let points = [(x: 0, y: 3_567), (x: 4_095, y: 3_567)]
+    static func centeredLineTile(y: Int = 3_567) -> Data {
+        let points = [(x: 0, y: y), (x: 4_095, y: y)]
         var value = Writer()
         value.string(field: 1, "primary")
 

@@ -57,7 +57,7 @@ final class ProjectSmokeTests: XCTestCase {
         XCTAssertTrue(modelSource.contains("func startH1(mode: H1TestMode) async"))
         XCTAssertTrue(viewSource.contains("ForEach(H1TestMode.allCases"))
         XCTAssertTrue(factorySource.contains("VietmapStyleClient"))
-        XCTAssertTrue(factorySource.contains("MapboxVectorTile.decode"))
+        XCTAssertTrue(factorySource.contains("VietmapVectorTileDecoder.decode"))
     }
 
     func testH1ExportUsesFileTransferRepresentationForTheExistingSanitizedFile() {
