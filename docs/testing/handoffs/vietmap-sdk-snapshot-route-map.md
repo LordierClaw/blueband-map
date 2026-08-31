@@ -4,25 +4,27 @@
 
 | Item | Value |
 |---|---|
-| Source commit | `4cd23821e97a8a0cc9b0e5502063cc938f20bfca` |
-| iOS | `0.2.0 (11)` |
+| Source commit | `d6cc579e9c940deac52def18141f5d900c7cfda1` |
+| iOS | `0.2.1 (12)` |
 | RPK | `0.3.0 (12)` |
-| iOS CI | [GitHub Actions run 33400159449](https://github.com/LordierClaw/blueband-map/actions/runs/33400159449) |
-| Hardware status | Not run |
+| iOS CI | [GitHub Actions run 33410300825](https://github.com/LordierClaw/blueband-map/actions/runs/33410300825) |
+| Hardware status | `0.2.0 (11)` failed before Band publication; `0.2.1 (12)` awaits retest |
 
 The IPA is unsigned and was produced only by GitHub Actions. The RPK was produced by the canonical Docker/Make path. Both local artifact directories are ignored by Git.
 
 | Artifact | Local path | Bytes | SHA-256 |
 |---|---|---:|---|
-| Unsigned IPA | `artifacts/vietmap-snapshot-route-map/ipa/BlueBandMap-unsigned.ipa` | 3,376,401 | `4ca427f4e5638052657f35b21baf0544840ea350deb04f96f1d863ccff87f6dd` |
+| Unsigned IPA | `artifacts/vietmap-snapshot-route-map/ipa-0.2.1/BlueBandMap-unsigned.ipa` | 3,376,848 | `8e401365444398737480e5a5e46476acb5cf7f670f8445a4b5d25361c413bf7b` |
 | Debug RPK | `artifacts/vietmap-snapshot-route-map/rpk/dev.lordierclaw.bluebandmap.band.debug.0.3.0.rpk` | 23,639 | `6a4c62fddd7f13256138a4fecf4f024e57e3f04fd3f63f73b4393167ad129f90` |
 
-IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.2.0 (11)`, iOS 17 minimum, iPhone-only family, an arm64 Mach-O executable, no `_CodeSignature`, and no embedded provisioning profile. This is build evidence, not device acceptance.
+IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.2.1 (12)`, an arm64 Mach-O executable, no `_CodeSignature`, and no embedded provisioning profile. This is build evidence, not device acceptance.
 
 ## What changed
 
 ### IPA-affecting
 
+- Fixed an early buffered `render.ready` leaving its prepare timeout active during a slow transfer. The stale timeout could abort a valid upload before publication.
+- Added the exact Band render terminal code to redacted diagnostics and moved events before route instructions so a bounded export retains the failure evidence.
 - Replaced the historical four-color route-card runtime with a 212×520, scale-1 Vietmap SDK snapshot.
 - Pinned the Vietmap iOS SDK revision and simplified the loaded style to navigation-relevant background, land/water, roads, selected buildings, and road labels.
 - Drew the real Route v4 polyline, traveled/upcoming segments, maneuver marker, and heading-up camera natively before palette reduction.
@@ -31,6 +33,8 @@ IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.2.0 (1
 - Added transfer windows 1/2/4 with default 1. Xiaomi BLE/auth/encryption/transport ACK bytes are unchanged.
 
 ### RPK-affecting
+
+No Band source or RPK metadata changed in `0.2.1`; reuse the exact `0.3.0 (12)` artifact above.
 
 - Expanded the raster surface to the full 212×520 display.
 - Added a translucent native maneuver header, phone-position marker, exceptional statuses, and pre-map startup status.
@@ -41,10 +45,19 @@ IPA inspection confirmed bundle `dev.lordierclaw.bluebandmap`, version `0.2.0 (1
 
 - Local canonical suites: 141 portable Swift tests, 14 RPK tests, and 19 protocol-lab tests passed.
 - Local metadata, Vietmap smoke-script, handoff-script, shell syntax, secret scan, lint, and `git diff --check` passed.
-- GitHub Actions run 33400159449 passed simulator tests, an unsigned arm64 device build, artifact inspection, and IPA upload.
-- No real iPhone/Smart Band navigation test has been run; hardware behavior and latency remain unverified.
+- GitHub Actions run 33410300825 passed simulator tests, an unsigned arm64 device build, artifact inspection, and IPA upload.
+- The first real-device run on `0.2.0 (11)` reached routing and snapshot rendering but failed before Band image publication. The Band showed the RPK startup surface and echo remained functional. `0.2.1 (12)` fixes the identified stale-timeout path, but hardware acceptance remains unverified until retest.
 
 ## Manual test plan
+
+### Focused regression retest for 0.2.1
+
+1. Keep the same iPhone, Band, route, and RPK `0.3.0 (12)` used for the failed run; install only IPA `0.2.1 (12)`.
+2. Start navigation and allow the image transfer to exceed 15 seconds if necessary. Confirm it is not aborted by `ASSET_READY_TIMEOUT` and the map replaces `LOCATING` on the Band.
+3. After map publication, confirm the native maneuver arrow/header, distance, and street name appear. The arrow is a Band overlay sent after confirmed map publication, not part of the PNG.
+4. Repeat five starts, recording total time, payload bytes, chunks, application ACK latency, and the first stable terminal code for any failure.
+5. Stop once during transfer, reconnect, and start again. Confirm no stale scene publishes and the next transfer succeeds.
+6. Export diagnostics after both success and failure. Events must appear before route steps. If a failure reports `terminal=ASSET_RENDER`, retain the safe export and Band photo for a separate PNG-decoder compatibility investigation; do not infer that failure from the earlier generic code.
 
 ### Preconditions and safety
 
