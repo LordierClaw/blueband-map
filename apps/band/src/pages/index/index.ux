@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.4.0</text>
+      <text class="version">RPK 0.5.0</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -27,7 +27,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.4.0 • ENV V1</text>
+        <text class="version">RPK 0.5.0 • ENV V1</text>
       </div>
     </div>
   </div>
