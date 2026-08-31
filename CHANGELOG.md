@@ -1,5 +1,13 @@
 # Changelog
 
+## iOS 0.4.0 / RPK 0.5.0 - 2026-09-01
+
+- Preserve familiar urban context with dark road hierarchy, buildings, land use, major/secondary labels, and a bounded POI allowlist.
+- Prefer PNG8 snapshots up to 5 KiB, use 1 KiB application envelopes and a four-message ACK window to reduce Band transfer round trips.
+- Refresh the full map no more often than every 12 seconds unless rerouting, while keeping the latest pending location and updating guidance independently.
+- Keep the compact HUD and the larger green directional marker inside Band-safe bounds; render the upcoming route as a flat dark-blue line.
+- Bump iOS to `0.4.0 (14)` and RPK to `0.5.0 (14)` because both packaged artifacts changed. Xiaomi BLE/SPP/authentication bytes remain unchanged.
+
 ## iOS 0.3.0 / RPK 0.4.0 - 2026-09-01
 
 - Request Vietmap's dark style, normalize retained map layers to a low-entropy dark palette, and draw the route as a flat cyan line without a halo.

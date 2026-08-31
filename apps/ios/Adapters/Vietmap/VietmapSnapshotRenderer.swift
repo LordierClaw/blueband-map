@@ -133,7 +133,7 @@ enum VietmapStyleLayerPolicy {
         case "fill":
             if id.contains("building") { return zoom >= 16 }
             if !profile.keepsLowPriorityLandUse,
-               ["residential", "cemetery", "theme_park", "grass", "wood"].contains(where: id.contains) {
+               ["residential", "cemetery", "theme_park"].contains(where: id.contains) {
                 return false
             }
             return ["ocean", "island", "water", "landcover_park", "landcover_grass", "landcover_wood",
@@ -142,7 +142,10 @@ enum VietmapStyleLayerPolicy {
         case "line": return ["road", "tunnel", "bridge"].contains { id.contains($0) }
         case "symbol":
             if id.hasPrefix("road_"), id.contains("label") {
-                return profile.keepsLowPriorityLabels || ["motorway", "trunk", "primary"].contains(where: id.contains)
+                if ["minor", "service", "street", "residential"].contains(where: id.contains) {
+                    return profile.keepsLowPriorityLabels && zoom >= 16
+                }
+                return ["motorway", "trunk", "primary", "secondary", "tertiary"].contains(where: id.contains)
             }
             return profile.keepsLowPriorityLabels && zoom >= 16 &&
                 ["poi_hospital", "poi_school", "transit_station", "parking"].contains(where: id.contains)

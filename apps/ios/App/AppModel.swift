@@ -23,7 +23,6 @@ struct EchoEntry: Identifiable, Equatable, Sendable {
 @MainActor
 final class AppModel: ObservableObject {
     private struct SnapshotRefreshRequest {
-        let generation: Int
         let route: RoutePlan
         let progress: RouteProgress
         let location: CLLocation
@@ -85,7 +84,6 @@ final class AppModel: ObservableObject {
     private var navigationScreenIsActive = false
     private var gpsWaitMilliseconds = 0
     private var routeRequestMilliseconds = 0
-    private var snapshotRefreshGeneration = 0
     private var pendingSnapshotRefresh: SnapshotRefreshRequest?
     private var snapshotRefreshTask: Task<Void, Never>?
 
@@ -393,7 +391,7 @@ final class AppModel: ObservableObject {
                     route.points.indices.contains($0.interval.upperBound)
                         ? activeSnapshotConfiguration?.point(for: route.points[$0.interval.upperBound]) : nil
                 }.map { (0..<212).contains(Int($0.x)) && (0..<520).contains(Int($0.y)) } ?? false
-                if !contextRefreshed && snapshotRefreshTask == nil && status != .gpsLow && SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
+                if !contextRefreshed && status != .gpsLow && SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
                     marker: markerPoint.map { ScreenPoint(x: Int($0.x.rounded()), y: Int($0.y.rounded())) },
                     safeViewport: SnapshotRefreshPolicy.defaultSafeViewport,
                     distanceFromAnchorMeters: activeSnapshotAnchor.map { Self.meters($0, displayedLocation) } ?? .infinity,
@@ -457,11 +455,11 @@ final class AppModel: ObservableObject {
         route: RoutePlan,
         progress: RouteProgress,
         location: CLLocation,
-        tileMapKey: String,
-        refreshGeneration: Int? = nil
+        tileMapKey: String
     ) async throws -> Bool {
         navigationState = .transferring
         let snapshotStartedAt = Date()
+        lastSnapshotRefreshStartedAt = snapshotStartedAt
         let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
         let maneuverIndex = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
         var prepared: (snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)?
@@ -508,9 +506,6 @@ final class AppModel: ObservableObject {
             "layers=\(snapshot.retainedFillLayers)/\(snapshot.retainedLineLayers)/\(snapshot.retainedSymbolLayers) " +
             "styleMs=\(snapshot.styleLoadMilliseconds) snapshotMs=\(snapshot.snapshotMilliseconds) encodeMs=\(encoded.durationMilliseconds)"
         )
-        if let refreshGeneration, refreshGeneration != snapshotRefreshGeneration {
-            throw CancellationError()
-        }
         routePreviewPNG = asset.data
         let preview = try RenderNavigationPreview(
             maneuver: instruction?.maneuver ?? .straight,
@@ -541,7 +536,6 @@ final class AppModel: ObservableObject {
         activeSceneID = sceneID
         activeSnapshotConfiguration = snapshot.configuration
         activeSnapshotAnchor = progress.matchedLocation ?? location.geoPoint
-        lastSnapshotRefreshStartedAt = snapshotStartedAt
         navigationManeuver = instruction?.maneuver ?? .straight
         navigationDistanceMeters = Self.remainingDistance(route: route, location: location.geoPoint, progressIndex: progress.pointIndex, instruction: instruction)
         navigationStreet = instruction?.streetName ?? ""
@@ -551,9 +545,7 @@ final class AppModel: ObservableObject {
     }
 
     private func scheduleRefresh(route: RoutePlan, progress: RouteProgress, location: CLLocation, tileMapKey: String) {
-        snapshotRefreshGeneration += 1
         pendingSnapshotRefresh = SnapshotRefreshRequest(
-            generation: snapshotRefreshGeneration,
             route: route,
             progress: progress,
             location: location,
@@ -573,8 +565,7 @@ final class AppModel: ObservableObject {
                     route: request.route,
                     progress: request.progress,
                     location: request.location,
-                    tileMapKey: request.tileMapKey,
-                    refreshGeneration: request.generation
+                    tileMapKey: request.tileMapKey
                 )
                 sendNavigationUpdate(
                     route: request.route,
@@ -679,7 +670,6 @@ final class AppModel: ObservableObject {
         navigationStartedMilliseconds = Self.nowMilliseconds()
         gpsWaitMilliseconds = 0
         routeRequestMilliseconds = 0
-        snapshotRefreshGeneration = 0
         navigationDebugSequence = 0
         navigationDebugEntries = []
         navigationStart = nil

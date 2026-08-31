@@ -52,7 +52,7 @@ func testRejectsEncodedEnvelopeLargerThan1024Bytes() {
 
 - [ ] **Step 2: Verify RED**
 
-Run: `make test-swift && make test-rpk`  
+Run: `make test-swift && make test-rpk`
 Expected: failures still report 512-byte constants and default window two.
 
 - [ ] **Step 3: Implement the bounded change**
@@ -61,7 +61,7 @@ Set the Swift, Band helper, and in-page envelope ceilings to 1,024. Set the coor
 
 - [ ] **Step 4: Verify GREEN and commit**
 
-Run: `make test-swift && make test-rpk && git diff --check`  
+Run: `make test-swift && make test-rpk && git diff --check`
 Expected: all suites pass.
 
 ```bash
@@ -95,7 +95,7 @@ XCTAssertEqual(SnapshotPayloadAdmission.preferredMaximumBytes, 5_120)
 
 - [ ] **Step 2: Verify RED**
 
-Run: `make test-swift`  
+Run: `make test-swift`
 Expected: POIs are rejected, several fills share a color, and preferred admission is 4,096.
 
 - [ ] **Step 3: Implement minimal style policy**
@@ -130,7 +130,7 @@ Cover movement below/at 175 m, elapsed time below/at 12 seconds, marker outside 
 
 - [ ] **Step 2: Verify RED**
 
-Run: `make test-swift`  
+Run: `make test-swift`
 Expected: old maneuver-change policy and cyan route fail the new assertions.
 
 - [ ] **Step 3: Implement policy and AppModel state**
@@ -166,7 +166,7 @@ Assert marker dimensions 38×44, indexed PNG type, transparent borders, presence
 
 - [ ] **Step 2: Verify RED**
 
-Run: `make test-rpk`  
+Run: `make test-rpk`
 Expected: current 26×32 marker, cyan palette, edge clamp, and HUD positions fail.
 
 - [ ] **Step 3: Generate and place minimal assets**
@@ -226,7 +226,7 @@ git commit -m "chore: version familiar Band map release"
 
 - [ ] **Step 1: Run canonical local verification**
 
-Run: `make test && make lint && git diff --check && git status --short`  
+Run: `make test && make lint && git diff --check && git status --short`
 Expected: all tests pass and only intentional handoff edits remain.
 
 - [ ] **Step 2: Request one final correctness review**
@@ -249,5 +249,5 @@ git commit -m "docs: hand off familiar Band map artifacts"
 git push origin main
 ```
 
-Run: `make lint && git diff --check && git status --short --branch`  
+Run: `make lint && git diff --check && git status --short --branch`
 Expected: `main` matches `origin/main` with a clean tracked worktree.

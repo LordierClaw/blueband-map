@@ -1,7 +1,7 @@
 # Familiar dark Band map, safe-area, and urban refresh design
 
-**Date:** 2026-09-01  
-**Status:** Approved design; implementation plan pending review  
+**Date:** 2026-09-01
+**Status:** Approved design; implementation plan pending review
 **Target:** iPhone + Xiaomi Smart Band 10, city riding at 0–50 km/h
 
 ## Context
