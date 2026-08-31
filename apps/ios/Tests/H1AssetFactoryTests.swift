@@ -57,6 +57,7 @@ final class H1AssetFactoryTests: XCTestCase {
 
         let requests = await tileTransport.recordedRequests
         let paths = Set(requests.map(\.url.path))
+        XCTAssertEqual(requests.count, 4)
         XCTAssertEqual(paths, [
             "/mt/tile/data-20250529/15/26093/15398",
             "/mt/tile/data-20250529/15/26094/15398",
@@ -211,6 +212,7 @@ private actor H1HTTPTransport: MapHTTPTransport {
 
     func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
         recordedRequests.append(request)
+        if responses.count == 1 { return responses[0] }
         return responses.removeFirst()
     }
 }
