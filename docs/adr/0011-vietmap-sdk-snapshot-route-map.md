@@ -1,7 +1,7 @@
 # ADR 0011: Vietmap SDK snapshot route map
 
-**Status:** Accepted  
-**Date:** 2026-08-31  
+**Status:** Accepted
+**Date:** 2026-08-31
 **Scope:** Foreground motorcycle navigation on iPhone and Xiaomi Smart Band 10
 
 ## Decision

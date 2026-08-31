@@ -20,6 +20,14 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         ])
     }
 
+    func testDegradedProfilesRemoveLowPriorityStyleLayers() {
+        XCTAssertTrue(VietmapStyleLayerPolicy.keeps(id: "road_minor_label", type: "symbol", zoom: 16, profile: .colors16Labels))
+        XCTAssertFalse(VietmapStyleLayerPolicy.keeps(id: "road_minor_label", type: "symbol", zoom: 16, profile: .colors16NoLowPriorityLabels))
+        XCTAssertTrue(VietmapStyleLayerPolicy.keeps(id: "road_primary_label", type: "symbol", zoom: 16, profile: .colors16NoLowPriorityLabels))
+        XCTAssertFalse(VietmapStyleLayerPolicy.keeps(id: "landuse_residential", type: "fill", zoom: 16, profile: .colors16NoLowPriorityLandUse))
+        XCTAssertTrue(VietmapStyleLayerPolicy.keeps(id: "water", type: "fill", zoom: 16, profile: .colors16NoLowPriorityLandUse))
+    }
+
     func testSnapshotConfigurationIsFullScreenHeadingUpAndRouteBiased() throws {
         let route = RoutePlan(
             points: [GeoPoint(latitude: 10.0, longitude: 106.0), GeoPoint(latitude: 10.01, longitude: 106.01)],

@@ -7,6 +7,19 @@ protocol RouteCardSessionSending: Sendable {
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String
 }
 
+struct RouteCardRenderDiagnostics: Sendable {
+    var gpsWaitMilliseconds = 0
+    var routeRequestMilliseconds = 0
+    var styleLoadMilliseconds = 0
+    var snapshotMilliseconds = 0
+    var paletteReductionMilliseconds = 0
+    var paletteSize = 0
+    var retainedFillLayers = 0
+    var retainedLineLayers = 0
+    var retainedSymbolLayers = 0
+    var cacheState = "unknown"
+}
+
 struct BandSessionRouteCardSender: RouteCardSessionSending, Sendable {
     let session: BandSession
 
@@ -50,6 +63,8 @@ final class RouteCardRenderCoordinator {
         let bytes: Int
         let primitives: Int
         let renderMilliseconds: Int
+        let prepareMilliseconds: Int
+        let validateMilliseconds: Int
         let hashPrefix: String?
         let errorCode: String?
     }
@@ -84,6 +99,10 @@ final class RouteCardRenderCoordinator {
         var ackDurations: [Int] = []
         var events: [RenderRunEvent] = []
         var nextEventSequence = 0
+        let diagnostics: RouteCardRenderDiagnostics
+        var bandWriteMilliseconds = 0
+        var bandDecodeMilliseconds = 0
+        var bandPublicationMilliseconds = 0
     }
 
     let session: any RouteCardSessionSending
@@ -105,6 +124,7 @@ final class RouteCardRenderCoordinator {
     private var prepareContinuation: CheckedContinuation<PrepareResponse?, Never>?
     private var resultContinuation: CheckedContinuation<RouteCardBandResult?, Never>?
     private var resultTimeoutTask: Task<Void, Never>?
+    private var prepareTimeoutTask: Task<Void, Never>?
     private var disconnectObserved = false
 
     init(
@@ -124,7 +144,7 @@ final class RouteCardRenderCoordinator {
         self.sceneIDGenerator = sceneIDGenerator
     }
 
-    func start(asset: RenderAsset) async {
+    func start(asset: RenderAsset, diagnostics: RouteCardRenderDiagnostics = .init()) async {
         let mode = RouteCardMode.routeCard
         guard operationToken == nil else { return }
         guard !requiresReconnect else {
@@ -152,7 +172,8 @@ final class RouteCardRenderCoordinator {
         runContext = RunContext(
             identity: identity,
             token: token,
-            startedMilliseconds: Self.nowMilliseconds()
+            startedMilliseconds: Self.nowMilliseconds(),
+            diagnostics: diagnostics
         )
         state = .fetching(mode: mode)
         let task = Task { @MainActor [weak self] in
@@ -224,6 +245,15 @@ final class RouteCardRenderCoordinator {
             reconnect = phase != .preparing
         } else {
             reconnect = false
+        }
+        if !reconnect, let pending {
+            let session = session
+            Task {
+                _ = try? await session.sendAwaitingAcknowledgement(
+                    topic: "render.cancel",
+                    body: ["runId": .string(pending.runID), "sceneId": .string(pending.sceneID)]
+                )
+            }
         }
         finish(code: "TRANSFER_CANCELLED", requiresReconnect: reconnect)
     }
@@ -386,8 +416,7 @@ final class RouteCardRenderCoordinator {
             primitives: primitives
         )
         if prepareContinuation != nil {
-            prepareContinuation?.resume(returning: .ready(ready))
-            prepareContinuation = nil
+            resumePrepare(with: .ready(ready))
         } else {
             self.pending?.bufferedPrepareResponse = .ready(ready)
         }
@@ -402,8 +431,7 @@ final class RouteCardRenderCoordinator {
               let code = string(body, key: "code"),
               RenderRejectCode(rawValue: code) != nil else { return }
         if prepareContinuation != nil {
-            prepareContinuation?.resume(returning: .reject(code))
-            prepareContinuation = nil
+            resumePrepare(with: .reject(code))
         } else {
             self.pending?.bufferedPrepareResponse = .reject(code)
         }
@@ -436,6 +464,9 @@ final class RouteCardRenderCoordinator {
         if result.success {
             lastDisplayedSceneID = pending.sceneID
             runContext?.renderMilliseconds = result.renderMilliseconds
+            runContext?.bandWriteMilliseconds = result.prepareMilliseconds
+            runContext?.bandDecodeMilliseconds = result.validateMilliseconds
+            runContext?.bandPublicationMilliseconds = result.renderMilliseconds
             state = .displayed(
                 mode: pending.mode,
                 runID: pending.runID,
@@ -468,6 +499,7 @@ final class RouteCardRenderCoordinator {
     }
 
     private func waitForPrepareResponse(token: UUID) async -> PrepareResponse? {
+        schedulePrepareTimeout(token: token)
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<PrepareResponse?, Never>) in
                 guard ownsLive(token), let pending, pending.token == token else {
@@ -483,7 +515,7 @@ final class RouteCardRenderCoordinator {
             }
         } onCancel: {
             Task { @MainActor [weak self] in
-                self?.resumePrepare(with: nil)
+                self?.finishOwned(code: "TRANSFER_CANCELLED", token: token, requiresReconnect: false)
             }
         }
     }
@@ -522,6 +554,18 @@ final class RouteCardRenderCoordinator {
         }
     }
 
+    private func schedulePrepareTimeout(token: UUID) {
+        prepareTimeoutTask?.cancel()
+        let clock = clock
+        let timeout = resultTimeout
+        prepareTimeoutTask = Task { @MainActor [weak self] in
+            do { try await clock.sleep(for: timeout) }
+            catch { return }
+            guard !Task.isCancelled, let self, self.ownsLive(token) else { return }
+            self.finishOwned(code: "ASSET_READY_TIMEOUT", token: token, requiresReconnect: true)
+        }
+    }
+
     private func finishOwned(code: String, token: UUID, requiresReconnect: Bool) {
         guard operationToken == token else { return }
         finish(code: code, requiresReconnect: requiresReconnect)
@@ -532,6 +576,8 @@ final class RouteCardRenderCoordinator {
         if requiresReconnect { self.requiresReconnect = true }
         let failedMode = pending?.mode ?? .routeCard
         state = .failed(mode: failedMode, code: code)
+        prepareTimeoutTask?.cancel()
+        prepareTimeoutTask = nil
         resultTimeoutTask?.cancel()
         resultTimeoutTask = nil
         resumePrepare(with: nil)
@@ -552,7 +598,7 @@ final class RouteCardRenderCoordinator {
         }
         guard let metrics = try? RenderRunMetrics(
             totalMilliseconds: total,
-            providerMilliseconds: context.providerMilliseconds,
+            providerMilliseconds: max(context.providerMilliseconds, context.diagnostics.routeRequestMilliseconds),
             prepareMilliseconds: context.prepareMilliseconds,
             transferMilliseconds: context.transferMilliseconds,
             validateMilliseconds: context.validateMilliseconds,
@@ -561,8 +607,22 @@ final class RouteCardRenderCoordinator {
             chunks: context.chunks,
             retries: 0,
             primitives: context.asset?.primitives ?? 0,
-            providerCalls: context.providerCalls,
+            providerCalls: context.diagnostics.routeRequestMilliseconds > 0 ? 1 : context.providerCalls,
+            gpsWaitMilliseconds: context.diagnostics.gpsWaitMilliseconds,
+            routeRequestMilliseconds: context.diagnostics.routeRequestMilliseconds,
+            styleLoadMilliseconds: context.diagnostics.styleLoadMilliseconds,
+            snapshotMilliseconds: context.diagnostics.snapshotMilliseconds,
+            paletteReductionMilliseconds: context.diagnostics.paletteReductionMilliseconds,
+            transferPrepareMilliseconds: context.validateMilliseconds,
+            bandWriteMilliseconds: context.bandWriteMilliseconds,
+            bandDecodeMilliseconds: context.bandDecodeMilliseconds,
+            bandPublicationMilliseconds: context.bandPublicationMilliseconds,
+            paletteSize: context.diagnostics.paletteSize,
+            retainedFillLayers: context.diagnostics.retainedFillLayers,
+            retainedLineLayers: context.diagnostics.retainedLineLayers,
+            retainedSymbolLayers: context.diagnostics.retainedSymbolLayers,
             transferWindow: transferWindow,
+            cacheState: context.diagnostics.cacheState,
             ackDurationsMilliseconds: context.ackDurations,
             terminalCode: terminalCode
         ) else {
@@ -607,6 +667,8 @@ final class RouteCardRenderCoordinator {
     }
 
     private func resumePrepare(with response: PrepareResponse?) {
+        prepareTimeoutTask?.cancel()
+        prepareTimeoutTask = nil
         guard let continuation = prepareContinuation else { return }
         prepareContinuation = nil
         continuation.resume(returning: response)
@@ -639,7 +701,9 @@ final class RouteCardRenderCoordinator {
               let bytes = integer(body, key: "bytes"),
               let primitives = integer(body, key: "primitives"),
               let renderMilliseconds = integer(body, key: "renderMs"),
-              renderMilliseconds >= 0 else { return nil }
+              let prepareMilliseconds = integer(body, key: "prepareMs"),
+              let validateMilliseconds = integer(body, key: "validateMs"),
+              renderMilliseconds >= 0, prepareMilliseconds >= 0, validateMilliseconds >= 0 else { return nil }
         let hashPrefix: String?
         switch body["sha256Prefix"] {
         case nil:
@@ -667,6 +731,8 @@ final class RouteCardRenderCoordinator {
             bytes: bytes,
             primitives: primitives,
             renderMilliseconds: renderMilliseconds,
+            prepareMilliseconds: prepareMilliseconds,
+            validateMilliseconds: validateMilliseconds,
             hashPrefix: hashPrefix,
             errorCode: errorCode
         )

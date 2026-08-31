@@ -6,6 +6,29 @@ import BlueBandMapCore
 
 @MainActor
 final class RouteCardRenderCoordinatorTests: XCTestCase {
+    func testPrepareResponseTimeoutTerminatesTheRun() async throws {
+        let coordinator = RouteCardRenderCoordinator(
+            session: NeverReadyRouteCardSession(),
+            clock: ImmediateRouteCardClock(),
+            resultTimeout: .seconds(15),
+            runIDGenerator: { "nav-run-timeout" },
+            sceneIDGenerator: { "scene-timeout" }
+        )
+        let asset = try RenderAsset(
+            kind: .raster,
+            formatVersion: RenderProtocol.formatVersion,
+            width: RenderProtocol.viewportWidth,
+            height: RenderProtocol.viewportHeight,
+            data: Data(repeating: 0x5A, count: 64),
+            primitives: 0
+        )
+
+        await coordinator.start(asset: asset)
+
+        XCTAssertEqual(coordinator.state, .failed(mode: .routeCard, code: "ASSET_READY_TIMEOUT"))
+        XCTAssertTrue(coordinator.requiresReconnect)
+    }
+
     func testChunkAcknowledgementWindowsStayBounded() async throws {
         for window in [1, 2, 4] {
             let session = WindowedRouteCardSession()
@@ -25,15 +48,37 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
                 primitives: 0
             )
 
-            await coordinator.start(asset: asset)
+            await coordinator.start(asset: asset, diagnostics: RouteCardRenderDiagnostics(
+                gpsWaitMilliseconds: 12,
+                routeRequestMilliseconds: 34,
+                styleLoadMilliseconds: 56,
+                snapshotMilliseconds: 78,
+                paletteReductionMilliseconds: 9,
+                paletteSize: 16,
+                retainedFillLayers: 3,
+                retainedLineLayers: 4,
+                retainedSymbolLayers: 5,
+                cacheState: "warm"
+            ))
 
             let maximumConcurrentChunks = await session.maximumConcurrentChunks
             XCTAssertEqual(maximumConcurrentChunks, window)
             guard case .displayed = coordinator.state else {
                 return XCTFail("window \(window) did not reach displayed")
             }
+            XCTAssertEqual(coordinator.lastRunRecord?.metrics.gpsWaitMilliseconds, 12)
+            XCTAssertEqual(coordinator.lastRunRecord?.metrics.paletteSize, 16)
+            XCTAssertEqual(coordinator.lastRunRecord?.metrics.bandPublicationMilliseconds, 1)
         }
     }
+}
+
+private struct NeverReadyRouteCardSession: RouteCardSessionSending {
+    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String { "ack" }
+}
+
+private struct ImmediateRouteCardClock: BlueBandClock {
+    func sleep(for duration: Duration) async throws {}
 }
 
 private actor WindowedRouteCardSession: RouteCardSessionSending {
@@ -66,6 +111,7 @@ private actor WindowedRouteCardSession: RouteCardSessionSending {
                 "renderer": prepareBody["renderer"]!, "formatVersion": prepareBody["formatVersion"]!,
                 "status": .string("ok"), "bytes": prepareBody["bytes"]!,
                 "primitives": prepareBody["primitives"]!, "renderMs": .number(1),
+                "prepareMs": .number(1), "validateMs": .number(1),
             ])
         }
         return "ack"

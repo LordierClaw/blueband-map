@@ -19,6 +19,7 @@ struct VietmapSnapshotRequest: Sendable {
     let headingDegrees: Double
     let nextManeuver: GeoPoint
     let tileMapKey: String
+    var profile: SnapshotPaletteProfile = .colors32Labels
 }
 
 struct VietmapSnapshotConfiguration: Equatable, Sendable {
@@ -52,11 +53,15 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
         let distance = meters(request.matchedPosition, request.nextManeuver)
         let zoom: Double = distance <= 150 ? 17 : distance <= 500 ? 16 : distance <= 1_500 ? 15 : 14
         let size = CGSize(width: RenderProtocol.viewportWidth, height: RenderProtocol.viewportHeight)
+        let overlayInsets = EdgeInsets(top: 144, left: 14, bottom: 12, right: 14)
         let center = cameraCenter(
             matched: request.matchedPosition,
             heading: request.headingDegrees,
             zoom: zoom,
-            desiredPoint: CGPoint(x: size.width / 2, y: size.height * 0.72),
+            desiredPoint: CGPoint(
+                x: min(size.width - overlayInsets.right, max(overlayInsets.left, size.width / 2)),
+                y: min(size.height - overlayInsets.bottom, max(overlayInsets.top, size.height * 0.72))
+            ),
             size: size
         )
         return Self(
@@ -65,7 +70,7 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
             pitch: 0,
             heading: request.headingDegrees,
             userVerticalFraction: 0.72,
-            overlayInsets: EdgeInsets(top: 144, left: 14, bottom: 12, right: 14),
+            overlayInsets: overlayInsets,
             zoom: zoom,
             center: center
         )
@@ -116,17 +121,28 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
 }
 
 enum VietmapStyleLayerPolicy {
-    static func keeps(id: String, type: String, zoom: Double) -> Bool {
+    static func keeps(
+        id: String,
+        type: String,
+        zoom: Double,
+        profile: SnapshotPaletteProfile = .colors32Labels
+    ) -> Bool {
         let id = id.lowercased(), type = type.lowercased()
         switch type {
         case "background": return id == "background"
         case "fill":
             if id == "building" { return zoom >= 16 }
+            if !profile.keepsLowPriorityLandUse,
+               ["residential", "cemetery", "theme_park", "grass", "wood"].contains(where: id.contains) {
+                return false
+            }
             return ["ocean", "island", "water", "landcover_park", "landcover_grass", "landcover_wood",
                     "landuse_residential", "landuse_cemetery", "landuse_hospital", "landuse_school", "landuse_theme_park"]
                 .contains { id.contains($0) }
         case "line": return ["road", "tunnel", "bridge"].contains { id.contains($0) }
-        case "symbol": return id.hasPrefix("road_") && id.contains("label")
+        case "symbol":
+            guard id.hasPrefix("road_"), id.contains("label") else { return false }
+            return profile.keepsLowPriorityLabels || ["motorway", "trunk", "primary"].contains(where: id.contains)
         default: return false
         }
     }
@@ -190,6 +206,7 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     enum Error: Swift.Error { case invalidRequest, busy, styleLoadFailed, snapshotFailed, imageUnavailable }
 
     private var snapshotter: MGLMapSnapshotter?
+    private var prewarmer: MGLMapSnapshotter?
     private var continuation: CheckedContinuation<VietmapSnapshotOutput, Swift.Error>?
     private var configuration: VietmapSnapshotConfiguration?
     private var startedMilliseconds = 0
@@ -197,16 +214,34 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     private var retainedFillLayers = 0
     private var retainedLineLayers = 0
     private var retainedSymbolLayers = 0
+    private var hasWarmStyle = false
+    private var renderCacheState = "cold"
+    private var profile: SnapshotPaletteProfile = .colors32Labels
 
-    func prewarm() {}
+    func prewarm(tileMapKey: String) {
+        guard prewarmer == nil,
+              let styleURL = styleURL(tileMapKey: tileMapKey) else { return }
+        let camera = MGLMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 0, longitude: 0), altitude: 0, pitch: 0, heading: 0)
+        let options = MGLMapSnapshotOptions(styleURL: styleURL, camera: camera, size: CGSize(width: 1, height: 1))
+        options.scale = 1
+        options.zoomLevel = 0
+        let prewarmer = MGLMapSnapshotter(options: options)
+        self.prewarmer = prewarmer
+        prewarmer.start { [weak self, weak prewarmer] snapshot, error in
+            if snapshot != nil, error == nil { self?.hasWarmStyle = true }
+            if self?.prewarmer === prewarmer { self?.prewarmer = nil }
+        }
+    }
+
+    func stopPrewarming() {
+        prewarmer?.cancel()
+        prewarmer = nil
+    }
 
     func render(_ request: VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput {
         guard snapshotter == nil else { throw Error.busy }
         let configuration = try VietmapSnapshotConfiguration.make(request)
-        let key = request.tileMapKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        var components = URLComponents(string: "https://maps.vietmap.vn/maps/styles/tm/style.json")!
-        components.queryItems = [URLQueryItem(name: "apikey", value: key)]
-        guard let styleURL = components.url else { throw Error.invalidRequest }
+        guard let styleURL = styleURL(tileMapKey: request.tileMapKey) else { throw Error.invalidRequest }
         let camera = MGLMapCamera(
             lookingAtCenter: CLLocationCoordinate2D(latitude: configuration.center.latitude, longitude: configuration.center.longitude),
             altitude: 0,
@@ -225,6 +260,8 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
         retainedFillLayers = 0
         retainedLineLayers = 0
         retainedSymbolLayers = 0
+        renderCacheState = hasWarmStyle ? "warm" : "cold"
+        profile = request.profile
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -251,7 +288,12 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
             case is MGLSymbolStyleLayer: type = "symbol"
             default: type = "other"
             }
-            guard VietmapStyleLayerPolicy.keeps(id: layer.identifier, type: type, zoom: configuration.zoom) else {
+            guard VietmapStyleLayerPolicy.keeps(
+                id: layer.identifier,
+                type: type,
+                zoom: configuration.zoom,
+                profile: profile
+            ) else {
                 style.removeLayer(layer)
                 continue
             }
@@ -277,6 +319,7 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
         if error != nil {
             continuation.resume(throwing: styleLoadedMilliseconds == 0 ? Error.styleLoadFailed : Error.snapshotFailed)
         } else if let image = snapshot?.image.cgImage, let finishedConfiguration {
+            hasWarmStyle = true
             continuation.resume(returning: VietmapSnapshotOutput(
                 image: image,
                 retainedFillLayers: retainedFillLayers,
@@ -285,7 +328,7 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
                 zoom: finishedConfiguration.zoom,
                 styleLoadMilliseconds: styleLoadedMilliseconds == 0 ? 0 : max(0, styleLoadedMilliseconds - startedMilliseconds),
                 snapshotMilliseconds: max(0, now - max(styleLoadedMilliseconds, startedMilliseconds)),
-                cacheState: "unknown",
+                cacheState: renderCacheState,
                 configuration: finishedConfiguration
             ))
         } else {
@@ -302,4 +345,12 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     }
 
     private func nowMilliseconds() -> Int { Int(Date().timeIntervalSince1970 * 1_000) }
+
+    private func styleURL(tileMapKey: String) -> URL? {
+        let key = tileMapKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, key.utf8.count <= 512 else { return nil }
+        var components = URLComponents(string: "https://maps.vietmap.vn/maps/styles/tm/style.json")!
+        components.queryItems = [URLQueryItem(name: "apikey", value: key)]
+        return components.url
+    }
 }

@@ -21,7 +21,7 @@
         <text class="nav-street">{{ navStreet }}</text>
         <text class="nav-status" if="{{ navStatusVisible }}">{{ navStatus }}</text>
       </div>
-      <text class="online" if="{{ !mapReady && !pendingPublication }}">IOS CONNECTED • WAITING ROUTE</text>
+      <text class="online" if="{{ !mapReady && !pendingPublication }}">{{ startupStatus }}</text>
       <div class="diagnostics" if="{{ showDiagnostics }}">
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
@@ -315,6 +315,7 @@ export default {
     navStreet: "",
     navStatus: "WAITING",
     navStatusVisible: false,
+    startupStatus: "IOS CONNECTED • WAITING ROUTE",
     navMarkerStyle: "left:102px;top:316px;",
     pendingPublication: null,
     pendingMapPath: "",
@@ -440,6 +441,7 @@ export default {
     this.navSequence = -1
     this.navStatus = "WAITING"
     this.navStatusVisible = false
+    this.startupStatus = "IOS CONNECTED • WAITING ROUTE"
     var cleanupURI = this.pendingPublication ? this.pendingPublication.uri :
       (this.activeTransfer ? this.activeTransfer.uri : this.unconfirmedURI)
     var preserveURI = this.confirmedMap ? this.confirmedMap.uri : ""
@@ -534,8 +536,23 @@ export default {
       this.handleNavigationUpdate(message)
       return
     }
+    if (message.topic === "nav.status") {
+      var startupLabels = { locating: "LOCATING", gpsLow: "GPS LOW" }
+      if (message.body && startupLabels[message.body.status]) this.startupStatus = startupLabels[message.body.status]
+      this.rememberSuccess(message.id)
+      this.sendACK(message.id)
+      return
+    }
     if (message.topic === "render.prepare") {
       this.handleRenderPrepare(message)
+      return
+    }
+    if (message.topic === "render.cancel") {
+      var cancelled = message.body && this.preparedRender &&
+        message.body.runId === this.preparedRender.runId && message.body.sceneId === this.preparedRender.sceneId
+      if (cancelled) this.preparedRender = null
+      this.rememberSuccess(message.id)
+      this.sendACK(message.id)
       return
     }
     if (message.topic.indexOf("map.asset.") === 0) {
@@ -1286,7 +1303,7 @@ export default {
 .nav-arrow { width: 72px; height: 72px; font-size: 62px; font-weight: bold; color: #00e5ff; }
 .nav-distance { position: absolute; left: 82px; top: 12px; width: 120px; font-size: 32px; font-weight: bold; text-align: right; color: #ffffff; }
 .nav-street { position: absolute; left: 12px; top: 78px; width: 160px; height: 42px; font-size: 18px; lines: 2; text-align: center; color: #ffffff; }
-.nav-status { position: absolute; left: 12px; top: 104px; width: 160px; font-size: 14px; font-weight: bold; text-align: center; color: #5dffb0; }
+.nav-status { position: absolute; left: 12px; top: 108px; width: 160px; font-size: 12px; font-weight: bold; text-align: center; color: #5dffb0; }
 .map-frame { width: 212px; height: 520px; position: relative; background-color: #050e16; }
 .map { position: absolute; left: 0; top: 0; width: 212px; height: 520px; object-fit: contain; }
 .nav-marker { position: absolute; width: 10px; height: 10px; border-width: 2px; border-color: #00e5ff; border-radius: 5px; background-color: #ffffff; }

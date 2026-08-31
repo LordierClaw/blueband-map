@@ -157,6 +157,22 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
   assert.equal(sent.filter(message => message.type === "ack" && /^nav-|stale|wrong/.test(message.id)).length, 8)
 })
 
+test("startup navigation status is visible before the first map", async () => {
+  const { page } = await harness()
+  page.receiveMessage({ data: envelope("locating", "nav.status", { status: "locating" }) })
+  assert.equal(page.startupStatus, "LOCATING")
+  page.receiveMessage({ data: envelope("gps-low", "nav.status", { status: "gpsLow" }) })
+  assert.equal(page.startupStatus, "GPS LOW")
+})
+
+test("render.cancel releases a matching prepared generation", async () => {
+  const { page } = await harness()
+  page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
+  assert.ok(page.preparedRender)
+  page.receiveMessage({ data: envelope("cancel", "render.cancel", { runId: RUN, sceneId: SCENE }) })
+  assert.equal(page.preparedRender, null)
+})
+
 test("disconnect clears transfer ownership and nav sequence without accepting queued messages", async () => {
   const { page, sent, connection } = await harness()
   publish(page)

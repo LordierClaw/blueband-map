@@ -24,7 +24,7 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
         AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             self.continuation?.finish()
             self.continuation = continuation
-            if let cachedLocation { continuation.yield(cachedLocation) }
+            if let recentLocation = self.recentLocation() { continuation.yield(recentLocation) }
             continuation.onTermination = { @Sendable [weak self] _ in
                 Task { @MainActor in self?.stop() }
             }

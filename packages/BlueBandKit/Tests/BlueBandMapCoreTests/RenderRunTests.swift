@@ -62,7 +62,10 @@ final class RenderRunTests: XCTestCase {
         ] {
             XCTAssertFalse(text.contains(privateValue), "Export leaked \(privateValue)")
         }
-        XCTAssertTrue(text.contains("nav-run-0123456789"))
+        XCTAssertFalse(text.contains("nav-run-0123456789"))
+        XCTAssertFalse(text.contains("scene-0123456789"))
+        XCTAssertFalse(text.contains(String(repeating: "a", count: 64)))
+        XCTAssertTrue(text.contains("payloadSHA256Prefix"))
         XCTAssertTrue(text.contains("ackP95Ms"))
     }
 

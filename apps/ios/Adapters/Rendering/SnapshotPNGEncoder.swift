@@ -125,7 +125,11 @@ enum SnapshotPNGEncoder {
             (91, 62, 45), (130, 91, 65), (171, 126, 91), (209, 165, 119),
             (118, 41, 54), (166, 57, 72), (211, 91, 99), (244, 139, 132),
         ]
-        return profile.colorCount == 32 ? base : Array(base.prefix(16))
+        let compact = [
+            base[0], base[2], base[4], base[6], base[8], base[10], base[12], base[15],
+            base[16], base[18], base[19], base[20], base[22], base[25], base[28], base[31],
+        ]
+        return profile.colorCount == 32 ? base : compact
     }
 
     private static func nowMilliseconds() -> Int { Int(Date().timeIntervalSince1970 * 1_000) }

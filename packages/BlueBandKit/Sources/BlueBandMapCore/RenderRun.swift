@@ -275,9 +275,18 @@ public struct RenderRunRecord: Codable, Equatable, Sendable {
     }
 
     public func sanitizedExportData() throws -> Data {
+        struct SanitizedRecord: Encodable {
+            let events: [RenderRunEvent]
+            let metrics: RenderRunMetrics
+            let payloadSHA256Prefix: String
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        return try encoder.encode(SanitizedRecord(
+            events: events,
+            metrics: metrics,
+            payloadSHA256Prefix: String(payloadSHA256.prefix(8))
+        ))
     }
 
     public func identityData() throws -> Data {
