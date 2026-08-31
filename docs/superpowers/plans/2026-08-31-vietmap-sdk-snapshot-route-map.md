@@ -42,27 +42,27 @@
 - `RenderTransferPlan.make(asset:runID:sceneID:)` continues deriving chunk bytes from actual encoded 512-byte envelopes and reconstructs the asset exactly.
 - `NavigationUpdate` accepts native marker coordinates only inside the new viewport.
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 Change test assets to 212x520, assert 8,192 bytes are admitted and 8,193 rejected, assert every generated begin/chunk/end envelope is at most 512 bytes, assert all chunks reconstruct the original 8 KiB payload, and assert marker `y == 519` is valid while `y == 520` is rejected.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `make test-swift SWIFT_TEST_ARGS='--filter RenderProtocolTests|NavigationUpdateTests'`
 
 Expected: FAIL on old height, old 1 KiB ceiling, old seven-chunk cap, or marker bounds.
 
-- [ ] **Step 3: Implement the minimum shared contract change**
+- [x] **Step 3: Implement the minimum shared contract change**
 
 Set the new dimensions/payload ceiling and remove the obsolete seven-data-chunk restriction. Retain binary-search envelope sizing and all identifier/hash validation.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run: `make test-swift SWIFT_TEST_ARGS='--filter RenderProtocolTests|NavigationUpdateTests' && git diff --check`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/BlueBandKit
@@ -87,21 +87,21 @@ git commit -m "feat: admit full-screen snapshot assets"
 - `PendingSnapshotCoalescer` keeps at most the newest queued generation and rejects stale completion.
 - `RenderRunMetrics` adds GPS, route, style, snapshot, encode, transfer prepare, Band write/decode/publication, palette, retained layer counts, transfer window, and cache state fields without exact coordinates or identifiers.
 
-- [ ] **Step 1: Write failing policy and metrics tests**
+- [x] **Step 1: Write failing policy and metrics tests**
 
 Cover profile order and admission, GPS boundaries, each refresh trigger/non-trigger, newest-pending replacement, stale generation rejection, p50/p95/max ACKs, new metric serialization, and a redaction assertion that exported diagnostics contain neither provider keys nor full coordinates.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `make test-swift SWIFT_TEST_ARGS='--filter SnapshotMapPolicyTests|RenderRunTests|NavigationDebugTests'`
 
 Expected: FAIL because the policies and new metrics are absent.
 
-- [ ] **Step 3: Implement the policies as value types**
+- [x] **Step 3: Implement the policies as value types**
 
 Use enums/structs only; do not add factories or persistence. Keep the safe viewport as an explicit `ScreenRect`, defaulting to a conservative inner rectangle that excludes the top overlay and display edges.
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [x] **Step 4: Verify GREEN and commit**
 
 Run: `make test-swift SWIFT_TEST_ARGS='--filter SnapshotMapPolicyTests|RenderRunTests|NavigationDebugTests' && git diff --check`
 
@@ -126,27 +126,27 @@ git commit -m "feat: define snapshot refresh and admission policy"
 - The Band accepts multiple unique in-flight envelope IDs for one active asset but writes only the exact next offset; wrong offsets abort the generation.
 - A confirmed previous map remains visible until the new digest-valid PNG completes image publication.
 
-- [ ] **Step 1: Write failing iOS and Band behavioral tests**
+- [x] **Step 1: Write failing iOS and Band behavioral tests**
 
 The iOS fake session blocks chunk acknowledgements and records maximum concurrent sends; assert windows 1, 2, and 4 never exceed their bounds, a slot opens after one ACK, and timeout/disconnect/stale completion abort once. Band tests send multiple unique chunk IDs in order, a wrong offset, a duplicate/stale scene, digest mismatch, disconnect, and a second refresh while a confirmed map exists; assert immediate ACKs, cleanup, and atomic publication.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `make test-rpk`
 
 Expected: FAIL because the Band still uses 212x360/1 KiB and one active message ID. The iOS tests remain pending for GitHub Actions because they require Xcode.
 
-- [ ] **Step 3: Implement bounded windowing and atomic refresh**
+- [x] **Step 3: Implement bounded windowing and atomic refresh**
 
 Use `withThrowingTaskGroup` for data chunks only, adding the next chunk when one child completes. Do not touch `BandTransport` or Xiaomi transport ACK code. Keep the confirmed URI/map fields until `image @complete`; delete only retired confirmed files after replacement succeeds.
 
-- [ ] **Step 4: Verify GREEN locally**
+- [x] **Step 4: Verify GREEN locally**
 
 Run: `make test-rpk && make test-ios-metadata && git diff --check`
 
 Expected: Band and metadata checks PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/ios/App/RouteCardRenderCoordinator.swift apps/ios/Tests/RouteCardRenderCoordinatorTests.swift apps/band
@@ -169,19 +169,19 @@ git commit -m "feat: window snapshot asset transfers"
 - `VietmapSnapshotRenderer.render(_:) async throws -> VietmapSnapshotOutput` returns a 212x520 `CGImage`, retained layer counts, chosen zoom, style/snapshot timings, and cache state.
 - `SnapshotPNGEncoder.encode(_ image: CGImage, profiles: [SnapshotPaletteProfile] = SnapshotPaletteProfile.allCases) throws -> SnapshotPNGOutput` returns the first indexed PNG at or below 8,192 bytes with profile, byte count, color count, and duration.
 
-- [ ] **Step 1: Add failing iOS tests and sanitized fixture**
+- [x] **Step 1: Add failing iOS tests and sanitized fixture**
 
 The fixture contains only layer type/id pairs observed from the documented light style. Tests assert the allowlist keeps background, ocean/land, selected park/residential/school/hospital, close-zoom building, useful road casing/fill, and road labels while removing POI/transit/admin/place/3D layers. Test 212x520 scale-1 camera values, zero pitch, heading, 72% vertical position, overlay padding, route overlay order/widths/colors, maneuver ring, snapshot success/error completion, indexed PNG dimensions, ordered profiles, and 8 KiB failure.
 
-- [ ] **Step 2: Verify RED in GitHub later**
+- [x] **Step 2: Verify RED in GitHub later**
 
 The new tests must initially fail to compile against absent types. Do not generate/build an Xcode project or IPA locally.
 
-- [ ] **Step 3: Implement the SDK adapter and native indexed PNG encoder**
+- [x] **Step 3: Implement the SDK adapter and native indexed PNG encoder**
 
 Set `MGLMapSnapshotter.delegate` before `start(overlayHandler:completionHandler:)`; remove non-allowlisted `MGLStyle.layers` in `didFinishLoadingStyle`; draw traveled, upcoming halo/fill, and maneuver via `MGLMapSnapshotOverlay.point(for:)`; retain the delegate strongly until completion; cancel safely. Quantize BGRA pixels to fixed profile palettes with nearest-color distance, store indices as an 8-bit indexed bitmap (Core Graphics does not support 5-bit components), and encode with ImageIO. Never call `RouteCardAssetFactory` as fallback.
 
-- [ ] **Step 4: Verify metadata and commit**
+- [x] **Step 4: Verify metadata and commit**
 
 Run: `make test-ios-metadata && git diff --check`
 
@@ -209,21 +209,21 @@ git commit -m "feat: render Vietmap navigation snapshots"
 - Initial render failure is terminal; refresh failure keeps the confirmed scene and sends `LIMITED MAP`.
 - `nav.update` remains at no more than 1 Hz and moves only the native marker/instruction overlay.
 
-- [ ] **Step 1: Write failing lifecycle/runtime/layout tests**
+- [x] **Step 1: Write failing lifecycle/runtime/layout tests**
 
 Assert reusable vs stale fixes, immediate Start state, initial failure, confirmed-map retention on refresh failure, reroute refresh, maneuver/viewport/zoom refresh, pending refresh replacement, and no render on ordinary 1 Hz updates. Band source tests assert the 212x520 image fills the page, overlay width 184 and height 116-128 with translucent background, native marker above the map, normal `NAVIGATING` hidden, and exceptional statuses plus `LOADING MAP` visible.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `make test-rpk`
 
 Expected: FAIL on old map frame/header/layout assertions; iOS runtime tests await GitHub Actions.
 
-- [ ] **Step 3: Integrate the minimum runtime flow**
+- [x] **Step 3: Integrate the minimum runtime flow**
 
 Replace `RouteCardAssetFactory` composition/use with `VietmapSnapshotRenderer` plus `SnapshotPNGEncoder`. Reuse `VietmapRouteClient`, `RouteProgressTracker`, update coalescer, renderer coordinator, and existing session. Do not delete historical POC types in this task; leave them unreferenced so the diff stays focused and past evidence remains compilable.
 
-- [ ] **Step 4: Verify GREEN locally and commit**
+- [x] **Step 4: Verify GREEN locally and commit**
 
 Run: `make test-rpk && make test-ios-metadata && make test-swift && git diff --check`
 
@@ -244,15 +244,15 @@ git commit -m "feat: navigate with full-screen snapshot maps"
 
 **Version rule:** If the preceding diff contains iOS source changes, bump iOS `0.1.9 (10)` to `0.2.0 (11)`. If it contains Band source changes, bump RPK `0.2.9 (11)` to `0.3.0 (12)` consistently. If one artifact has no source change, do not bump it.
 
-- [ ] **Step 1: Add failing version/metadata assertions only for changed artifacts**
+- [x] **Step 1: Add failing version/metadata assertions only for changed artifacts**
 
 Update existing bundle/project metadata tests to the selected versions. Verify they fail before changing manifests/source constants.
 
-- [ ] **Step 2: Apply matching version bumps and documentation**
+- [x] **Step 2: Apply matching version bumps and documentation**
 
 Document the exact snapshot/application protocol, unchanged Xiaomi transport boundary, deferred tiled engine, local/CI/hardware evidence boundaries, and the complete manual test matrix from the approved spec.
 
-- [ ] **Step 3: Run the canonical local gate**
+- [x] **Step 3: Run the canonical local gate**
 
 ```bash
 make clean
@@ -265,11 +265,11 @@ git diff --check
 
 Expected: every command exits 0. This does not prove Xcode or hardware behavior.
 
-- [ ] **Step 4: Perform final code review and fix findings**
+- [x] **Step 4: Perform final code review and fix findings**
 
 Review the complete `main` diff against the spec, with special attention to envelope size, window bounds, atomic publication, stale generations, key redaction, iOS-only SDK isolation, and version consistency. Re-run the covering tests after fixes.
 
-- [ ] **Step 5: Commit and push `main`**
+- [x] **Step 5: Commit and push `main`**
 
 ```bash
 git add CHANGELOG.md README.md apps docs packages
@@ -277,14 +277,14 @@ git commit -m "docs: hand off snapshot route map testing"
 git push origin main
 ```
 
-- [ ] **Step 6: Build/test IPA only in GitHub Actions**
+- [x] **Step 6: Build/test IPA only in GitHub Actions**
 
 Use the push-triggered `iOS checks` run, or dispatch `.github/workflows/ios-checks.yml` on `main` if needed. Wait for the macOS simulator tests and unsigned arm64 device app build. Download the GitHub artifact and verify it with `scripts/verify-ios-artifact.sh`; never run local `xcodebuild` or local IPA packaging.
 
-- [ ] **Step 7: Build RPK through the canonical Make path**
+- [x] **Step 7: Build RPK through the canonical Make path**
 
 Run `make test-rpk`; use the generated RPK only after the bundle verification test passes. Record exact artifact paths, sizes, SHA-256 values, source commit, and which versions changed.
 
-- [ ] **Step 8: Deliver the manual test plan**
+- [x] **Step 8: Deliver the manual test plan**
 
 The handoff must give the owner step-by-step iPhone + Smart Band 10 tests for first feedback <=100 ms, five-start p95 <=5 s with reusable GPS, warm snapshot+encode p95 <=1.5 s, transfer p95 <=3 s, window 1/2/4 trials, <=8 KiB payload, visual readability/alignment/overlay checks, <=1 s marker/instruction updates, reroute/refresh/failure/disconnect recovery, turn-recognition 4/5, and 30-minute stability. Cold GPS is reported separately.
