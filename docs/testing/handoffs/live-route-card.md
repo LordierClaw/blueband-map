@@ -7,15 +7,15 @@ the tester.
 
 ## Artifact identity
 
-- Source commit: `4c518ad7a35e38c76d04b098984fefc427c1435d`
-- iOS GitHub Actions run: [33385299258](https://github.com/LordierClaw/blueband-map/actions/runs/33385299258)
+- Source commit: `df5b2a6a26b26e6c3f1dc9b2aa2c8a2f105ad770`
+- iOS GitHub Actions run: [33388215900](https://github.com/LordierClaw/blueband-map/actions/runs/33388215900)
 - Band GitHub Actions run: [33385687502](https://github.com/LordierClaw/blueband-map/actions/runs/33385687502)
-- IPA: `BlueBandMap-unsigned.ipa`, version `0.1.8 (9)`, 835784 bytes
-- IPA SHA-256: `4a106de7168eacd89f124b518c81ee9783b5402c9d56cc48c248740430545a61`
+- IPA: `BlueBandMap-unsigned.ipa`, version `0.1.9 (10)`, 846626 bytes
+- IPA SHA-256: `a72a8aa0824b7540376a17bf959e7bf8b5bf041c1e7dc6d218de3111aa7ad5e7`
 - RPK: `dev.lordierclaw.bluebandmap.band.debug.0.2.9.rpk`, version `0.2.9 (11)`, 23194 bytes
 - RPK SHA-256: `d106afeefaf89a6730a0b87446b68724631e9a5694df5d4db6ce51bdbc845ea3`
 
-Version change: IPA only (`0.1.7 (8)` → `0.1.8 (9)`); RPK remains `0.2.9 (11)`.
+Version change: IPA only (`0.1.8 (9)` → `0.1.9 (10)`); RPK remains `0.2.9 (11)`.
 
 The IPA is unsigned. Installation requires the tester's normal Apple
 provisioning/signing path; no signing material belongs in this repository.
@@ -54,6 +54,9 @@ result of every row. A test result is `PASS-HW`, `FAIL-HW`, `BLOCKED-ENV`, or
    `Export debug log`. The export must contain the start/destination summary,
    route response or failure stage, and each decoded instruction while keeping
    service keys, UUIDs and full-precision coordinates out of the report.
+   Expected: the exporter saves a `.txt` file whose contents begin with
+   `BlueBandMap navigation debug`; it must not export the old explanatory
+   sentence in place of the log.
 3. Compare the Band image with the iPhone preview carrying the same `scene`.
    Expected: a continuous cyan route, selected gray side roads, a visible
    maneuver point, a moving native marker, and the correct arrow/distance.
@@ -64,6 +67,9 @@ result of every row. A test result is `PASS-HW`, `FAIL-HW`, `BLOCKED-ENV`, or
    time, PNG bytes and data-chunk count for each run. Every run must have a
    useful real route frame within 5 seconds at p95, PNG `<= 1,024` bytes and
    no more than 7 data chunks. ACK wait is allowed to be measured separately.
+   Include the reported route from `21.039341,106.092286` to
+   `21.065587,106.023863`; this 130-point regression route must not produce
+   `MAP_PAYLOAD_TOO_LARGE`.
 
 ### C. Navigation behavior
 
