@@ -33,11 +33,14 @@ final class SnapshotPNGEncoderTests: XCTestCase {
 
     private func noisyImage(width: Int, height: Int) throws -> CGImage {
         var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        var state: UInt32 = 0xC0FFEE
         for offset in stride(from: 0, to: pixels.count, by: 4) {
-            let pixel = offset / 4
-            pixels[offset] = UInt8(truncatingIfNeeded: pixel &* 73)
-            pixels[offset + 1] = UInt8(truncatingIfNeeded: pixel &* 151)
-            pixels[offset + 2] = UInt8(truncatingIfNeeded: pixel &* 199)
+            state = 1_664_525 &* state &+ 1_013_904_223
+            pixels[offset] = UInt8(truncatingIfNeeded: state >> 24)
+            state = 1_664_525 &* state &+ 1_013_904_223
+            pixels[offset + 1] = UInt8(truncatingIfNeeded: state >> 24)
+            state = 1_664_525 &* state &+ 1_013_904_223
+            pixels[offset + 2] = UInt8(truncatingIfNeeded: state >> 24)
         }
         return try image(width: width, height: height, pixels: pixels)
     }

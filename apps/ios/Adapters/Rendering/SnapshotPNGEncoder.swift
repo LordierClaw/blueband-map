@@ -63,17 +63,27 @@ enum SnapshotPNGEncoder {
     }
 
     private static func quantize(_ pixels: [UInt8], palette: [(UInt8, UInt8, UInt8)]) -> [UInt8] {
+        var lookup = [UInt8](repeating: 0, count: 32 * 32 * 32)
+        for red in 0..<32 {
+            for green in 0..<32 {
+                for blue in 0..<32 {
+                    let sourceRed = red * 255 / 31, sourceGreen = green * 255 / 31, sourceBlue = blue * 255 / 31
+                    var best = 0, bestDistance = Int.max
+                    for (index, color) in palette.enumerated() {
+                        let dr = sourceRed - Int(color.0), dg = sourceGreen - Int(color.1), db = sourceBlue - Int(color.2)
+                        let distance = dr * dr + dg * dg + db * db
+                        if distance < bestDistance { best = index; bestDistance = distance }
+                    }
+                    lookup[(red << 10) | (green << 5) | blue] = UInt8(best)
+                }
+            }
+        }
         var result = [UInt8]()
         result.reserveCapacity(pixels.count / 4)
         for offset in stride(from: 0, to: pixels.count, by: 4) {
-            let red = Int(pixels[offset]), green = Int(pixels[offset + 1]), blue = Int(pixels[offset + 2])
-            var best = 0, bestDistance = Int.max
-            for (index, color) in palette.enumerated() {
-                let dr = red - Int(color.0), dg = green - Int(color.1), db = blue - Int(color.2)
-                let distance = dr * dr + dg * dg + db * db
-                if distance < bestDistance { best = index; bestDistance = distance }
-            }
-            result.append(UInt8(best))
+            let key = (Int(pixels[offset] >> 3) << 10) |
+                (Int(pixels[offset + 1] >> 3) << 5) | Int(pixels[offset + 2] >> 3)
+            result.append(lookup[key])
         }
         return result
     }
