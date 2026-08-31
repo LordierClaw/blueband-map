@@ -4,6 +4,7 @@ import XCTest
 import BlueBandMapCore
 @testable import BlueBandMap
 
+@MainActor
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
 
