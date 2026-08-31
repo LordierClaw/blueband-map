@@ -89,6 +89,7 @@ final class RouteCardRenderCoordinator {
     let session: any RouteCardSessionSending
     let clock: any BlueBandClock
     let resultTimeout: Duration
+    let transferWindow: Int
     let runIDGenerator: @Sendable () -> String
     let sceneIDGenerator: @Sendable () -> String
 
@@ -110,12 +111,15 @@ final class RouteCardRenderCoordinator {
         session: any RouteCardSessionSending,
         clock: any BlueBandClock = ContinuousBlueBandClock(),
         resultTimeout: Duration = .seconds(15),
+        transferWindow: Int = 1,
         runIDGenerator: @escaping @Sendable () -> String = { RouteCardRenderCoordinator.makeRunID() },
         sceneIDGenerator: @escaping @Sendable () -> String = { RouteCardRenderCoordinator.makeSceneID() }
     ) {
         self.session = session
         self.clock = clock
         self.resultTimeout = resultTimeout
+        precondition([1, 2, 4].contains(transferWindow))
+        self.transferWindow = transferWindow
         self.runIDGenerator = runIDGenerator
         self.sceneIDGenerator = sceneIDGenerator
     }
@@ -292,24 +296,49 @@ final class RouteCardRenderCoordinator {
             }
         }
 
+        guard let begin = steps.first, let end = steps.last else {
+            finishOwned(code: "ASSET_INVALID", token: token, requiresReconnect: false)
+            return
+        }
+        let chunks = Array(steps.dropFirst().dropLast())
         state = .transferring(mode: mode, completed: 0, total: steps.count)
         runContext?.transferStartedMilliseconds = Self.nowMilliseconds()
         recordEvent("transfer-started")
-        for (index, step) in steps.enumerated() {
-            guard ownsLive(token), var current = pending, current.token == token else { return }
-            let isFinal = index == steps.count - 1
-            current.phase = isFinal ? .awaitingFinalAcknowledgement : .transferring
-            pending = current
-            let sendStarted = Self.nowMilliseconds()
-            do {
-                _ = try await session.sendAwaitingAcknowledgement(topic: step.topic, body: step.body)
-            } catch {
-                finishOwned(code: transferCode(for: error), token: token, requiresReconnect: true)
-                return
+        do {
+            try await send(begin)
+            guard ownsLive(token) else { return }
+            state = .transferring(mode: mode, completed: 1, total: steps.count)
+
+            var completed = 1
+            try await withThrowingTaskGroup(of: Int.self) { group in
+                var next = 0
+                func addNext() {
+                    let step = chunks[next]
+                    next += 1
+                    let session = session
+                    group.addTask {
+                        let started = Self.nowMilliseconds()
+                        _ = try await session.sendAwaitingAcknowledgement(topic: step.topic, body: step.body)
+                        return started
+                    }
+                }
+                while next < min(transferWindow, chunks.count) { addNext() }
+                while let started = try await group.next() {
+                    recordAck(started: started)
+                    completed += 1
+                    state = .transferring(mode: mode, completed: completed, total: steps.count)
+                    if next < chunks.count { addNext() }
+                }
             }
-            recordAck(started: sendStarted)
-            guard ownsLive(token), let current = pending, current.token == token else { return }
-            state = .transferring(mode: mode, completed: index + 1, total: steps.count)
+
+            guard ownsLive(token), var current = pending, current.token == token else { return }
+            current.phase = .awaitingFinalAcknowledgement
+            pending = current
+            try await send(end)
+            state = .transferring(mode: mode, completed: steps.count, total: steps.count)
+        } catch {
+            finishOwned(code: transferCode(for: error), token: token, requiresReconnect: true)
+            return
         }
 
         guard ownsLive(token), var waiting = pending, waiting.token == token else { return }
@@ -534,7 +563,8 @@ final class RouteCardRenderCoordinator {
             primitives: context.asset?.primitives ?? 0,
             providerCalls: context.providerCalls,
             ackDurationsMilliseconds: context.ackDurations,
-            terminalCode: terminalCode
+            terminalCode: terminalCode,
+            transferWindow: transferWindow
         ) else {
             runContext = nil
             return
@@ -556,6 +586,12 @@ final class RouteCardRenderCoordinator {
             context.prepareMilliseconds = context.ackDurations[0]
         }
         runContext = context
+    }
+
+    private func send(_ step: RenderTransferStep) async throws {
+        let started = Self.nowMilliseconds()
+        _ = try await session.sendAwaitingAcknowledgement(topic: step.topic, body: step.body)
+        recordAck(started: started)
     }
 
     private func recordEvent(_ name: String) {

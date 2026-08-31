@@ -27,7 +27,8 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
 
             await coordinator.start(asset: asset)
 
-            XCTAssertEqual(await session.maximumConcurrentChunks, window)
+            let maximumConcurrentChunks = await session.maximumConcurrentChunks
+            XCTAssertEqual(maximumConcurrentChunks, window)
             guard case .displayed = coordinator.state else {
                 return XCTFail("window \(window) did not reach displayed")
             }

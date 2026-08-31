@@ -1,8 +1,8 @@
 const LIMITS = Object.freeze({
   envelopeBytes: 512,
-  payloadBytes: 1024,
+  payloadBytes: 8192,
   width: 212,
-  height: 360,
+  height: 520,
   maximumPrimitives: 0,
   formatVersion: 1,
   maximumIdentifierBytes: 24

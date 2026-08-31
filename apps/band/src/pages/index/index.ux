@@ -10,15 +10,16 @@
     </div>
 
     <div class="connected" if="{{ connected }}">
-      <div class="nav-header" if="{{ mapReady }}">
+      <div class="map-frame" if="{{ mapReady || pendingPublication }}">
+        <image class="map" if="{{ mapReady }}" src="{{ mapPath }}" />
+        <image class="map map-pending" if="{{ pendingPublication }}" src="{{ pendingMapPath }}" @complete="mapComplete(pendingMapToken)" @error="mapError(pendingMapToken)" />
+        <div class="nav-marker" if="{{ mapReady }}" style="{{ navMarkerStyle }}"></div>
+      </div>
+      <div class="nav-header" if="{{ mapReady || pendingPublication }}">
         <text class="nav-arrow">{{ navArrow }}</text>
         <text class="nav-distance">{{ navDistance }}</text>
         <text class="nav-street">{{ navStreet }}</text>
         <text class="nav-status">{{ navStatus }}</text>
-      </div>
-      <div class="map-frame" if="{{ mapReady }}">
-        <image class="map" src="{{ mapPath }}" @complete="mapComplete(mapToken)" @error="mapError(mapToken)" />
-        <div class="nav-marker" style="{{ navMarkerStyle }}"></div>
       </div>
       <text class="online" if="{{ !mapReady }}">IOS CONNECTED • WAITING ROUTE</text>
       <div class="diagnostics" if="{{ showDiagnostics }}">
@@ -177,9 +178,9 @@ function sha256Finish(context) {
 // the tested host-side modules without adding runtime imports to the RPK page.
 var renderProtocolLimits = {
   envelopeBytes: 512,
-  payloadBytes: 1024,
+  payloadBytes: 8192,
   width: 212,
-  height: 360,
+  height: 520,
   maximumPrimitives: 0,
   formatVersion: 1,
   maximumIdentifierBytes: 24
@@ -282,9 +283,9 @@ export default {
   private: {
     MAX_ENVELOPE_BYTES: 512,
     MAX_RECENT_IDS: 64,
-    MAX_ASSET_BYTES: 1024,
+    MAX_ASSET_BYTES: 8192,
     MAP_WIDTH: 212,
-    MAP_HEIGHT: 360,
+    MAP_HEIGHT: 520,
     connection: null,
     destroyed: false,
     acceptingMessages: false,
@@ -315,6 +316,8 @@ export default {
     navStatus: "WAITING",
     navMarkerStyle: "left:102px;top:316px;",
     pendingPublication: null,
+    pendingMapPath: "",
+    pendingMapToken: "",
     preparedRender: null,
     confirmedMap: null,
     retiredMapURI: "",
@@ -443,6 +446,8 @@ export default {
     this.inFlightIDs = []
     this.activeTransfer = null
     this.pendingPublication = null
+    this.pendingMapPath = ""
+    this.pendingMapToken = ""
     this.preparedRender = null
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
@@ -584,7 +589,7 @@ export default {
       this.navStreet = body.street
       this.navStatus = labels[body.status]
       this.navMarkerStyle = "left:" + Math.max(0, Math.min(204, body.x - 4)) + "px;top:" +
-        Math.max(0, Math.min(352, body.y - 4)) + "px;"
+        Math.max(0, Math.min(512, body.y - 4)) + "px;"
     }
     this.rememberSuccess(message.id)
     this.sendACK(message.id)
@@ -679,6 +684,9 @@ export default {
       this.failAsset(message, "ASSET_BUSY")
       return
     }
+    var baseURI = "internal://files/" + body.asset + ".png"
+    var transferURI = this.confirmedMap && this.confirmedMap.uri === baseURI ?
+      "internal://files/" + body.asset + "-" + body.scene + ".png" : baseURI
     var transfer = {
       asset: body.asset,
       bytes: body.bytes,
@@ -695,7 +703,7 @@ export default {
       scene: body.scene,
       preparedAt: this.preparedRender ? this.preparedRender.preparedAt : 0,
       startedAt: Date.now(),
-      uri: "internal://files/" + body.asset + ".png",
+      uri: transferURI,
       digest: sha256Create(),
       buffer: new Uint8Array(body.bytes),
       receivedBytes: 0,
@@ -704,14 +712,7 @@ export default {
     }
     var activate = function () {
       if (!page.ownsMapOperation(message.id, epoch)) return
-      if (page.confirmedMap && page.confirmedMap.uri === transfer.uri) page.confirmedMap = null
       page.activeTransfer = transfer
-      page.mapReady = false
-      page.mapPath = ""
-      page.mapHashPrefix = ""
-      page.mapRenderer = ""
-      page.mapToken = ""
-      page.showDiagnostics = true
       page.succeedAsset(message.id)
     }
     var prepare = function () {
@@ -868,12 +869,8 @@ export default {
     transfer.validatedAt = Date.now()
     var token = "render-" + this.lifecycleEpoch + "-" + this.nextRenderToken
     this.nextRenderToken = this.nextRenderToken + 1
-    this.mapPath = transfer.uri
-    this.mapHashPrefix = prefix
-    this.mapReady = true
-    this.mapRenderer = "raster"
-    this.mapToken = token
-    this.showDiagnostics = false
+    this.pendingMapPath = transfer.uri
+    this.pendingMapToken = token
     this.pendingPublication = {
       asset: asset,
       run: transfer.run,
@@ -969,12 +966,14 @@ export default {
     this.activeTransfer = null
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
-    this.mapReady = false
-    this.mapPath = ""
-    this.mapHashPrefix = ""
-    this.mapRenderer = ""
-    this.mapToken = ""
-    this.showDiagnostics = true
+    if (!this.confirmedMap) {
+      this.mapReady = false
+      this.mapPath = ""
+      this.mapHashPrefix = ""
+      this.mapRenderer = ""
+      this.mapToken = ""
+      this.showDiagnostics = true
+    }
 
     var publish = function () {
       if (!page.ownsMapOperation(message.id, epoch)) return
@@ -1188,13 +1187,21 @@ export default {
       renderer: publication.renderer || "raster",
       scene: publication.scene || ""
     }
+    this.mapPath = publication.uri
+    this.mapHashPrefix = publication.sha256Prefix
+    this.mapReady = true
+    this.mapRenderer = publication.renderer || "raster"
+    this.mapToken = publication.token
+    this.pendingMapPath = ""
+    this.pendingMapToken = ""
+    this.showDiagnostics = false
     this.navScene = publication.scene || ""
     this.navSequence = -1
     this.navArrow = "↑"
     this.navDistance = "—"
     this.navStreet = ""
     this.navStatus = "WAITING"
-    this.navMarkerStyle = "left:102px;top:316px;"
+    this.navMarkerStyle = "left:102px;top:370px;"
     this.statusText = "ROUTE CARD READY"
     var page = this
     var publish = function () {
@@ -1225,6 +1232,8 @@ export default {
     if (!publication || token !== publication.token || this.lifecycleEpoch !== publication.epoch ||
       this.activeMapOperationID !== publication.operationID || publication.cleanupStarted) return
     publication.cleanupStarted = true
+    this.pendingMapPath = ""
+    this.pendingMapToken = ""
     if (this.confirmedMap) {
       this.mapPath = this.confirmedMap.uri
       this.mapHashPrefix = this.confirmedMap.sha256Prefix
@@ -1259,7 +1268,7 @@ export default {
 <style>
 .page { width: 212px; height: 520px; background-color: #07162b; }
 .waiting, .connected { width: 212px; height: 520px; padding-top: 54px; flex-direction: column; align-items: center; }
-.connected { padding-top: 0; }
+.connected { padding-top: 0; position: relative; }
 .mark { width: 72px; height: 72px; border-radius: 18px; justify-content: center; align-items: center; background-color: #168cff; }
 .mark-text { font-size: 46px; font-weight: bold; color: #ffffff; }
 .title { margin-top: 18px; font-size: 25px; font-weight: bold; color: #ffffff; }
@@ -1267,13 +1276,13 @@ export default {
 .detail { margin-top: 14px; width: 180px; height: 76px; font-size: 15px; lines: 4; text-align: center; color: #a9bdd6; }
 .check, .button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
-.nav-header { width: 212px; height: 160px; padding: 8px 12px; position: relative; background-color: #07162b; }
+.nav-header { position: absolute; left: 14px; top: 12px; width: 184px; height: 124px; padding: 8px 12px; border-radius: 24px; background-color: rgba(4, 12, 20, 0.68); }
 .nav-arrow { width: 72px; height: 72px; font-size: 62px; font-weight: bold; color: #00e5ff; }
 .nav-distance { position: absolute; left: 82px; top: 12px; width: 120px; font-size: 32px; font-weight: bold; text-align: right; color: #ffffff; }
 .nav-street { position: absolute; left: 12px; top: 92px; width: 188px; height: 28px; font-size: 19px; lines: 1; color: #ffffff; }
 .nav-status { position: absolute; left: 12px; top: 126px; width: 188px; font-size: 15px; font-weight: bold; color: #5dffb0; }
-.map-frame { width: 212px; height: 360px; position: relative; background-color: #050e16; }
-.map { width: 212px; height: 360px; object-fit: contain; }
+.map-frame { width: 212px; height: 520px; position: relative; background-color: #050e16; }
+.map { position: absolute; left: 0; top: 0; width: 212px; height: 520px; object-fit: contain; }
 .nav-marker { position: absolute; width: 8px; height: 8px; border-radius: 4px; background-color: #ffffff; }
 .diagnostics { width: 212px; flex-direction: column; align-items: center; }
 .log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }
