@@ -562,9 +562,9 @@ final class RouteCardRenderCoordinator {
             retries: 0,
             primitives: context.asset?.primitives ?? 0,
             providerCalls: context.providerCalls,
+            transferWindow: transferWindow,
             ackDurationsMilliseconds: context.ackDurations,
-            terminalCode: terminalCode,
-            transferWindow: transferWindow
+            terminalCode: terminalCode
         ) else {
             runContext = nil
             return
