@@ -102,7 +102,7 @@ struct ContentView: View {
     private var h1Section: some View {
         Section("H1 · Hybrid renderer POC") {
             LabeledContent("Trạng thái", value: h1Label)
-            Text("Mỗi mode chạy độc lập và bị chặn nếu vượt 60 data chunks. Vector thử ngân sách 40/60 roads; không tự fallback.")
+            Text("Mỗi mode dựng từ TileMap, chạy độc lập và bị chặn nếu vượt 60 data chunks. Vector thử ngân sách 40/60 roads; không tự fallback.")
                 .font(.caption).foregroundStyle(.secondary)
             ForEach(H1TestMode.allCases, id: \.self) { mode in
                 Button(h1ModeLabel(mode)) {
@@ -161,10 +161,10 @@ struct ContentView: View {
 
     private func h1ModeLabel(_ mode: H1TestMode) -> String {
         switch mode {
-        case .rasterStaticCompact: return "Raster · Static Compact 16 colors"
-        case .rasterTileMap: return "Raster · TileMap 200 roads"
-        case .vectorTileMap40: return "Vector · TileMap 40 roads"
-        case .vectorTileMap60: return "Vector · TileMap 60 roads"
+        case .rasterStaticCompact: return "Raster · Native Compact 80 roads"
+        case .rasterTileMap: return "Raster · Native Detail 200 roads"
+        case .vectorTileMap40: return "Vector · Native 40 roads"
+        case .vectorTileMap60: return "Vector · Native 60 roads"
         }
     }
 

@@ -1,5 +1,19 @@
 import Foundation
 
+public struct VietmapSceneTile: Equatable, Sendable {
+    public let tile: MapboxVectorTile
+    public let zoom: Int
+    public let x: Int
+    public let y: Int
+
+    public init(tile: MapboxVectorTile, zoom: Int, x: Int, y: Int) {
+        self.tile = tile
+        self.zoom = zoom
+        self.x = x
+        self.y = y
+    }
+}
+
 public enum VietmapSceneBuilder {
     public enum Error: Swift.Error, Equatable, Sendable {
         case invalidRequest
@@ -54,18 +68,43 @@ public enum VietmapSceneBuilder {
         distanceMeters: UInt32,
         maximumSegments: Int = RenderProtocol.maximumPrimitives
     ) throws -> NavigationScene {
+        try build(
+            tiles: tiles.map { VietmapSceneTile(tile: $0, zoom: zoom, x: tileX, y: tileY) },
+            sourceLayers: sourceLayers,
+            latitude: latitude,
+            longitude: longitude,
+            displayZoom: zoom,
+            headingDegrees: headingDegrees,
+            maneuver: maneuver,
+            distanceMeters: distanceMeters,
+            maximumSegments: maximumSegments
+        )
+    }
+
+    public static func build(
+        tiles: [VietmapSceneTile],
+        sourceLayers: Set<String>? = nil,
+        latitude: Double,
+        longitude: Double,
+        displayZoom: Int,
+        headingDegrees: Int,
+        maneuver: ManeuverKind,
+        distanceMeters: UInt32,
+        maximumSegments: Int = RenderProtocol.maximumPrimitives
+    ) throws -> NavigationScene {
         guard latitude.isFinite, longitude.isFinite,
               (-90...90).contains(latitude), (-180...180).contains(longitude),
-              (0...22).contains(zoom), headingDegrees >= 0, headingDegrees <= 359,
+              (0...22).contains(displayZoom), headingDegrees >= 0, headingDegrees <= 359,
               !tiles.isEmpty,
+              tiles.allSatisfy({ (0...22).contains($0.zoom) && $0.x >= 0 && $0.y >= 0 }),
               (1...NavigationScene.maximumSegments).contains(maximumSegments) else {
             throw Error.invalidRequest
         }
 
         var ranked = [RankedSegment]()
         var order = 0
-        for tile in tiles {
-            for layer in tile.layers where sourceLayers == nil || sourceLayers?.contains(layer.name) == true {
+        for sourceTile in tiles {
+            for layer in sourceTile.tile.layers where sourceLayers == nil || sourceLayers?.contains(layer.name) == true {
                 for feature in layer.features where feature.geometryType == .lineString {
                     guard let lineClass = classify(feature.properties) else { continue }
                     let rank = lineClass == .route ? 0 : (lineClass == .major ? 1 : 2)
@@ -79,9 +118,10 @@ public enum VietmapSceneBuilder {
                                 extent: layer.extent,
                                 latitude: latitude,
                                 longitude: longitude,
-                                zoom: zoom,
-                                tileX: tileX,
-                                tileY: tileY,
+                                tileZoom: sourceTile.zoom,
+                                tileX: sourceTile.x,
+                                tileY: sourceTile.y,
+                                displayZoom: displayZoom,
                                 lineClass: lineClass
                             ) else { continue }
                             projected.append(segment)
@@ -122,7 +162,7 @@ public enum VietmapSceneBuilder {
             } ?? 0
             selected.append(remaining.remove(at: index))
         }
-        let segments = magnify(selected.map(\.segment))
+        let segments = selected.map(\.segment)
 
         return try NavigationScene(
             currentPosition: ScenePoint(
@@ -170,31 +210,6 @@ public enum VietmapSceneBuilder {
             left.end == right.start || left.end == right.end
     }
 
-    private static func magnify(_ segments: [SceneSegment]) -> [SceneSegment] {
-        guard segments.count >= 8 else { return segments }
-        let centerX = RenderProtocol.viewportWidth / 2
-        let centerY = RenderProtocol.viewportHeight / 2
-        let points = segments.flatMap { [$0.start, $0.end] }
-        let maxDX = max(1, points.map { abs(Int($0.x) - centerX) }.max() ?? 1)
-        let maxDY = max(1, points.map { abs(Int($0.y) - centerY) }.max() ?? 1)
-        let scale = min(
-            3.5,
-            Double(min(centerX, RenderProtocol.viewportWidth - 1 - centerX) - 6) / Double(maxDX),
-            Double(min(centerY, RenderProtocol.viewportHeight - 1 - centerY) - 6) / Double(maxDY)
-        )
-        guard scale > 1 else { return segments }
-
-        func point(_ source: ScenePoint) -> ScenePoint {
-            ScenePoint(
-                x: UInt16((Double(Int(source.x) - centerX) * scale).rounded() + Double(centerX)),
-                y: UInt16((Double(Int(source.y) - centerY) * scale).rounded() + Double(centerY))
-            )
-        }
-        return segments.map {
-            SceneSegment(start: point($0.start), end: point($0.end), lineClass: $0.lineClass)
-        }
-    }
-
     private static func classify(_ properties: [String: String]) -> SceneLineClass? {
         let values = properties
             .filter { ["class", "road_class", "highway", "kind", "type"].contains($0.key.lowercased()) }
@@ -213,26 +228,28 @@ public enum VietmapSceneBuilder {
         extent: Int,
         latitude: Double,
         longitude: Double,
-        zoom: Int,
+        tileZoom: Int,
         tileX: Int,
         tileY: Int,
+        displayZoom: Int,
         lineClass: SceneLineClass
     ) -> SceneSegment? {
-        let scale = pow(2, Double(zoom))
+        let displayScale = pow(2, Double(displayZoom))
+        let overscale = pow(2, Double(displayZoom - tileZoom))
         let tileSize = 256.0
         let extentScale = tileSize / Double(extent)
-        let worldWidth = scale * tileSize
+        let worldWidth = displayScale * tileSize
         let safeLatitude = min(max(latitude, -85.05112878), 85.05112878)
         let sine = sin(safeLatitude * .pi / 180)
         let centerX = (longitude + 180) / 360 * worldWidth
         let centerY = (0.5 - log((1 + sine) / (1 - sine)) / (4 * .pi)) * worldWidth
         let startWorld = (
-            Double(tileX) * tileSize + Double(start.x) * extentScale,
-            Double(tileY) * tileSize + Double(start.y) * extentScale
+            (Double(tileX) * tileSize + Double(start.x) * extentScale) * overscale,
+            (Double(tileY) * tileSize + Double(start.y) * extentScale) * overscale
         )
         let endWorld = (
-            Double(tileX) * tileSize + Double(end.x) * extentScale,
-            Double(tileY) * tileSize + Double(end.y) * extentScale
+            (Double(tileX) * tileSize + Double(end.x) * extentScale) * overscale,
+            (Double(tileY) * tileSize + Double(end.y) * extentScale) * overscale
         )
         var x0 = startWorld.0 - centerX + Double(RenderProtocol.viewportWidth / 2)
         var y0 = startWorld.1 - centerY + Double(RenderProtocol.viewportHeight / 2)

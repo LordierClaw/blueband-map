@@ -42,7 +42,13 @@ public struct IndexedRaster: Equatable, Sendable {
         pixels[y * width + x] = color.rawValue
     }
 
-    public mutating func drawLine(from start: ScenePoint, to end: ScenePoint, color: Palette) {
+    public mutating func drawLine(
+        from start: ScenePoint,
+        to end: ScenePoint,
+        color: Palette,
+        thickness: Int = 1
+    ) {
+        let radius = max(0, thickness / 2)
         var x0 = Int(start.x)
         var y0 = Int(start.y)
         let x1 = Int(end.x)
@@ -54,8 +60,10 @@ public struct IndexedRaster: Equatable, Sendable {
         var error = dx + dy
 
         while true {
-            if x0 >= 0, x0 < width, y0 >= 0, y0 < height {
-                pixels[y0 * width + x0] = color.rawValue
+            for y in (y0 - radius)...(y0 + radius) {
+                for x in (x0 - radius)...(x0 + radius) where x >= 0 && x < width && y >= 0 && y < height {
+                    pixels[y * width + x] = color.rawValue
+                }
             }
             if x0 == x1 && y0 == y1 { break }
             let twiceError = 2 * error
@@ -72,10 +80,24 @@ public struct IndexedRaster: Equatable, Sendable {
 
     public static func render(scene: NavigationScene) throws -> IndexedRaster {
         var raster = try IndexedRaster()
-        for lineClass in [SceneLineClass.minor, .major, .route] {
-            for segment in scene.segments where segment.lineClass == lineClass {
-                raster.drawLine(from: segment.start, to: segment.end, color: palette(for: lineClass))
-            }
+        for segment in scene.segments where segment.lineClass != .route {
+            raster.drawLine(
+                from: segment.start,
+                to: segment.end,
+                color: .minor,
+                thickness: segment.lineClass == .major ? 5 : 3
+            )
+        }
+        for segment in scene.segments where segment.lineClass != .route {
+            raster.drawLine(
+                from: segment.start,
+                to: segment.end,
+                color: .major,
+                thickness: segment.lineClass == .major ? 3 : 1
+            )
+        }
+        for segment in scene.segments where segment.lineClass == .route {
+            raster.drawLine(from: segment.start, to: segment.end, color: .route, thickness: 5)
         }
         try raster.setPixel(
             x: Int(scene.currentPosition.x),
@@ -85,11 +107,4 @@ public struct IndexedRaster: Equatable, Sendable {
         return raster
     }
 
-    private static func palette(for lineClass: SceneLineClass) -> Palette {
-        switch lineClass {
-        case .minor: .minor
-        case .major: .major
-        case .route: .route
-        }
-    }
 }

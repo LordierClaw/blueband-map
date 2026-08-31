@@ -5,7 +5,7 @@ import BlueBandMapCore
 
 enum BlueBandProduct {
     static let displayName = "BlueBandMap"
-    static let version = "0.1.6"
+    static let version = "0.1.7"
     static let bundleIdentifier = "dev.lordierclaw.bluebandmap"
     static let rpkPackage = "dev.lordierclaw.bluebandmap.band"
 }
@@ -29,7 +29,6 @@ struct BlueBandMapApp: App {
         )
         let staticMapProvider = VietmapStaticMapClient(transport: vietmapTransport)
         let h1AssetFactory = H1AssetFactory(
-            staticMapProvider: staticMapProvider,
             styleClient: VietmapStyleClient(transport: vietmapTransport),
             tileTransport: vietmapTransport
         )

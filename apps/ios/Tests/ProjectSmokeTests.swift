@@ -6,7 +6,7 @@ final class ProjectSmokeTests: XCTestCase {
     func testIdentityConstantsAreStable() {
         XCTAssertEqual(BlueBandProduct.bundleIdentifier, "dev.lordierclaw.bluebandmap")
         XCTAssertEqual(BlueBandProduct.rpkPackage, "dev.lordierclaw.bluebandmap.band")
-        XCTAssertEqual(BlueBandProduct.version, "0.1.6")
+        XCTAssertEqual(BlueBandProduct.version, "0.1.7")
     }
 
     func testM1StateHasOnlyTheApprovedCases() {

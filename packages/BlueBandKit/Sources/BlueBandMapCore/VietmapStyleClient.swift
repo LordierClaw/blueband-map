@@ -80,7 +80,7 @@ public struct VietmapStyleClient: Sendable {
                   let source = layer["source"] as? String else { continue }
             let sourceLayer = layer["source-layer"] as? String ?? ""
             let layerID = layer["id"] as? String ?? ""
-            let searchable = (sourceLayer + " " + layerID).lowercased()
+            let searchable = (sourceLayer.isEmpty ? layerID : sourceLayer).lowercased()
             guard Self.roadTokens.contains(where: { searchable.contains($0) }) else { continue }
             selectedLayersBySource[source, default: []].insert(sourceLayer.isEmpty ? layerID : sourceLayer)
         }

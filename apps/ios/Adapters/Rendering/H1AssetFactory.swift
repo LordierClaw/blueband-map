@@ -10,18 +10,15 @@ struct H1AssetFactory: Sendable {
         case tileHasNoRoads
     }
 
-    let staticMapProvider: any StaticMapProviding
     let styleClient: VietmapStyleClient?
     let tileTransport: (any MapHTTPTransport)?
     let request: StaticMapRequest
 
     init(
-        staticMapProvider: any StaticMapProviding,
         styleClient: VietmapStyleClient? = nil,
         tileTransport: (any MapHTTPTransport)? = nil,
         request: StaticMapRequest = M1Configuration.request
     ) {
-        self.staticMapProvider = staticMapProvider
         self.styleClient = styleClient
         self.tileTransport = tileTransport
         self.request = request
@@ -40,21 +37,13 @@ struct H1AssetFactory: Sendable {
     ) async throws -> RenderAsset {
         switch mode {
         case .rasterStaticCompact:
-            guard let serviceKey else { throw VietmapStaticMapError.missingServiceKey }
-            let compactRequest = StaticMapRequest(
-                latitude: request.latitude,
-                longitude: request.longitude,
-                zoom: max(0, request.zoom - 1),
-                width: 159,
-                height: 270
-            )
-            let map = try await staticMapProvider.fetch(compactRequest, serviceKey: serviceKey)
+            let scene = try await makeVietmapScene(tileMapKey: tileMapKey, maximumSegments: 80)
             return try RenderAsset(
                 kind: .raster,
                 formatVersion: RenderProtocol.formatVersion,
                 width: RenderProtocol.viewportWidth,
                 height: RenderProtocol.viewportHeight,
-                data: try IndexedPNGEncoder.quantize(map.data, maximumColors: 16),
+                data: IndexedPNGEncoder.encode(try IndexedRaster.render(scene: scene)),
                 primitives: 0
             )
 
@@ -82,41 +71,55 @@ struct H1AssetFactory: Sendable {
             throw Error.missingTileMapConfiguration
         }
         let template = try await styleClient.discover(tileMapKey: tileMapKey)
-        let zoom = Self.clampedZoom(request.zoom, template: template)
-        let coordinate = Self.tileCoordinate(
+        let displayZoom = max(0, request.zoom - 1)
+        let tileZoom = Self.clampedZoom(displayZoom, template: template)
+        let coordinates = Self.tileCoordinates(
             latitude: request.latitude,
             longitude: request.longitude,
-            zoom: zoom
+            displayZoom: displayZoom,
+            tileZoom: tileZoom
         )
-        let tileURL = try template.url(
-            z: zoom,
-            x: coordinate.x,
-            y: coordinate.y,
-            tileMapKey: tileMapKey
-        )
-        let response = try await tileTransport.execute(MapHTTPRequest(
-            method: "GET",
-            url: tileURL,
-            headers: [
-                "Accept": "application/vnd.mapbox-vector-tile, application/x-protobuf, application/octet-stream",
-            ],
-            body: Data(),
-            maximumResponseBytes: MapboxVectorTile.maximumBodyBytes
-        ))
-        guard response.statusCode == 200 else { throw Error.tileHTTPStatus(response.statusCode) }
-        guard Self.isVectorTileContentType(response.header(named: "Content-Type"), url: tileURL) else {
-            throw Error.tileWrongContentType
+        let tiles = try await withThrowingTaskGroup(of: VietmapSceneTile.self) { group in
+            for coordinate in coordinates {
+                group.addTask {
+                    let tileURL = try template.url(
+                        z: tileZoom,
+                        x: coordinate.x,
+                        y: coordinate.y,
+                        tileMapKey: tileMapKey
+                    )
+                    let response = try await tileTransport.execute(MapHTTPRequest(
+                        method: "GET",
+                        url: tileURL,
+                        headers: [
+                            "Accept": "application/vnd.mapbox-vector-tile, application/x-protobuf, application/octet-stream",
+                        ],
+                        body: Data(),
+                        maximumResponseBytes: MapboxVectorTile.maximumBodyBytes
+                    ))
+                    guard response.statusCode == 200 else { throw Error.tileHTTPStatus(response.statusCode) }
+                    guard Self.isVectorTileContentType(response.header(named: "Content-Type"), url: tileURL) else {
+                        throw Error.tileWrongContentType
+                    }
+                    guard !response.body.isEmpty else { throw Error.tileEmpty }
+                    return VietmapSceneTile(
+                        tile: try VietmapVectorTileDecoder.decode(response.body),
+                        zoom: tileZoom,
+                        x: coordinate.x,
+                        y: coordinate.y
+                    )
+                }
+            }
+            var result = [VietmapSceneTile]()
+            for try await tile in group { result.append(tile) }
+            return result.sorted { $0.y == $1.y ? $0.x < $1.x : $0.y < $1.y }
         }
-        guard !response.body.isEmpty else { throw Error.tileEmpty }
-        let tile = try VietmapVectorTileDecoder.decode(response.body)
         let scene = try VietmapSceneBuilder.build(
-            tile: tile,
+            tiles: tiles,
             sourceLayers: Set(template.sourceLayers),
             latitude: request.latitude,
             longitude: request.longitude,
-            zoom: zoom,
-            tileX: coordinate.x,
-            tileY: coordinate.y,
+            displayZoom: displayZoom,
             headingDegrees: 0,
             maneuver: .straight,
             distanceMeters: 0,
@@ -137,22 +140,29 @@ struct H1AssetFactory: Sendable {
         )
     }
 
-    private static func tileCoordinate(
+    private static func tileCoordinates(
         latitude: Double,
         longitude: Double,
-        zoom: Int
-    ) -> (x: Int, y: Int) {
-        let count = 1 << zoom
-        let x = Int(floor((longitude + 180) / 360 * Double(count)))
+        displayZoom: Int,
+        tileZoom: Int
+    ) -> [(x: Int, y: Int)] {
+        let displayCount = 1 << displayZoom
+        let tileCount = 1 << tileZoom
+        let worldWidth = Double(displayCount * 256)
+        let centerX = (longitude + 180) / 360 * worldWidth
         let safeLatitude = min(max(latitude, -85.05112878), 85.05112878)
         let radians = safeLatitude * .pi / 180
-        let y = Int(floor(
-            (1 - log(tan(radians) + 1 / cos(radians)) / .pi) / 2 * Double(count)
-        ))
-        return (
-            max(0, min(count - 1, x)),
-            max(0, min(count - 1, y))
-        )
+        let centerY = (1 - log(tan(radians) + 1 / cos(radians)) / .pi) / 2 * worldWidth
+        let overscale = pow(2, Double(displayZoom - tileZoom))
+        let minimumX = Int(floor((centerX - Double(RenderProtocol.viewportWidth) / 2) / overscale / 256))
+        let maximumX = Int(floor((centerX + Double(RenderProtocol.viewportWidth) / 2) / overscale / 256))
+        let minimumY = Int(floor((centerY - Double(RenderProtocol.viewportHeight) / 2) / overscale / 256))
+        let maximumY = Int(floor((centerY + Double(RenderProtocol.viewportHeight) / 2) / overscale / 256))
+        return (minimumY...maximumY).flatMap { y in
+            (minimumX...maximumX).map { x in
+                (max(0, min(tileCount - 1, x)), max(0, min(tileCount - 1, y)))
+            }
+        }
     }
 
     private static func clampedZoom(_ requestedZoom: Int, template: VectorTileTemplate) -> Int {

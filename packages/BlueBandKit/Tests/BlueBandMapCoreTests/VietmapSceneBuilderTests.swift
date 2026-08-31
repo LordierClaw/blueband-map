@@ -205,7 +205,7 @@ final class VietmapSceneBuilderTests: XCTestCase {
 
         XCTAssertEqual(scene.segments.count, 40)
         XCTAssertTrue(scene.segments.contains {
-            $0.start.y == $0.end.y && Int($0.end.x) - Int($0.start.x) > 90
+            $0.start.y == $0.end.y && Int($0.end.x) - Int($0.start.x) > 40
         })
     }
 
@@ -257,5 +257,34 @@ final class VietmapSceneBuilderTests: XCTestCase {
         )
 
         XCTAssertEqual(scene.segments.count, 60)
+    }
+
+    func testDoesNotMagnifyASelectedRoadNetworkAwayFromItsMapCoordinates() throws {
+        let tiles = try (0..<8).map { index in
+            try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+                classValue: "minor",
+                points: [
+                    VectorTileFixture.Point(x: 2_000, y: 2_000 + index * 10),
+                    VectorTileFixture.Point(x: 2_096, y: 2_000 + index * 10),
+                ]
+            ))
+        }
+
+        let scene = try VietmapSceneBuilder.build(
+            tiles: tiles,
+            latitude: 0,
+            longitude: 0,
+            zoom: 0,
+            tileX: 0,
+            tileY: 0,
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0,
+            maximumSegments: 8
+        )
+
+        XCTAssertTrue(scene.segments.contains {
+            $0.start == ScenePoint(x: 103, y: 177) && $0.end == ScenePoint(x: 109, y: 177)
+        })
     }
 }

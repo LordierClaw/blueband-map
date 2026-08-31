@@ -149,7 +149,7 @@ final class AppModel: ObservableObject {
         self.m1RunIDGenerator = m1RunIDGenerator
         let resolvedH1Session = h1Session ?? BandSessionH1Sender(session: session)
         let resolvedH1Provider = h1AssetProvider
-            ?? H1AssetFactory(staticMapProvider: staticMapProvider).provider
+            ?? H1AssetFactory().provider
         self.h1Coordinator = H1RenderCoordinator(
             session: resolvedH1Session,
             assetProvider: resolvedH1Provider,

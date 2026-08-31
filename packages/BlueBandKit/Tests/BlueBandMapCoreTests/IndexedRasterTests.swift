@@ -30,4 +30,25 @@ final class IndexedRasterTests: XCTestCase {
         XCTAssertEqual(raster.pixel(x: 8, y: 8), IndexedRaster.Palette.route.rawValue)
         XCTAssertTrue(raster.pixels.allSatisfy { $0 <= IndexedRaster.Palette.current.rawValue })
     }
+
+    func testNativeRoadRasterUsesDarkCasingAndLightCenterline() throws {
+        let scene = try NavigationScene(
+            currentPosition: ScenePoint(x: 100, y: 100),
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0,
+            segments: [
+                SceneSegment(
+                    start: ScenePoint(x: 10, y: 20),
+                    end: ScenePoint(x: 30, y: 20),
+                    lineClass: .minor
+                ),
+            ]
+        )
+
+        let raster = try IndexedRaster.render(scene: scene)
+
+        XCTAssertEqual(raster.pixel(x: 20, y: 19), IndexedRaster.Palette.minor.rawValue)
+        XCTAssertEqual(raster.pixel(x: 20, y: 20), IndexedRaster.Palette.major.rawValue)
+    }
 }

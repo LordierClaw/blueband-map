@@ -17,6 +17,8 @@ final class H1RenderCoordinatorTests: XCTestCase {
         XCTAssertEqual(H1TestMode.vectorTileMap60.renderer, .vector)
         XCTAssertEqual(H1TestMode.vectorTileMap40.expectedPrimitives, 40)
         XCTAssertEqual(H1TestMode.vectorTileMap60.expectedPrimitives, 60)
+        XCTAssertFalse(H1TestMode.rasterStaticCompact.requiresServiceKey)
+        XCTAssertTrue(H1TestMode.rasterStaticCompact.requiresTileMapKey)
     }
 
     func testProviderHTTPStatusIsPreservedWithoutProviderBodyOrKey() async {

@@ -22,11 +22,11 @@ enum H1TestMode: String, CaseIterable, Sendable {
     }
 
     var requiresServiceKey: Bool {
-        self == .rasterStaticCompact
+        false
     }
 
     var requiresTileMapKey: Bool {
-        self != .rasterStaticCompact
+        true
     }
 }
 

@@ -39,6 +39,31 @@ final class VietmapStyleClientTests: XCTestCase {
         XCTAssertTrue(request.url.absoluteString.contains("apikey=tile-test-key"))
     }
 
+    func testRoadDiscoveryDoesNotTreatRailwayStyleIDsAsStreetGeometry() async throws {
+        let style = """
+        {
+          "version": 8,
+          "sources": {
+            "openmaptiles": {
+              "type": "vector",
+              "maxzoom": 15,
+              "tiles": ["https://maps.vietmap.vn/tiles/{z}/{x}/{y}.pbf?apikey={apikey}"]
+            }
+          },
+          "layers": [
+            {"id":"road_minor","type":"line","source":"openmaptiles","source-layer":"road"},
+            {"id":"road_rail","type":"line","source":"openmaptiles","source-layer":"railway"}
+          ]
+        }
+        """
+
+        let template = try await VietmapStyleClient(
+            transport: StyleRecordingTransport(responses: [jsonResponse(style)])
+        ).discover(tileMapKey: key)
+
+        XCTAssertEqual(template.sourceLayers, ["road"])
+    }
+
     func testResolvesOneTileJSONAndNeverIncludesKeyInErrors() async throws {
         let style = """
         {
