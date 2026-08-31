@@ -136,7 +136,7 @@ final class RouteCardRenderCoordinator {
         session: any RouteCardSessionSending,
         clock: any BlueBandClock = ContinuousBlueBandClock(),
         resultTimeout: Duration = .seconds(15),
-        transferWindow: Int = 1,
+        transferWindow: Int = 2,
         runIDGenerator: @escaping @Sendable () -> String = { RouteCardRenderCoordinator.makeRunID() },
         sceneIDGenerator: @escaping @Sendable () -> String = { RouteCardRenderCoordinator.makeSceneID() }
     ) {
@@ -149,7 +149,11 @@ final class RouteCardRenderCoordinator {
         self.sceneIDGenerator = sceneIDGenerator
     }
 
-    func start(asset: RenderAsset, diagnostics: RouteCardRenderDiagnostics = .init()) async {
+    func start(
+        asset: RenderAsset,
+        diagnostics: RouteCardRenderDiagnostics = .init(),
+        preview: RenderNavigationPreview? = nil
+    ) async {
         let mode = RouteCardMode.routeCard
         guard operationToken == nil else { return }
         guard !requiresReconnect else {
@@ -188,7 +192,8 @@ final class RouteCardRenderCoordinator {
                 mode: mode,
                 asset: asset,
                 runID: runID,
-                sceneID: sceneID
+                sceneID: sceneID,
+                preview: preview
             )
         }
         operationTask = task
@@ -268,7 +273,8 @@ final class RouteCardRenderCoordinator {
         mode: RouteCardMode,
         asset: RenderAsset,
         runID: String,
-        sceneID: String
+        sceneID: String,
+        preview: RenderNavigationPreview?
     ) async {
         guard ownsLive(token) else { return }
         guard assetMatchesMode(asset, mode: mode) else {
@@ -281,7 +287,7 @@ final class RouteCardRenderCoordinator {
         let prepare: RenderPrepareBody
         let steps: [RenderTransferStep]
         do {
-            prepare = try RenderPrepareBody(runID: runID, sceneID: sceneID, asset: asset)
+            prepare = try RenderPrepareBody(runID: runID, sceneID: sceneID, asset: asset, preview: preview)
             steps = try RenderTransferPlan.make(asset: asset, runID: runID, sceneID: sceneID)
         } catch {
             finishOwned(code: "ASSET_INVALID", token: token, requiresReconnect: false)

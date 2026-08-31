@@ -354,7 +354,13 @@ final class AppModel: ObservableObject {
             let limitedMap = try await publish(route: route, progress: progress, location: first, tileMapKey: tileMapKey)
             var lastReroute = Date.distantPast
             var lastGoodLocation = first.geoPoint
-            sendNavigationUpdate(route: route, progress: progress, location: first.geoPoint, status: limitedMap ? .limitedMap : .navigating)
+            sendNavigationUpdate(
+                route: route,
+                progress: progress,
+                location: first.geoPoint,
+                headingDegrees: first.course,
+                status: limitedMap ? .limitedMap : .navigating
+            )
 
             while let location = try await iterator.next() {
                 guard !Task.isCancelled else { return }
@@ -364,13 +370,13 @@ final class AppModel: ObservableObject {
                 let displayedLocation = goodFix ? location.geoPoint : lastGoodLocation
                 if goodFix && Self.meters(location.geoPoint, destination) <= 25 {
                     navigationState = .arrived
-                    sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, status: .arrived)
+                    sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, status: .arrived)
                     return
                 }
                 var contextRefreshed = false
                 if progress.shouldReroute, Date().timeIntervalSince(lastReroute) >= 15 {
                     navigationState = .rerouting
-                    sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, status: .rerouting)
+                    sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, status: .rerouting)
                     route = try await makeRoute(from: location, to: destination, serviceKey: serviceKey)
                     tracker = RouteProgressTracker()
                     progress = tracker.update(route: route, location: location.geoPoint, horizontalAccuracyMeters: location.horizontalAccuracy)
@@ -392,7 +398,7 @@ final class AppModel: ObservableObject {
                     scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey)
                 }
                 navigationState = Self.state(status)
-                sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, status: status)
+                sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, status: status)
             }
         } catch is CancellationError {
             return
@@ -500,6 +506,16 @@ final class AppModel: ObservableObject {
             throw CancellationError()
         }
         routePreviewPNG = asset.data
+        let preview = try RenderNavigationPreview(
+            maneuver: instruction?.maneuver ?? .straight,
+            distanceMeters: Self.remainingDistance(
+                route: route,
+                location: location.geoPoint,
+                progressIndex: progress.pointIndex,
+                instruction: instruction
+            ),
+            street: instruction?.streetName ?? ""
+        )
         await renderCoordinator.start(asset: asset, diagnostics: RouteCardRenderDiagnostics(
             gpsWaitMilliseconds: gpsWaitMilliseconds,
             routeRequestMilliseconds: routeRequestMilliseconds,
@@ -511,7 +527,7 @@ final class AppModel: ObservableObject {
             retainedLineLayers: snapshot.retainedLineLayers,
             retainedSymbolLayers: snapshot.retainedSymbolLayers,
             cacheState: snapshot.cacheState
-        ))
+        ), preview: preview)
         guard case .displayed = renderCoordinator.state,
               let sceneID = renderCoordinator.lastDisplayedSceneID else {
             throw NavigationRuntimeError.bandDisplayFailed(renderCoordinator.failureCode ?? "BAND_RESULT_MISSING")
@@ -557,6 +573,7 @@ final class AppModel: ObservableObject {
                     route: request.route,
                     progress: request.progress,
                     location: request.location.geoPoint,
+                    headingDegrees: request.location.course,
                     status: .navigating
                 )
             } catch is CancellationError {
@@ -567,6 +584,7 @@ final class AppModel: ObservableObject {
                     route: request.route,
                     progress: request.progress,
                     location: request.location.geoPoint,
+                    headingDegrees: request.location.course,
                     status: .limitedMap
                 )
                 logNavigation("map.refresh.failed", "code=LIMITED_MAP")
@@ -575,7 +593,13 @@ final class AppModel: ObservableObject {
         snapshotRefreshTask = nil
     }
 
-    private func sendNavigationUpdate(route: RoutePlan, progress: RouteProgress, location: GeoPoint, status: NavigationStatus) {
+    private func sendNavigationUpdate(
+        route: RoutePlan,
+        progress: RouteProgress,
+        location: GeoPoint,
+        headingDegrees: Double,
+        status: NavigationStatus
+    ) {
         guard let scene = activeSceneID else { return }
         let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
         let markerLocation = progress.matchedLocation ?? location
@@ -591,6 +615,7 @@ final class AppModel: ObservableObject {
             x: marker.x,
             y: marker.y,
             maneuver: status == .arrived ? .arrive : (instruction?.maneuver ?? .straight),
+            headingBucket: Self.headingBucket(headingDegrees >= 0 ? headingDegrees : Double(instruction?.headingDegrees ?? 0)),
             distanceMeters: Self.remainingDistance(route: route, location: location, progressIndex: progress.pointIndex, instruction: instruction),
             street: instruction?.streetName ?? "",
             status: status
@@ -605,6 +630,12 @@ final class AppModel: ObservableObject {
         )
         guard let first = updateCoalescer.enqueue(update), updateTask == nil else { return }
         updateTask = Task { @MainActor [weak self] in await self?.drainUpdates(first) }
+    }
+
+    static func headingBucket(_ degrees: Double) -> Int {
+        let normalized = degrees.truncatingRemainder(dividingBy: 360)
+        let positive = normalized < 0 ? normalized + 360 : normalized
+        return Int((positive + 22.5) / 45) % 8
     }
 
     var navigationStartText: String { Self.fullCoordinate(navigationStart) }

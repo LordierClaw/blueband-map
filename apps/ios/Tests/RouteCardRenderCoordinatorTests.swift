@@ -98,6 +98,32 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
             XCTAssertEqual(coordinator.lastRunRecord?.metrics.bandPublicationMilliseconds, 1)
         }
     }
+
+    func testDefaultWindowIsTwoAndPrepareCarriesNavigationPreview() async throws {
+        let session = WindowedRouteCardSession()
+        let coordinator = RouteCardRenderCoordinator(
+            session: session,
+            runIDGenerator: { "nav-run-preview" },
+            sceneIDGenerator: { "scene-preview" }
+        )
+        await session.setReceiver { envelope in coordinator.consume(envelope) }
+        let asset = try RenderAsset(
+            kind: .raster,
+            formatVersion: RenderProtocol.formatVersion,
+            width: RenderProtocol.viewportWidth,
+            height: RenderProtocol.viewportHeight,
+            data: Data(repeating: 0x5A, count: 2_048),
+            primitives: 0
+        )
+        let preview = try RenderNavigationPreview(maneuver: .right, distanceMeters: 88, street: "Chu Huy Man")
+
+        await coordinator.start(asset: asset, preview: preview)
+
+        let maximumConcurrentChunks = await session.maximumConcurrentChunks
+        let preparedPreview = await session.prepareValue("preview")
+        XCTAssertEqual(maximumConcurrentChunks, 2)
+        XCTAssertEqual(preparedPreview, .object(preview.jsonBody()))
+    }
 }
 
 private struct NeverReadyRouteCardSession: RouteCardSessionSending {
@@ -120,6 +146,8 @@ private actor WindowedRouteCardSession: RouteCardSessionSending {
     init(chunkDelay: Duration = .milliseconds(5)) { self.chunkDelay = chunkDelay }
 
     func setReceiver(_ receiver: @escaping Receiver) { self.receiver = receiver }
+
+    func prepareValue(_ key: String) -> JSONValue? { prepareBody[key] }
 
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
         if topic == RenderProtocol.prepareTopic {

@@ -8,6 +8,14 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testHeadingBucketRoundsCompassCourseIntoEightResources() {
+        XCTAssertEqual(AppModel.headingBucket(-1), 0)
+        XCTAssertEqual(AppModel.headingBucket(22), 0)
+        XCTAssertEqual(AppModel.headingBucket(23), 1)
+        XCTAssertEqual(AppModel.headingBucket(180), 4)
+        XCTAssertEqual(AppModel.headingBucket(359), 0)
+    }
+
     func testSelectingWithoutAuthKeyKeepsOwnedScanActive() async {
         let central = PickerCentral()
         let model = makeModel(central: central, authMode: .missing)

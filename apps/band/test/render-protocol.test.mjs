@@ -47,3 +47,17 @@ test("matching prepare admits begin and stale or missing preparation is rejected
   assert.equal(validateAssetBegin({ ...body, run: body.runId, scene: body.sceneId }, null).code, "notPrepared")
   assert.equal(validateAssetBegin({ ...body, run: "nav-run-stale", scene: body.sceneId }, result.prepared).code, "notPrepared")
 })
+
+test("prepare admits a bounded navigation preview", () => {
+  const preview = { maneuver: "right", distanceM: 88, street: "Chu Huy Man" }
+  const result = validatePrepare(prepare({ preview }))
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.prepared.preview, preview)
+
+  for (const invalid of [
+    null,
+    { maneuver: "fork", distanceM: 88, street: "Chu Huy Man" },
+    { maneuver: "right", distanceM: -1, street: "Chu Huy Man" },
+    { maneuver: "right", distanceM: 88, street: "x".repeat(49) }
+  ]) assert.equal(validatePrepare(prepare({ preview: invalid })).ok, false)
+})

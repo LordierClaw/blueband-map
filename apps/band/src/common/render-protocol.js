@@ -50,6 +50,13 @@ function reject(code) {
   return { ok: false, code }
 }
 
+function validPreview(preview) {
+  return preview && typeof preview === "object" && !Array.isArray(preview) &&
+    ["straight", "left", "right", "uTurn", "roundabout", "arrive"].includes(preview.maneuver) &&
+    validInteger(preview.distanceM) && preview.distanceM >= 0 &&
+    typeof preview.street === "string" && utf8Length(preview.street) <= 48
+}
+
 function validatePrepare(body, options = {}) {
   if (options.prepared) return reject("busy")
   if (!body || typeof body !== "object" || Array.isArray(body)) return reject("unsupportedRenderer")
@@ -69,6 +76,7 @@ function validatePrepare(body, options = {}) {
   if (options.availableStorageBytes !== undefined && body.bytes > options.availableStorageBytes) {
     return reject("insufficientStorage")
   }
+  if (body.preview !== undefined && !validPreview(body.preview)) return reject("unsupportedFormatVersion")
   return {
     ok: true,
     prepared: {
@@ -81,7 +89,8 @@ function validatePrepare(body, options = {}) {
       height: body.height,
       bytes: body.bytes,
       sha256: body.sha256,
-      primitives: body.primitives
+      primitives: body.primitives,
+      preview: body.preview
     }
   }
 }

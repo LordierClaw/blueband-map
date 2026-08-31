@@ -135,15 +135,16 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
   statuses.forEach((status, seq) => page.receiveMessage({ data: envelope(`nav-${seq}`, "nav.update", {
     scene: SCENE, seq, x: 100 + seq, y: 300 - seq,
     maneuver: status === "arrived" ? "arrive" : "right",
-    distanceM: 180 - seq, street: "Next Road", status
+    heading: seq, distanceM: 180 - seq, street: "Next Road", status
   }) }))
 
   assert.equal(page.navStatus, "ARRIVED")
-  assert.equal(page.navArrow, "●")
-  assert.equal(page.navMarkerStyle, "left:99px;top:291px;")
+  assert.equal(page.navArrowPath, "/common/maneuver-arrive.png")
+  assert.equal(page.navMarkerPath, "/common/marker-4.png")
+  assert.equal(page.navMarkerStyle, "left:91px;top:280px;")
   assert.equal(page.navStatusVisible, true)
   page.receiveMessage({ data: envelope("nav-5", "nav.update", {
-    scene: SCENE, seq: 5, x: 104, y: 296, maneuver: "straight", distanceM: 120, street: "Next Road", status: "navigating"
+    scene: SCENE, seq: 5, x: 104, y: 296, heading: 3, maneuver: "straight", distanceM: 120, street: "Next Road", status: "navigating"
   }) })
   assert.equal(page.navStatusVisible, false)
   page.receiveMessage({ data: envelope("stale", "nav.update", {
@@ -155,6 +156,19 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
   assert.equal(page.navSequence, 5)
   assert.equal(page.navStreet, "Next Road")
   assert.equal(sent.filter(message => message.type === "ack" && /^nav-|stale|wrong/.test(message.id)).length, 8)
+})
+
+test("render.prepare shows compact guidance before the map arrives", async () => {
+  const { page } = await harness()
+  page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare({
+    preview: { maneuver: "right", distanceM: 88, street: "Chu Huy Man" }
+  })) })
+
+  assert.equal(page.navArrowPath, "/common/maneuver-right.png")
+  assert.equal(page.navDistance, "88 m")
+  assert.equal(page.navStreet, "Chu Huy Man")
+  assert.equal(page.navStatus, "LOADING MAP")
+  assert.equal(page.navStatusVisible, true)
 })
 
 test("startup navigation status is visible before the first map", async () => {
@@ -179,7 +193,7 @@ test("disconnect clears transfer ownership and nav sequence without accepting qu
   const before = sent.length
   connection.onclose()
   page.receiveMessage({ data: envelope("queued", "nav.update", {
-    scene: SCENE, seq: 1, x: 106, y: 320, maneuver: "straight", distanceM: 1, street: "Queued", status: "navigating"
+    scene: SCENE, seq: 1, x: 106, y: 320, heading: 0, maneuver: "straight", distanceM: 1, street: "Queued", status: "navigating"
   }) })
   assert.equal(page.activeTransfer, null)
   assert.equal(page.activeMapOperationID, "")
