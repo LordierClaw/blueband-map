@@ -7,13 +7,15 @@ the tester.
 
 ## Artifact identity
 
-- Source commit: `5b84ad14abf3dff0b9381d1a53202eba6cefd6fc`
-- iOS GitHub Actions run: [33381605478](https://github.com/LordierClaw/blueband-map/actions/runs/33381605478)
-- Band GitHub Actions run: [33381987160](https://github.com/LordierClaw/blueband-map/actions/runs/33381987160)
-- IPA: `BlueBandMap-unsigned.ipa`, version `0.1.7 (8)`, 806546 bytes
-- IPA SHA-256: `bba2d8a37b322f5f17ad71fbe679150b4f5225837beb21d5039557f4a06ef96d`
-- RPK: `dev.lordierclaw.bluebandmap.band.debug.0.2.9.rpk`, version `0.2.9 (11)`, 23195 bytes
-- RPK SHA-256: `78b089c7cce8074436992f344d014a928367c3df31a5be6d871601dad9a629fb`
+- Source commit: `4c518ad7a35e38c76d04b098984fefc427c1435d`
+- iOS GitHub Actions run: [33385299258](https://github.com/LordierClaw/blueband-map/actions/runs/33385299258)
+- Band GitHub Actions run: [33385687502](https://github.com/LordierClaw/blueband-map/actions/runs/33385687502)
+- IPA: `BlueBandMap-unsigned.ipa`, version `0.1.8 (9)`, 835784 bytes
+- IPA SHA-256: `4a106de7168eacd89f124b518c81ee9783b5402c9d56cc48c248740430545a61`
+- RPK: `dev.lordierclaw.bluebandmap.band.debug.0.2.9.rpk`, version `0.2.9 (11)`, 23194 bytes
+- RPK SHA-256: `d106afeefaf89a6730a0b87446b68724631e9a5694df5d4db6ce51bdbc845ea3`
+
+Version change: IPA only (`0.1.7 (8)` → `0.1.8 (9)`); RPK remains `0.2.9 (11)`.
 
 The IPA is unsigned. Installation requires the tester's normal Apple
 provisioning/signing path; no signing material belongs in this repository.
@@ -48,6 +50,10 @@ result of every row. A test result is `PASS-HW`, `FAIL-HW`, `BLOCKED-ENV`, or
    Vietmap Route v4 motorcycle request, receives a valid route, and shows a
    route preview before asset transfer. A provider error must stop navigation;
    it must not show mock coordinates.
+   If start fails, record the visible error code, open `Debug log`, and use
+   `Export debug log`. The export must contain the start/destination summary,
+   route response or failure stage, and each decoded instruction while keeping
+   service keys, UUIDs and full-precision coordinates out of the report.
 3. Compare the Band image with the iPhone preview carrying the same `scene`.
    Expected: a continuous cyan route, selected gray side roads, a visible
    maneuver point, a moving native marker, and the correct arrow/distance.
