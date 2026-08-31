@@ -10,7 +10,7 @@ function prepare(overrides = {}) {
     format: "image/png",
     formatVersion: 1,
     width: 212,
-    height: 360,
+    height: 520,
     bytes: 128,
     sha256: "a".repeat(64),
     primitives: 0,
@@ -19,6 +19,9 @@ function prepare(overrides = {}) {
 }
 
 test("prepare validator exposes every stable bounded rejection", () => {
+  assert.equal(LIMITS.width, 212)
+  assert.equal(LIMITS.height, 520)
+  assert.equal(LIMITS.payloadBytes, 8192)
   const cases = [
     [{ renderer: "canvas" }, "unsupportedRenderer"],
     [{ formatVersion: 2 }, "unsupportedFormatVersion"],

@@ -32,7 +32,7 @@ function envelope(id, topic, body) {
 function prepare(overrides = {}) {
   return {
     runId: RUN, sceneId: SCENE, renderer: "raster", format: "image/png",
-    formatVersion: 1, width: 212, height: 360, bytes: BYTES.length,
+    formatVersion: 1, width: 212, height: 520, bytes: BYTES.length,
     sha256: DIGEST, primitives: 0, ...overrides
   }
 }
@@ -40,7 +40,7 @@ function prepare(overrides = {}) {
 function begin(overrides = {}) {
   return {
     asset: ASSET, run: RUN, scene: SCENE, renderer: "raster", format: "image/png",
-    mime: "image/png", formatVersion: 1, width: 212, height: 360,
+    mime: "image/png", formatVersion: 1, width: 212, height: 520,
     bytes: BYTES.length, sha256: DIGEST, primitives: 0, ...overrides
   }
 }
@@ -82,7 +82,7 @@ function publish(page) {
   page.mapComplete(page.pendingPublication.token)
 }
 
-test("publishes only a prepared 212x360 raster route-card and one aggregate result", async () => {
+test("publishes only a prepared 212x520 raster snapshot and one aggregate result", async () => {
   const { page, sent, file } = await harness()
   publish(page)
 
@@ -104,7 +104,7 @@ test("publishes only a prepared 212x360 raster route-card and one aggregate resu
 test("rejects vector, oversized and unprepared assets before file allocation", async () => {
   const { page, sent, file } = await harness()
   page.receiveMessage({ data: envelope("vector", "render.prepare", prepare({ renderer: "vector" })) })
-  page.receiveMessage({ data: envelope("large", "render.prepare", prepare({ bytes: 1025 })) })
+  page.receiveMessage({ data: envelope("large", "render.prepare", prepare({ bytes: 8193 })) })
   page.receiveMessage({ data: envelope("unprepared", "map.asset.begin", begin()) })
 
   assert.equal(file.writes.length, 0)
@@ -164,4 +164,61 @@ test("disconnect clears transfer ownership and nav sequence without accepting qu
   assert.equal(page.activeMapOperationID, "")
   assert.equal(page.navSequence, -1)
   assert.equal(sent.length, before)
+})
+
+test("accepts windowed unique chunk IDs in offset order and publishes a refresh atomically", async () => {
+  const { page, sent, file } = await harness()
+  publish(page)
+  const oldURI = page.confirmedMap.uri
+  const nextBytes = Uint8Array.from([4, 5, 6, 7])
+  const nextDigest = createHash("sha256").update(nextBytes).digest("hex")
+  const nextAsset = `nav-${nextDigest.slice(0, 16)}`
+  const nextScene = "scene-refresh-01"
+
+  page.receiveMessage({ data: envelope("prepare-2", "render.prepare", prepare({
+    sceneId: nextScene, sha256: nextDigest
+  })) })
+  page.receiveMessage({ data: envelope("begin-2", "map.asset.begin", begin({
+    asset: nextAsset, scene: nextScene, sha256: nextDigest
+  })) })
+  assert.equal(page.mapPath, oldURI)
+  assert.equal(page.confirmedMap.uri, oldURI)
+
+  page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", {
+    asset: nextAsset, run: RUN, scene: nextScene, offset: 0,
+    data: Buffer.from(nextBytes.slice(0, 2)).toString("base64")
+  }) })
+  page.receiveMessage({ data: envelope("chunk-2", "map.asset.chunk", {
+    asset: nextAsset, run: RUN, scene: nextScene, offset: 2,
+    data: Buffer.from(nextBytes.slice(2)).toString("base64")
+  }) })
+  page.receiveMessage({ data: envelope("end-2", "map.asset.end", {
+    asset: nextAsset, run: RUN, scene: nextScene
+  }) })
+
+  assert.equal(page.confirmedMap.uri, oldURI)
+  assert.equal(page.mapPath, oldURI)
+  assert.equal(page.pendingMapPath, `internal://files/${nextAsset}.png`)
+  assert.deepEqual(file.storage.get(page.pendingMapPath), nextBytes)
+  assert.equal(sent.filter(message => message.type === "ack" && /^chunk-/.test(message.id)).length, 2)
+
+  page.mapComplete(page.pendingPublication.token)
+  assert.equal(page.confirmedMap.scene, nextScene)
+  assert.equal(page.mapPath, `internal://files/${nextAsset}.png`)
+})
+
+test("wrong windowed offset aborts the refresh and keeps the confirmed map", async () => {
+  const { page, sent } = await harness()
+  publish(page)
+  const confirmed = page.confirmedMap
+  page.receiveMessage({ data: envelope("prepare-2", "render.prepare", prepare()) })
+  page.receiveMessage({ data: envelope("begin-2", "map.asset.begin", begin()) })
+  page.receiveMessage({ data: envelope("chunk-wrong", "map.asset.chunk", {
+    asset: ASSET, run: RUN, scene: SCENE, offset: 2,
+    data: Buffer.from(BYTES.slice(0, 2)).toString("base64")
+  }) })
+
+  assert.equal(sent.find(message => message.topic === "render.result" && message.body.status === "error").body.errorCode, "ASSET_OFFSET_INVALID")
+  assert.equal(page.confirmedMap.uri, confirmed.uri)
+  assert.equal(page.mapPath, confirmed.uri)
 })
