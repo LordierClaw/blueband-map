@@ -55,12 +55,12 @@ final class RouteCardSceneTests: XCTestCase {
         let scene = try RouteCardBuilder.build(route: route, progressIndex: 1, sideRoads: [far, nearby])
 
         XCTAssertEqual(scene.width, 212)
-        XCTAssertEqual(scene.height, 360)
+        XCTAssertEqual(scene.height, 520)
         XCTAssertEqual(scene.maneuver, .right)
         XCTAssertEqual(scene.streetName, "Next Road")
         XCTAssertEqual(scene.sideRoads.count, 1)
         XCTAssertEqual(scene.marker, ScreenPoint(x: 106, y: 320))
-        XCTAssertTrue(scene.upcomingRoute.flatMap(\.points).allSatisfy { (0..<212).contains($0.x) && (0..<360).contains($0.y) })
+        XCTAssertTrue(scene.upcomingRoute.flatMap(\.points).allSatisfy { (0..<212).contains($0.x) && (0..<520).contains($0.y) })
         XCTAssertLessThan(scene.upcomingRoute.last!.points.last!.y, scene.marker.y)
     }
 

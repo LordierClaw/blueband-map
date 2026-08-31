@@ -16,6 +16,21 @@ final class RenderRunTests: XCTestCase {
             retries: 1,
             primitives: 0,
             providerCalls: 1,
+            gpsWaitMilliseconds: 12,
+            routeRequestMilliseconds: 25,
+            styleLoadMilliseconds: 14,
+            snapshotMilliseconds: 22,
+            paletteReductionMilliseconds: 9,
+            transferPrepareMilliseconds: 5,
+            bandWriteMilliseconds: 6,
+            bandDecodeMilliseconds: 7,
+            bandPublicationMilliseconds: 8,
+            paletteSize: 16,
+            retainedFillLayers: 7,
+            retainedLineLayers: 28,
+            retainedSymbolLayers: 5,
+            transferWindow: 1,
+            cacheState: "warm",
             ackDurationsMilliseconds: [4, 10, 20, 40],
             terminalCode: "displayed"
         )
@@ -25,6 +40,9 @@ final class RenderRunTests: XCTestCase {
         XCTAssertEqual(metrics.ackMaxMilliseconds, 40)
         XCTAssertEqual(metrics.chunks, 7)
         XCTAssertEqual(metrics.providerCalls, 1)
+        XCTAssertEqual(metrics.paletteSize, 16)
+        XCTAssertEqual(metrics.retainedLineLayers, 28)
+        XCTAssertEqual(metrics.transferWindow, 1)
     }
 
     func testSanitizedExportContainsNoCredentialsIdentifiersOrExactCoordinates() throws {
@@ -62,6 +80,9 @@ final class RenderRunTests: XCTestCase {
             retries: 0,
             primitives: 0,
             providerCalls: 1,
+            paletteSize: 16,
+            transferWindow: 1,
+            cacheState: "warm",
             ackDurationsMilliseconds: Array(repeating: 420, count: 121),
             terminalCode: "displayed"
         )
@@ -104,7 +125,7 @@ final class RenderRunTests: XCTestCase {
             renderer: .raster,
             formatVersion: 1,
             width: 212,
-            height: 360,
+            height: 520,
             startedAt: "20260830T101010Z"
         )
         let event = try RenderRunEvent(sequence: 1, name: "transfer-complete", milliseconds: 70)
@@ -120,6 +141,9 @@ final class RenderRunTests: XCTestCase {
             retries: 1,
             primitives: 0,
             providerCalls: 0,
+            paletteSize: 16,
+            transferWindow: 1,
+            cacheState: "cold",
             ackDurationsMilliseconds: [4, 10, 20, 40],
             terminalCode: "displayed"
         )

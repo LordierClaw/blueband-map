@@ -81,6 +81,21 @@ public struct RenderRunMetrics: Codable, Equatable, Sendable {
     public let retries: Int
     public let primitives: Int
     public let providerCalls: Int
+    public let gpsWaitMilliseconds: Int
+    public let routeRequestMilliseconds: Int
+    public let styleLoadMilliseconds: Int
+    public let snapshotMilliseconds: Int
+    public let paletteReductionMilliseconds: Int
+    public let transferPrepareMilliseconds: Int
+    public let bandWriteMilliseconds: Int
+    public let bandDecodeMilliseconds: Int
+    public let bandPublicationMilliseconds: Int
+    public let paletteSize: Int
+    public let retainedFillLayers: Int
+    public let retainedLineLayers: Int
+    public let retainedSymbolLayers: Int
+    public let transferWindow: Int
+    public let cacheState: String
     public let ackDurationsMilliseconds: [Int]
     public let ackP50Milliseconds: Int?
     public let ackP95Milliseconds: Int?
@@ -99,17 +114,41 @@ public struct RenderRunMetrics: Codable, Equatable, Sendable {
         retries: Int,
         primitives: Int,
         providerCalls: Int,
+        gpsWaitMilliseconds: Int = 0,
+        routeRequestMilliseconds: Int = 0,
+        styleLoadMilliseconds: Int = 0,
+        snapshotMilliseconds: Int = 0,
+        paletteReductionMilliseconds: Int = 0,
+        transferPrepareMilliseconds: Int = 0,
+        bandWriteMilliseconds: Int = 0,
+        bandDecodeMilliseconds: Int = 0,
+        bandPublicationMilliseconds: Int = 0,
+        paletteSize: Int = 0,
+        retainedFillLayers: Int = 0,
+        retainedLineLayers: Int = 0,
+        retainedSymbolLayers: Int = 0,
+        transferWindow: Int = 1,
+        cacheState: String = "unknown",
         ackDurationsMilliseconds: [Int],
         terminalCode: String
     ) throws {
         let durations = [
             totalMilliseconds, providerMilliseconds, prepareMilliseconds,
             transferMilliseconds, validateMilliseconds, renderMilliseconds,
-            bytes, chunks, retries, primitives, providerCalls,
+            bytes, chunks, retries, primitives, providerCalls, gpsWaitMilliseconds,
+            routeRequestMilliseconds, styleLoadMilliseconds, snapshotMilliseconds,
+            paletteReductionMilliseconds, transferPrepareMilliseconds,
+            bandWriteMilliseconds, bandDecodeMilliseconds, bandPublicationMilliseconds,
+            paletteSize, retainedFillLayers, retainedLineLayers, retainedSymbolLayers,
         ] + ackDurationsMilliseconds
         guard durations.allSatisfy({ $0 >= 0 }) else { throw Error.negativeValue }
         guard bytes <= RenderProtocol.maximumPayloadBytes,
               primitives <= RenderProtocol.maximumPrimitives else {
+            throw Error.invalidBounds
+        }
+        guard paletteSize == 0 || paletteSize == 16 || paletteSize == 32,
+              [1, 2, 4].contains(transferWindow),
+              ["cold", "warm", "reused", "unknown"].contains(cacheState) else {
             throw Error.invalidBounds
         }
         guard RenderProtocol.isValidIdentifier(terminalCode), terminalCode.utf8.count <= 32 else {
@@ -126,6 +165,21 @@ public struct RenderRunMetrics: Codable, Equatable, Sendable {
         self.retries = retries
         self.primitives = primitives
         self.providerCalls = providerCalls
+        self.gpsWaitMilliseconds = gpsWaitMilliseconds
+        self.routeRequestMilliseconds = routeRequestMilliseconds
+        self.styleLoadMilliseconds = styleLoadMilliseconds
+        self.snapshotMilliseconds = snapshotMilliseconds
+        self.paletteReductionMilliseconds = paletteReductionMilliseconds
+        self.transferPrepareMilliseconds = transferPrepareMilliseconds
+        self.bandWriteMilliseconds = bandWriteMilliseconds
+        self.bandDecodeMilliseconds = bandDecodeMilliseconds
+        self.bandPublicationMilliseconds = bandPublicationMilliseconds
+        self.paletteSize = paletteSize
+        self.retainedFillLayers = retainedFillLayers
+        self.retainedLineLayers = retainedLineLayers
+        self.retainedSymbolLayers = retainedSymbolLayers
+        self.transferWindow = transferWindow
+        self.cacheState = cacheState
         self.ackDurationsMilliseconds = ackDurationsMilliseconds
         self.ackP50Milliseconds = Self.percentile(ackDurationsMilliseconds, percentile: 0.50)
         self.ackP95Milliseconds = Self.percentile(ackDurationsMilliseconds, percentile: 0.95)
@@ -140,7 +194,18 @@ public struct RenderRunMetrics: Codable, Equatable, Sendable {
         case transferMilliseconds = "transferMs"
         case validateMilliseconds = "validateMs"
         case renderMilliseconds = "renderMs"
+        case gpsWaitMilliseconds = "gpsWaitMs"
+        case routeRequestMilliseconds = "routeRequestMs"
+        case styleLoadMilliseconds = "styleLoadMs"
+        case snapshotMilliseconds = "snapshotMs"
+        case paletteReductionMilliseconds = "paletteReductionMs"
+        case transferPrepareMilliseconds = "transferPrepareMs"
+        case bandWriteMilliseconds = "bandWriteMs"
+        case bandDecodeMilliseconds = "bandDecodeMs"
+        case bandPublicationMilliseconds = "bandPublicationMs"
         case bytes, chunks, retries, primitives, providerCalls
+        case paletteSize, retainedFillLayers, retainedLineLayers, retainedSymbolLayers
+        case transferWindow, cacheState
         case ackDurationsMilliseconds = "ackDurationsMs"
         case ackP50Milliseconds = "ackP50Ms"
         case ackP95Milliseconds = "ackP95Ms"
@@ -156,11 +221,26 @@ public struct RenderRunMetrics: Codable, Equatable, Sendable {
         try container.encode(transferMilliseconds, forKey: .transferMilliseconds)
         try container.encode(validateMilliseconds, forKey: .validateMilliseconds)
         try container.encode(renderMilliseconds, forKey: .renderMilliseconds)
+        try container.encode(gpsWaitMilliseconds, forKey: .gpsWaitMilliseconds)
+        try container.encode(routeRequestMilliseconds, forKey: .routeRequestMilliseconds)
+        try container.encode(styleLoadMilliseconds, forKey: .styleLoadMilliseconds)
+        try container.encode(snapshotMilliseconds, forKey: .snapshotMilliseconds)
+        try container.encode(paletteReductionMilliseconds, forKey: .paletteReductionMilliseconds)
+        try container.encode(transferPrepareMilliseconds, forKey: .transferPrepareMilliseconds)
+        try container.encode(bandWriteMilliseconds, forKey: .bandWriteMilliseconds)
+        try container.encode(bandDecodeMilliseconds, forKey: .bandDecodeMilliseconds)
+        try container.encode(bandPublicationMilliseconds, forKey: .bandPublicationMilliseconds)
         try container.encode(bytes, forKey: .bytes)
         try container.encode(chunks, forKey: .chunks)
         try container.encode(retries, forKey: .retries)
         try container.encode(primitives, forKey: .primitives)
         try container.encode(providerCalls, forKey: .providerCalls)
+        try container.encode(paletteSize, forKey: .paletteSize)
+        try container.encode(retainedFillLayers, forKey: .retainedFillLayers)
+        try container.encode(retainedLineLayers, forKey: .retainedLineLayers)
+        try container.encode(retainedSymbolLayers, forKey: .retainedSymbolLayers)
+        try container.encode(transferWindow, forKey: .transferWindow)
+        try container.encode(cacheState, forKey: .cacheState)
         try container.encode(Array(ackDurationsMilliseconds.prefix(32)), forKey: .ackDurationsMilliseconds)
         try container.encodeIfPresent(ackP50Milliseconds, forKey: .ackP50Milliseconds)
         try container.encodeIfPresent(ackP95Milliseconds, forKey: .ackP95Milliseconds)
