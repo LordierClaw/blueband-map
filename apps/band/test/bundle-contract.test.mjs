@@ -56,15 +56,20 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /\.nav-header\s*\{[^}]*background-color:/s)
   assert.match(page, /statusVisible:\s*body\.status\s*!==\s*["']navigating["']/)
   assert.match(page, /navStatus\s*=\s*["']LOADING MAP["']/)
-  assert.match(page, /\.nav-marker\s*\{[^}]*width:\s*26px;[^}]*height:\s*32px;/s)
+  assert.match(page, /\.nav-arrow\s*\{[^}]*left:\s*34px;[^}]*top:\s*20px;[^}]*width:\s*38px;[^}]*height:\s*48px;/s)
+  assert.match(page, /\.nav-distance\s*\{[^}]*left:\s*78px;[^}]*top:\s*16px;[^}]*width:\s*100px;/s)
+  assert.match(page, /\.nav-street\s*\{[^}]*left:\s*78px;[^}]*width:\s*100px;/s)
+  assert.match(page, /\.nav-marker\s*\{[^}]*width:\s*38px;[^}]*height:\s*44px;/s)
+  assert.match(page, /Math\.max\(30,\s*Math\.min\(182,\s*body\.x\)\)/)
+  assert.match(page, /Math\.max\(130,\s*Math\.min\(478,\s*body\.y\)\)/)
 })
 
 test("generated HUD resources are indexed PNGs at their display size", async () => {
   const expected = {
     "nav-shade.png": [212, 96],
     "maneuver-right.png": [42, 54],
-    "marker-0.png": [26, 32],
-    "marker-7.png": [26, 32]
+    "marker-0.png": [38, 44],
+    "marker-7.png": [38, 44]
   }
   for (const [name, dimensions] of Object.entries(expected)) {
     const png = await readFile(new URL(`src/common/${name}`, root))

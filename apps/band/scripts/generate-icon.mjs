@@ -182,15 +182,15 @@ function fillPolygon(bitmap, imageWidth, imageHeight, points, color) {
 function rotated(points, bucket) {
   const angle = bucket * Math.PI / 4
   return points.map(([x, y]) => [
-    13 + (x - 13) * Math.cos(angle) - (y - 16) * Math.sin(angle),
-    16 + (x - 13) * Math.sin(angle) + (y - 16) * Math.cos(angle)
+    19 + (x - 19) * Math.cos(angle) - (y - 22) * Math.sin(angle),
+    22 + (x - 19) * Math.sin(angle) + (y - 22) * Math.cos(angle)
   ])
 }
 
 for (let bucket = 0; bucket < 8; bucket += 1) {
-  const marker = new Uint8Array(26 * 32)
-  fillPolygon(marker, 26, 32, rotated([[13, 6], [20, 24], [13, 20], [6, 24]], bucket), 1)
-  fillPolygon(marker, 26, 32, rotated([[13, 9], [17, 20], [13, 17], [9, 20]], bucket), 2)
-  await writeIndexed(`marker-${bucket}.png`, 26, 32,
-    [[0, 0, 0], [255, 255, 255], [0, 174, 239]], [0, 255, 255], marker)
+  const marker = new Uint8Array(38 * 44)
+  fillPolygon(marker, 38, 44, rotated([[19, 5], [31, 35], [19, 29], [7, 35]], bucket), 1)
+  fillPolygon(marker, 38, 44, rotated([[19, 10], [26, 30], [19, 25], [12, 30]], bucket), 2)
+  await writeIndexed(`marker-${bucket}.png`, 38, 44,
+    [[0, 0, 0], [4, 19, 10], [102, 255, 122]], [0, 255, 255], marker)
 }

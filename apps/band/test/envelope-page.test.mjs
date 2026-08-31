@@ -141,7 +141,7 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
   assert.equal(page.navStatus, "ARRIVED")
   assert.equal(page.navArrowPath, "/common/maneuver-arrive.png")
   assert.equal(page.navMarkerPath, "/common/marker-4.png")
-  assert.equal(page.navMarkerStyle, "left:91px;top:280px;")
+  assert.equal(page.navMarkerStyle, "left:85px;top:274px;")
   assert.equal(page.navStatusVisible, true)
   page.receiveMessage({ data: envelope("nav-5", "nav.update", {
     scene: SCENE, seq: 5, x: 104, y: 296, heading: 3, maneuver: "straight", distanceM: 120, street: "Next Road", status: "navigating"
