@@ -8,7 +8,7 @@ Status: **not yet executed for this new foundation**.
 |---|---|---|
 | Verify IPA/RPK SHA-256 | Matches workflow `SHA256SUMS` | Not run |
 | Install unsigned iOS app | Launches under free Apple ID provisioning | Not run |
-| Clean-install RPK | Shows `RPK 0.2.9` and route-card waiting state | Not run |
+| Clean-install RPK | Shows `RPK 0.3.0` and snapshot-map waiting state | Not run |
 | Foreground scan | Band 10 is selectable | Not run |
 | FE95/5E/5F discovery | SPP configuration succeeds | Not run |
 | Auth and proof | Model, firmware, battery populated | Not run |
@@ -117,6 +117,8 @@ Allowed fields include build, phase, device class, OS version, user-recorded fir
 Never export AuthKey, Vietmap keys, full CoreBluetooth peripheral identifiers, nonces, HMACs, derived keys, raw encrypted payloads, private signing material or unredacted captures.
 
 ### Live route-card acceptance cases
+
+The route-card cases below remain historical. Run the current snapshot-map matrix in [the snapshot handoff](handoffs/vietmap-sdk-snapshot-route-map.md) for iOS `0.2.0` and RPK `0.3.0`.
 
 Run these with the real route response and redacted diagnostics. No mock or
 synthetic map is accepted as a runtime result.

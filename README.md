@@ -10,6 +10,7 @@ The Xiaomi BLE v2, SPP v2, authentication, encrypted command, ThirdPartyApp, and
 - Foreground BLE and explicit disconnect.
 - One iPhone companion and `dev.lordierclaw.bluebandmap.band` RPK.
 - Versioned, acknowledged application messages.
+- Foreground Vietmap Route v4 navigation rendered by the pinned Vietmap iOS Map SDK as a full-screen 212×520 indexed PNG.
 - No AuthKey extraction, cloud service, background BLE, or Mi Fitness replacement.
 
 ## Development
@@ -49,6 +50,7 @@ The repository intentionally does not support macOS virtualization on non-Apple 
 - [Authentication](docs/protocol/authentication.md)
 - [ThirdPartyApp bridge](docs/protocol/third-party-app.md)
 - [Application envelope v1](docs/protocol/application-envelope-v1.md)
+- [Snapshot route-map protocol](docs/protocol/snapshot-route-map-v1.md)
 - [Threat model](docs/security/threat-model.md)
 - [Ubuntu setup](docs/development/ubuntu-setup.md)
 - [Unsigned free-Apple-ID sideload](docs/release/unsigned-ios-sideload.md)

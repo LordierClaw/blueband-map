@@ -9,6 +9,9 @@ grep -Fq 'iOS: "17.0"' "$project"
 grep -Fq 'INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription:' "$project"
 grep -Fq 'INFOPLIST_KEY_NSLocationWhenInUseUsageDescription:' "$project"
 grep -Fq 'path: ../../packages/BlueBandKit' "$project"
+grep -Fq 'CURRENT_PROJECT_VERSION: 11' "$project"
+grep -Fq 'MARKETING_VERSION: 0.2.0' "$project"
+grep -Fq 'static let version = "0.2.0"' apps/ios/App/BlueBandMapApp.swift
 if grep -Fq 'UIBackgroundModes' "$project"; then
   echo "UIBackgroundModes must stay absent: the app is foreground-only" >&2
   exit 1
