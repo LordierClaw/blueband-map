@@ -26,7 +26,7 @@ enum IndexedPNGEncoder {
             throw Error.unsupportedRaster
         }
 
-        try encodeIndexed(
+        return try encodeIndexed(
             width: raster.width,
             height: raster.height,
             pixels: raster.pixels,
