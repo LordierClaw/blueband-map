@@ -50,14 +50,15 @@ final class ApplicationEnvelopeTests: XCTestCase {
         XCTAssertThrowsError(try dirtyAck.encoded())
     }
 
-    func testRejectsEncodedEnvelopeLargerThan512Bytes() {
+    func testRejectsEncodedEnvelopeLargerThan1024Bytes() {
+        XCTAssertEqual(ApplicationEnvelope.maximumEncodedSize, 1_024)
         let envelope = ApplicationEnvelope.message(
             id: "x",
             source: .ios,
             topic: "system.echo",
-            body: ["text": .string(String(repeating: "x", count: 512))]
+            body: ["text": .string(String(repeating: "x", count: 1_024))]
         )
         XCTAssertThrowsError(try envelope.encoded())
-        XCTAssertThrowsError(try ApplicationEnvelope.decode(Data(repeating: 0x20, count: 513), expecting: .band))
+        XCTAssertThrowsError(try ApplicationEnvelope.decode(Data(repeating: 0x20, count: 1_025), expecting: .band))
     }
 }

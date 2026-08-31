@@ -178,7 +178,7 @@ function sha256Finish(context) {
 // that is evaluated before the first frame is drawn. These ES5 helpers mirror
 // the tested host-side modules without adding runtime imports to the RPK page.
 var renderProtocolLimits = {
-  envelopeBytes: 512,
+  envelopeBytes: 1024,
   payloadBytes: 8192,
   width: 212,
   height: 520,
@@ -294,7 +294,7 @@ var renderProtocol = {
 
 export default {
   private: {
-    MAX_ENVELOPE_BYTES: 512,
+    MAX_ENVELOPE_BYTES: 1024,
     MAX_RECENT_IDS: 64,
     MAX_ASSET_BYTES: 8192,
     MAP_WIDTH: 212,

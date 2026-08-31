@@ -21,7 +21,7 @@ public enum RenderTransferPlan {
     public static let maximumRunIDBytes = RenderProtocol.maximumIdentifierBytes
     public static let maximumSceneIDBytes = RenderProtocol.maximumIdentifierBytes
     private static let envelopeID = String(repeating: "\\", count: 32)
-    private static let maximumChunkBytes = 320
+    private static let maximumChunkBytes = RenderProtocol.maximumPayloadBytes
 
     public static func make(asset: RenderAsset, runID: String, sceneID: String) throws -> [RenderTransferStep] {
         guard RenderProtocol.isValidIdentifier(runID) else { throw Error.invalidRunID }

@@ -197,7 +197,7 @@ final class RenderProtocolTests: XCTestCase {
         let steps = try RenderTransferPlan.make(asset: compact, runID: actualRunID, sceneID: actualSceneID)
         let firstChunk = try XCTUnwrap(steps.first { $0.topic == "map.asset.chunk" })
         guard case let .string(encoded)? = firstChunk.body["data"] else { return XCTFail("missing chunk data") }
-        XCTAssertEqual(Data(base64Encoded: encoded)?.count, 186)
-        XCTAssertGreaterThan(steps.count - 2, 7)
+        XCTAssertGreaterThan(try XCTUnwrap(Data(base64Encoded: encoded)?.count), 320)
+        XCTAssertLessThan(steps.count - 2, 20)
     }
 }

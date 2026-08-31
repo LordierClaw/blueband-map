@@ -46,7 +46,7 @@ public struct ApplicationEnvelope: Codable, Equatable, Sendable {
     }
 
     public static let version = 1
-    public static let maximumEncodedSize = 512
+    public static let maximumEncodedSize = 1_024
 
     public let v: Int
     public let id: String
