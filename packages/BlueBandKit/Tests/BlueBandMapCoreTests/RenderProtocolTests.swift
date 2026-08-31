@@ -12,7 +12,7 @@ final class RenderProtocolTests: XCTestCase {
             kind: .raster,
             formatVersion: 1,
             width: 212,
-            height: 360,
+            height: 520,
             data: Data(repeating: 0xA5, count: 128),
             primitives: 0
         )
@@ -24,7 +24,7 @@ final class RenderProtocolTests: XCTestCase {
         XCTAssertEqual(prepare.format, RenderFormat.raster.rawValue)
         XCTAssertEqual(prepare.formatVersion, 1)
         XCTAssertEqual(prepare.width, 212)
-        XCTAssertEqual(prepare.height, 360)
+        XCTAssertEqual(prepare.height, 520)
         XCTAssertEqual(prepare.bytes, 128)
         XCTAssertEqual(prepare.primitives, 0)
         XCTAssertEqual(prepare.sha256.count, 64)
@@ -90,7 +90,7 @@ final class RenderProtocolTests: XCTestCase {
             kind: .raster,
             formatVersion: 1,
             width: 211,
-            height: 360,
+            height: 520,
             data: Data([0x01]),
             primitives: 0
         )) { error in
@@ -101,19 +101,28 @@ final class RenderProtocolTests: XCTestCase {
             kind: .raster,
             formatVersion: 1,
             width: 212,
-            height: 360,
+            height: 520,
             data: Data([0x01]),
             primitives: 1
         )) { error in
             XCTAssertEqual(error as? RenderAsset.Error, .tooManyPrimitives)
         }
 
+        XCTAssertNoThrow(try RenderAsset(
+            kind: .raster,
+            formatVersion: 1,
+            width: 212,
+            height: 520,
+            data: Data(repeating: 0, count: 8_192),
+            primitives: 0
+        ))
+
         XCTAssertThrowsError(try RenderAsset(
             kind: .raster,
             formatVersion: 1,
             width: 212,
-            height: 360,
-            data: Data(repeating: 0, count: RenderProtocol.maximumPayloadBytes + 1),
+            height: 520,
+            data: Data(repeating: 0, count: 8_193),
             primitives: 0
         )) { error in
             XCTAssertEqual(error as? RenderAsset.Error, .tooLarge)
@@ -121,12 +130,12 @@ final class RenderProtocolTests: XCTestCase {
     }
 
     func testRenderTransferStepsStayWithinEnvelopeAndReconstructData() throws {
-        let data = Data(repeating: 0x37, count: 1_024)
+        let data = Data(repeating: 0x37, count: 8_192)
         let asset = try RenderAsset(
             kind: .raster,
             formatVersion: 1,
             width: 212,
-            height: 360,
+            height: 520,
             data: data,
             primitives: 0
         )
@@ -156,23 +165,21 @@ final class RenderProtocolTests: XCTestCase {
         XCTAssertEqual(steps.first?.body["primitives"], .number(0))
     }
 
-    func testRenderTransferUsesActualIdentifiersAndStaysWithinSevenDataChunks() throws {
+    func testRenderTransferUsesActualIdentifiersWithoutAnObsoleteChunkCountCap() throws {
         let actualRunID = "nav-run-0123456789abcdef"
         let actualSceneID = "scene-0123456789abcdef"
         let compact = try RenderAsset(
             kind: .raster,
             formatVersion: 1,
             width: 212,
-            height: 360,
-            data: Data(repeating: 0x37, count: 1_024),
+            height: 520,
+            data: Data(repeating: 0x37, count: 8_192),
             primitives: 0
         )
         let steps = try RenderTransferPlan.make(asset: compact, runID: actualRunID, sceneID: actualSceneID)
         let firstChunk = try XCTUnwrap(steps.first { $0.topic == "map.asset.chunk" })
         guard case let .string(encoded)? = firstChunk.body["data"] else { return XCTFail("missing chunk data") }
         XCTAssertEqual(Data(base64Encoded: encoded)?.count, 186)
-        XCTAssertLessThanOrEqual(steps.count - 2, RenderTransferPlan.maximumDataChunks)
-
-        XCTAssertLessThanOrEqual(steps.count - 2, 7)
+        XCTAssertGreaterThan(steps.count - 2, 7)
     }
 }

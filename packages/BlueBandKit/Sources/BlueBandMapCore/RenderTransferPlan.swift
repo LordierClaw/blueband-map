@@ -14,14 +14,12 @@ public struct RenderTransferStep: Equatable, Sendable {
 public enum RenderTransferPlan {
     public enum Error: Swift.Error, Equatable, Sendable {
         case cannotFitChunk
-        case tooManyChunks
         case invalidRunID
         case invalidSceneID
     }
 
     public static let maximumRunIDBytes = RenderProtocol.maximumIdentifierBytes
     public static let maximumSceneIDBytes = RenderProtocol.maximumIdentifierBytes
-    public static let maximumDataChunks = 7
     private static let envelopeID = String(repeating: "\\", count: 32)
     private static let maximumChunkBytes = 320
 
@@ -38,7 +36,6 @@ public enum RenderTransferPlan {
         var steps = [begin]
         var offset = 0
         while offset < asset.byteCount {
-            guard steps.count - 1 < maximumDataChunks else { throw Error.tooManyChunks }
             let chunkByteCount = maximumFittingChunkByteCount(
                 for: asset,
                 offset: offset,

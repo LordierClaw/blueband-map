@@ -40,8 +40,8 @@ public enum RenderProtocol {
 
     public static let formatVersion = 1
     public static let viewportWidth = 212
-    public static let viewportHeight = 360
-    public static let maximumPayloadBytes = 1_024
+    public static let viewportHeight = 520
+    public static let maximumPayloadBytes = 8_192
     public static let maximumPrimitives = 0
     public static let maximumIdentifierBytes = 24
 

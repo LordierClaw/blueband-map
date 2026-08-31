@@ -20,12 +20,20 @@ final class NavigationUpdateTests: XCTestCase {
     }
 
     func testRejectsInvalidSceneSequenceAndMarker() {
+        XCTAssertNoThrow(try NavigationUpdate(
+            scene: "scene", seq: 0, x: 211, y: 519, maneuver: .straight,
+            distanceMeters: 0, street: "", status: .navigating
+        ))
         XCTAssertThrowsError(try NavigationUpdate(
             scene: "", seq: 0, x: 106, y: 320, maneuver: .straight,
             distanceMeters: 0, street: "", status: .navigating
         ))
         XCTAssertThrowsError(try NavigationUpdate(
             scene: "scene", seq: -1, x: 212, y: 320, maneuver: .straight,
+            distanceMeters: 0, street: "", status: .navigating
+        ))
+        XCTAssertThrowsError(try NavigationUpdate(
+            scene: "scene", seq: 0, x: 106, y: 520, maneuver: .straight,
             distanceMeters: 0, street: "", status: .navigating
         ))
     }
