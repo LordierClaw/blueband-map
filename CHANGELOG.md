@@ -1,5 +1,14 @@
 # Changelog
 
+## iOS 0.3.0 / RPK 0.4.0 - 2026-09-01
+
+- Request Vietmap's dark style, normalize retained map layers to a low-entropy dark palette, and draw the route as a flat cyan line without a halo.
+- Prefer 16-color indexed PNG snapshots at or below 4 KiB, with the smallest valid candidate up to 8 KiB as a hard fallback.
+- Show maneuver, distance, and street from `render.prepare` instead of waiting for map publication.
+- Replace the rectangular Band header with the compact B1 full-width fade HUD and replace the dot with eight exact-size M1 directional PNG8 markers.
+- Use an application ACK window of two while serializing complete SPP frames on the BLE wire; restore confirmed guidance when a refresh is cancelled or fails.
+- Bump iOS to `0.3.0 (13)` and RPK to `0.4.0 (13)` because both packaged artifacts changed. Xiaomi authentication and verified wire bytes remain unchanged.
+
 ## 0.2.1 - 2026-08-31
 
 - Fix the buffered `render.ready` timeout remaining active during a slow Band transfer.

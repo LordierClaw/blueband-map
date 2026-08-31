@@ -1,5 +1,7 @@
 # Vietmap SDK snapshot route-map handoff
 
+> Historical release record for iOS `0.2.1 (12)` / RPK `0.3.0 (12)`. The current performance and visual refinement release is documented in [band-map-performance-visual-refinement.md](band-map-performance-visual-refinement.md).
+
 ## Release candidate
 
 | Item | Value |
