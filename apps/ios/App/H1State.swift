@@ -1,36 +1,32 @@
 import BlueBandMapCore
 
 enum H1TestMode: String, CaseIterable, Sendable {
-    case rasterBaseline
-    case rasterOptimized
-    case vectorSynthetic8
-    case vectorSynthetic20
-    case vectorSynthetic40
-    case vectorVietmap
+    case rasterStaticCompact
+    case rasterTileMap
+    case vectorTileMap40
+    case vectorTileMap60
 
     var renderer: RenderKind {
         switch self {
-        case .rasterBaseline, .rasterOptimized: .raster
-        case .vectorSynthetic8, .vectorSynthetic20, .vectorSynthetic40, .vectorVietmap: .vector
+        case .rasterStaticCompact, .rasterTileMap: .raster
+        case .vectorTileMap40, .vectorTileMap60: .vector
         }
     }
 
     var expectedPrimitives: Int {
         switch self {
-        case .rasterBaseline, .rasterOptimized: 0
-        case .vectorSynthetic8: 8
-        case .vectorSynthetic20: 20
-        case .vectorSynthetic40: 40
-        case .vectorVietmap: 0
+        case .rasterStaticCompact, .rasterTileMap: 0
+        case .vectorTileMap40: 40
+        case .vectorTileMap60: 60
         }
     }
 
     var requiresServiceKey: Bool {
-        self == .rasterBaseline || self == .rasterOptimized
+        self == .rasterStaticCompact
     }
 
     var requiresTileMapKey: Bool {
-        self == .vectorVietmap
+        self != .rasterStaticCompact
     }
 }
 

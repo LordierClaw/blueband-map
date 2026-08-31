@@ -8,6 +8,7 @@ public enum VietmapSceneBuilder {
 
     private struct RankedSegment {
         let rank: Int
+        let distanceSquared: Int
         let order: Int
         let segment: SceneSegment
     }
@@ -22,7 +23,8 @@ public enum VietmapSceneBuilder {
         tileY: Int,
         headingDegrees: Int,
         maneuver: ManeuverKind,
-        distanceMeters: UInt32
+        distanceMeters: UInt32,
+        maximumSegments: Int = RenderProtocol.maximumPrimitives
     ) throws -> NavigationScene {
         try build(
             tiles: [tile],
@@ -34,7 +36,8 @@ public enum VietmapSceneBuilder {
             tileY: tileY,
             headingDegrees: headingDegrees,
             maneuver: maneuver,
-            distanceMeters: distanceMeters
+            distanceMeters: distanceMeters,
+            maximumSegments: maximumSegments
         )
     }
 
@@ -48,12 +51,14 @@ public enum VietmapSceneBuilder {
         tileY: Int,
         headingDegrees: Int,
         maneuver: ManeuverKind,
-        distanceMeters: UInt32
+        distanceMeters: UInt32,
+        maximumSegments: Int = RenderProtocol.maximumPrimitives
     ) throws -> NavigationScene {
         guard latitude.isFinite, longitude.isFinite,
               (-90...90).contains(latitude), (-180...180).contains(longitude),
               (0...22).contains(zoom), headingDegrees >= 0, headingDegrees <= 359,
-              !tiles.isEmpty else {
+              !tiles.isEmpty,
+              (1...NavigationScene.maximumSegments).contains(maximumSegments) else {
             throw Error.invalidRequest
         }
 
@@ -62,10 +67,11 @@ public enum VietmapSceneBuilder {
         for tile in tiles {
             for layer in tile.layers where sourceLayers == nil || sourceLayers?.contains(layer.name) == true {
                 for feature in layer.features where feature.geometryType == .lineString {
-                    let lineClass = classify(feature.properties)
+                    guard let lineClass = classify(feature.properties) else { continue }
                     let rank = lineClass == .route ? 0 : (lineClass == .major ? 1 : 2)
                     for line in feature.lines {
                         guard line.count >= 2 else { continue }
+                        var projected = [SceneSegment]()
                         for pair in zip(line, line.dropFirst()) {
                             guard let segment = projectAndClip(
                                 start: pair.0,
@@ -78,7 +84,21 @@ public enum VietmapSceneBuilder {
                                 tileY: tileY,
                                 lineClass: lineClass
                             ) else { continue }
-                            ranked.append(RankedSegment(rank: rank, order: order, segment: segment))
+                            projected.append(segment)
+                        }
+                        for segment in simplify(projected) {
+                            let centerX = RenderProtocol.viewportWidth / 2
+                            let centerY = RenderProtocol.viewportHeight / 2
+                            let midpointX = (Int(segment.start.x) + Int(segment.end.x)) / 2
+                            let midpointY = (Int(segment.start.y) + Int(segment.end.y)) / 2
+                            let dx = midpointX - centerX
+                            let dy = midpointY - centerY
+                            ranked.append(RankedSegment(
+                                rank: rank,
+                                distanceSquared: dx * dx + dy * dy,
+                                order: order,
+                                segment: segment
+                            ))
                             order += 1
                         }
                     }
@@ -86,12 +106,23 @@ public enum VietmapSceneBuilder {
             }
         }
 
-        let selected = ranked
+        var remaining = ranked
             .sorted { left, right in
-                left.rank == right.rank ? left.order < right.order : left.rank < right.rank
+                if (left.rank == 0) != (right.rank == 0) { return left.rank == 0 }
+                if left.distanceSquared != right.distanceSquared {
+                    return left.distanceSquared < right.distanceSquared
+                }
+                if left.rank != right.rank { return left.rank < right.rank }
+                return left.order < right.order
             }
-            .prefix(NavigationScene.maximumSegments)
-            .map(\.segment)
+        var selected = [RankedSegment]()
+        while !remaining.isEmpty && selected.count < maximumSegments {
+            let index = selected.isEmpty ? 0 : remaining.firstIndex { candidate in
+                selected.contains { connects($0.segment, candidate.segment) }
+            } ?? 0
+            selected.append(remaining.remove(at: index))
+        }
+        let segments = magnify(selected.map(\.segment))
 
         return try NavigationScene(
             currentPosition: ScenePoint(
@@ -101,14 +132,74 @@ public enum VietmapSceneBuilder {
             headingDegrees: UInt16(headingDegrees),
             maneuver: maneuver,
             distanceMeters: distanceMeters,
-            segments: Array(selected)
+            segments: segments
         )
     }
 
-    private static func classify(_ properties: [String: String]) -> SceneLineClass {
+    private static func simplify(_ segments: [SceneSegment]) -> [SceneSegment] {
+        var result = [SceneSegment]()
+        for segment in segments {
+            if let previous = result.last,
+               previous.end == segment.start,
+               areNearlyStraight(previous, segment) {
+                result[result.count - 1] = SceneSegment(
+                    start: previous.start,
+                    end: segment.end,
+                    lineClass: previous.lineClass
+                )
+            } else {
+                result.append(segment)
+            }
+        }
+        return result
+    }
+
+    private static func areNearlyStraight(_ first: SceneSegment, _ second: SceneSegment) -> Bool {
+        let firstX = Int(first.end.x) - Int(first.start.x)
+        let firstY = Int(first.end.y) - Int(first.start.y)
+        let secondX = Int(second.end.x) - Int(second.start.x)
+        let secondY = Int(second.end.y) - Int(second.start.y)
+        let dot = firstX * secondX + firstY * secondY
+        let cross = abs(firstX * secondY - firstY * secondX)
+        let longest = max(abs(firstX), abs(firstY), abs(secondX), abs(secondY))
+        return dot > 0 && cross <= max(2, longest * 2)
+    }
+
+    private static func connects(_ left: SceneSegment, _ right: SceneSegment) -> Bool {
+        left.start == right.start || left.start == right.end ||
+            left.end == right.start || left.end == right.end
+    }
+
+    private static func magnify(_ segments: [SceneSegment]) -> [SceneSegment] {
+        guard segments.count >= 8 else { return segments }
+        let centerX = RenderProtocol.viewportWidth / 2
+        let centerY = RenderProtocol.viewportHeight / 2
+        let points = segments.flatMap { [$0.start, $0.end] }
+        let maxDX = max(1, points.map { abs(Int($0.x) - centerX) }.max() ?? 1)
+        let maxDY = max(1, points.map { abs(Int($0.y) - centerY) }.max() ?? 1)
+        let scale = min(
+            3.5,
+            Double(min(centerX, RenderProtocol.viewportWidth - 1 - centerX) - 6) / Double(maxDX),
+            Double(min(centerY, RenderProtocol.viewportHeight - 1 - centerY) - 6) / Double(maxDY)
+        )
+        guard scale > 1 else { return segments }
+
+        func point(_ source: ScenePoint) -> ScenePoint {
+            ScenePoint(
+                x: UInt16((Double(Int(source.x) - centerX) * scale).rounded() + Double(centerX)),
+                y: UInt16((Double(Int(source.y) - centerY) * scale).rounded() + Double(centerY))
+            )
+        }
+        return segments.map {
+            SceneSegment(start: point($0.start), end: point($0.end), lineClass: $0.lineClass)
+        }
+    }
+
+    private static func classify(_ properties: [String: String]) -> SceneLineClass? {
         let values = properties
             .filter { ["class", "road_class", "highway", "kind", "type"].contains($0.key.lowercased()) }
             .map { $0.value.lowercased() }
+        if values.contains("path") { return nil }
         if values.contains(where: { $0.contains("route") || $0.contains("navigation") }) { return .route }
         if values.contains(where: {
             ["motorway", "trunk", "primary", "secondary", "tertiary", "highway", "major"].contains($0)

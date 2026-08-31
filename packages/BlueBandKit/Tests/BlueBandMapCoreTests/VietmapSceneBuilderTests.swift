@@ -91,10 +91,171 @@ final class VietmapSceneBuilderTests: XCTestCase {
             tileY: 0,
             headingDegrees: 180,
             maneuver: .left,
-            distanceMeters: 100
+            distanceMeters: 100,
+            maximumSegments: 40
         )
 
         XCTAssertEqual(scene.segments.count, 40)
         XCTAssertEqual(scene.segments.first?.lineClass, .route)
+    }
+
+    func testPrefersNearbyStreetsOverDistantMajorRoads() throws {
+        let distantMajorRoads = try (0..<40).map { index in
+            try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+                classValue: "primary",
+                points: [
+                    VectorTileFixture.Point(x: 500 + index, y: 2_000),
+                    VectorTileFixture.Point(x: 532 + index, y: 2_032),
+                ]
+            ))
+        }
+        let nearbyStreet = try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+            classValue: "minor",
+            points: [
+                VectorTileFixture.Point(x: 2_000, y: 2_048),
+                VectorTileFixture.Point(x: 2_096, y: 2_048),
+            ]
+        ))
+
+        let scene = try VietmapSceneBuilder.build(
+            tiles: distantMajorRoads + [nearbyStreet],
+            latitude: 0,
+            longitude: 0,
+            zoom: 0,
+            tileX: 0,
+            tileY: 0,
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0,
+            maximumSegments: 40
+        )
+
+        XCTAssertTrue(scene.segments.contains { $0.lineClass == .minor })
+    }
+
+    func testOmitsWalkingPathsFromTheStreetMap() throws {
+        let path = try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+            classValue: "path",
+            points: [
+                VectorTileFixture.Point(x: 2_000, y: 2_048),
+                VectorTileFixture.Point(x: 2_096, y: 2_048),
+            ]
+        ))
+        let road = try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+            classValue: "minor",
+            points: [
+                VectorTileFixture.Point(x: 2_048, y: 2_000),
+                VectorTileFixture.Point(x: 2_048, y: 2_096),
+            ]
+        ))
+
+        let scene = try VietmapSceneBuilder.build(
+            tiles: [path, road],
+            latitude: 0,
+            longitude: 0,
+            zoom: 0,
+            tileX: 0,
+            tileY: 0,
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0
+        )
+
+        XCTAssertEqual(scene.segments.count, 1)
+        XCTAssertEqual(scene.segments[0].start.x, scene.segments[0].end.x)
+    }
+
+    func testExtendsAConnectedRoadBeforeAddingDetachedFragments() throws {
+        let seed = try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+            classValue: "minor",
+            points: [
+                VectorTileFixture.Point(x: 2_000, y: 2_048),
+                VectorTileFixture.Point(x: 2_096, y: 2_048),
+            ]
+        ))
+        let extensionRoad = try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+            classValue: "minor",
+            points: [
+                VectorTileFixture.Point(x: 2_096, y: 2_048),
+                VectorTileFixture.Point(x: 3_000, y: 2_048),
+            ]
+        ))
+        let detached = try (0..<39).map { index in
+            try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+                classValue: "minor",
+                points: [
+                    VectorTileFixture.Point(x: 2_000, y: 1_850 + index),
+                    VectorTileFixture.Point(x: 2_096, y: 1_850 + index),
+                ]
+            ))
+        }
+
+        let scene = try VietmapSceneBuilder.build(
+            tiles: [seed, extensionRoad] + detached,
+            latitude: 0,
+            longitude: 0,
+            zoom: 0,
+            tileX: 0,
+            tileY: 0,
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0,
+            maximumSegments: 40
+        )
+
+        XCTAssertEqual(scene.segments.count, 40)
+        XCTAssertTrue(scene.segments.contains {
+            $0.start.y == $0.end.y && Int($0.end.x) - Int($0.start.x) > 90
+        })
+    }
+
+    func testCollapsesNearlyStraightRoadGeometryBeforeApplyingThePrimitiveLimit() throws {
+        let tile = try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+            classValue: "minor",
+            points: (0..<20).map { index in
+                VectorTileFixture.Point(x: 1_000 + index * 100, y: 2_048 + index % 2)
+            }
+        ))
+
+        let scene = try VietmapSceneBuilder.build(
+            tile: tile,
+            latitude: 0,
+            longitude: 0,
+            zoom: 0,
+            tileX: 0,
+            tileY: 0,
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0
+        )
+
+        XCTAssertLessThanOrEqual(scene.segments.count, 2)
+    }
+
+    func testSupportsAnExplicitSixtyPrimitiveStressBudget() throws {
+        let tiles = try (0..<70).map { index in
+            try MapboxVectorTile.decode(VectorTileFixture.lineTile(
+                classValue: "minor",
+                points: [
+                    VectorTileFixture.Point(x: 1_000 + index * 30, y: 1_900),
+                    VectorTileFixture.Point(x: 1_020 + index * 30, y: 1_940),
+                ]
+            ))
+        }
+
+        let scene = try VietmapSceneBuilder.build(
+            tiles: tiles,
+            latitude: 0,
+            longitude: 0,
+            zoom: 0,
+            tileX: 0,
+            tileY: 0,
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0,
+            maximumSegments: 60
+        )
+
+        XCTAssertEqual(scene.segments.count, 60)
     }
 }

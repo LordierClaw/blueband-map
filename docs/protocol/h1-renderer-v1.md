@@ -11,7 +11,7 @@ These are application-envelope topics. They do not modify the Xiaomi wire protoc
 | payload | 1–65,536 bytes |
 | `sha256` | exactly 64 lowercase hexadecimal bytes |
 | format version | integer `1` |
-| vector primitives | integer `0` through `40` |
+| vector primitives | integer `0` through `60` |
 
 ## Topics and bodies
 
@@ -60,8 +60,8 @@ The bounded status string is intentional at the Vela native interconnect boundar
 
 ## Transfer
 
-The existing `map.asset.begin`, `map.asset.chunk`, and `map.asset.end` topics are reused. H1 adds `scene`, `renderer`, `format`, `formatVersion`, and `primitives` to the begin body while retaining `asset`, `bytes`, `mime`, `sha256`, `width`, `height`, and `run`. Chunks remain Base64 inside the 512-byte envelope, and the iPhone sends at most one unacknowledged application message at a time.
+The existing `map.asset.begin`, `map.asset.chunk`, and `map.asset.end` topics are reused. H1 adds `scene`, `renderer`, `format`, `formatVersion`, and `primitives` to the begin body while retaining `asset`, `bytes`, `mime`, `sha256`, `width`, `height`, and `run`. Chunks remain Base64 inside the 512-byte envelope, the iPhone sends at most one unacknowledged application message at a time, and a run is rejected locally if it would require more than 60 data chunks.
 
 ## Evidence boundary
 
-The protocol tests prove exact JSON fields, SHA and identifier validation, envelope size, and payload reconstruction. They do not prove that a current Smart Band 10 firmware accepts 64 KiB, creates 40 vector nodes, or renders either mode at a useful rate. Those claims require the H1 hardware packet and explicit owner feedback.
+The protocol tests prove exact JSON fields, SHA and identifier validation, envelope size, payload reconstruction, the 60-chunk transfer gate, and vector limits through 60 records. They do not prove that a current Smart Band 10 firmware creates 60 vector nodes or renders either mode at a useful rate. Those claims require the H1 hardware packet and explicit owner feedback.

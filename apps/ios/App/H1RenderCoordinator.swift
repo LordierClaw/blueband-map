@@ -521,7 +521,7 @@ final class H1RenderCoordinator {
         guard let token = operationToken, runContext != nil else { return }
         if requiresReconnect { self.requiresReconnect = true }
         let failedMode = pending?.mode ?? (
-            runContext?.identity.renderer == .vector ? .vectorVietmap : .rasterBaseline
+            runContext?.identity.renderer == .vector ? .vectorTileMap40 : .rasterStaticCompact
         )
         state = .failed(mode: failedMode, code: code)
         resultTimeoutTask?.cancel()
@@ -707,6 +707,8 @@ final class H1RenderCoordinator {
             }
         case is CancellationError:
             return "TRANSFER_CANCELLED"
+        case RenderTransferPlan.Error.tooManyChunks:
+            return "ASSET_TOO_MANY_CHUNKS"
         case is RenderAsset.Error, is MapAsset.Error, is RenderTransferPlan.Error:
             return "ASSET_INVALID"
         default:
@@ -741,10 +743,10 @@ final class H1RenderCoordinator {
     private func assetMatchesMode(_ asset: RenderAsset, mode: H1TestMode) -> Bool {
         guard asset.kind == mode.renderer else { return false }
         switch mode {
-        case .vectorSynthetic8, .vectorSynthetic20, .vectorSynthetic40:
-            return asset.primitives == mode.expectedPrimitives
-        case .rasterBaseline, .rasterOptimized, .vectorVietmap:
-            return true
+        case .vectorTileMap40, .vectorTileMap60:
+            return asset.primitives <= mode.expectedPrimitives
+        case .rasterStaticCompact, .rasterTileMap:
+            return asset.primitives == 0
         }
     }
 

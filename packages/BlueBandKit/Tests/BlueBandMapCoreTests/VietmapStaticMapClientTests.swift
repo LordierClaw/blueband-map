@@ -273,6 +273,19 @@ final class VietmapStaticMapClientTests: XCTestCase {
         }
     }
 
+    func testAcceptsTheReducedH1StaticMapSize() throws {
+        let request = try StaticMapRequest(
+            validatingLatitude: 10.759157,
+            longitude: 106.675859,
+            zoom: 17,
+            width: 159,
+            height: 270
+        )
+
+        XCTAssertEqual(request.width, 159)
+        XCTAssertEqual(request.height, 270)
+    }
+
     func testFetchRevalidatesRequestCreatedWithNonthrowingInitializer() async {
         let transport = QueueHTTPTransport(responses: [])
         let client = VietmapStaticMapClient(transport: transport)

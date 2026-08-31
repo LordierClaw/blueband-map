@@ -33,8 +33,7 @@ public struct StaticMapRequest: Equatable, Sendable {
         guard (-90...90).contains(latitude),
               (-180...180).contains(longitude),
               (0...20).contains(zoom),
-              width == 212,
-              height == 360 else {
+              [(212, 360), (159, 270)].contains(where: { $0 == (width, height) }) else {
             throw VietmapStaticMapError.invalidRequest
         }
         self.init(latitude: latitude, longitude: longitude, zoom: zoom, width: width, height: height)

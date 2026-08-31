@@ -18,6 +18,7 @@ public enum VectorSceneCodec {
     private static let magic: [UInt8] = [0x42, 0x42, 0x4D, 0x56]
 
     public static func encode(_ scene: NavigationScene) throws -> Data {
+        guard scene.segments.count <= RenderProtocol.maximumPrimitives else { throw Error.tooManySegments }
         var output = Data()
         output.reserveCapacity(headerByteCount + scene.segments.count * segmentByteCount)
         output.append(contentsOf: magic)
@@ -56,7 +57,7 @@ public enum VectorSceneCodec {
         let roadCount = Int(data[9])
         let routeCount = Int(data[10])
         let segmentCount = roadCount + routeCount
-        guard segmentCount <= NavigationScene.maximumSegments else { throw Error.tooManySegments }
+        guard segmentCount <= RenderProtocol.maximumPrimitives else { throw Error.tooManySegments }
         guard data.count == headerByteCount + segmentCount * segmentByteCount else {
             throw Error.invalidLength
         }

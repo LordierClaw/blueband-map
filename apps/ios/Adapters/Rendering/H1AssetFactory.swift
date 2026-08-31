@@ -39,87 +39,91 @@ struct H1AssetFactory: Sendable {
         tileMapKey: String?
     ) async throws -> RenderAsset {
         switch mode {
-        case .rasterBaseline:
+        case .rasterStaticCompact:
             guard let serviceKey else { throw VietmapStaticMapError.missingServiceKey }
-            let map = try await staticMapProvider.fetch(request, serviceKey: serviceKey)
-            return try RenderAsset(
-                kind: .raster,
-                formatVersion: RenderProtocol.formatVersion,
-                width: map.width,
-                height: map.height,
-                data: map.data,
-                primitives: 0
-            )
-
-        case .rasterOptimized:
-            let scene = try NavigationScene.synthetic(segmentCount: 20)
-            let raster = try IndexedRaster.render(scene: scene)
-            let png = try IndexedPNGEncoder.encode(raster)
-            return try RenderAsset(
-                kind: .raster,
-                formatVersion: RenderProtocol.formatVersion,
-                width: raster.width,
-                height: raster.height,
-                data: png,
-                primitives: 0
-            )
-
-        case .vectorSynthetic8, .vectorSynthetic20, .vectorSynthetic40:
-            let scene = try NavigationScene.synthetic(segmentCount: mode.expectedPrimitives)
-            return try makeVectorAsset(scene)
-
-        case .vectorVietmap:
-            guard let tileMapKey, let styleClient, let tileTransport else {
-                throw Error.missingTileMapConfiguration
-            }
-            let template = try await styleClient.discover(tileMapKey: tileMapKey)
-            let zoom = Self.clampedZoom(request.zoom, template: template)
-            let coordinate = Self.tileCoordinate(
+            let compactRequest = StaticMapRequest(
                 latitude: request.latitude,
                 longitude: request.longitude,
-                zoom: zoom
+                zoom: max(0, request.zoom - 1),
+                width: 159,
+                height: 270
             )
-            let tileURL = try template.url(
-                z: zoom,
-                x: coordinate.x,
-                y: coordinate.y,
-                tileMapKey: tileMapKey
+            let map = try await staticMapProvider.fetch(compactRequest, serviceKey: serviceKey)
+            return try RenderAsset(
+                kind: .raster,
+                formatVersion: RenderProtocol.formatVersion,
+                width: RenderProtocol.viewportWidth,
+                height: RenderProtocol.viewportHeight,
+                data: try IndexedPNGEncoder.quantize(map.data, maximumColors: 16),
+                primitives: 0
             )
-            let response = try await tileTransport.execute(MapHTTPRequest(
-                method: "GET",
-                url: tileURL,
-                headers: [
-                    "Accept": "application/vnd.mapbox-vector-tile, application/x-protobuf, application/octet-stream",
-                ],
-                body: Data(),
-                maximumResponseBytes: MapboxVectorTile.maximumBodyBytes
+
+        case .rasterTileMap:
+            let scene = try await makeVietmapScene(tileMapKey: tileMapKey, maximumSegments: 200)
+            return try RenderAsset(
+                kind: .raster,
+                formatVersion: RenderProtocol.formatVersion,
+                width: RenderProtocol.viewportWidth,
+                height: RenderProtocol.viewportHeight,
+                data: IndexedPNGEncoder.encode(try IndexedRaster.render(scene: scene)),
+                primitives: 0
+            )
+
+        case .vectorTileMap40, .vectorTileMap60:
+            return try makeVectorAsset(try await makeVietmapScene(
+                tileMapKey: tileMapKey,
+                maximumSegments: mode.expectedPrimitives
             ))
-            guard response.statusCode == 200 else {
-                throw Error.tileHTTPStatus(response.statusCode)
-            }
-            guard Self.isVectorTileContentType(
-                response.header(named: "Content-Type"),
-                url: tileURL
-            ) else {
-                throw Error.tileWrongContentType
-            }
-            guard !response.body.isEmpty else { throw Error.tileEmpty }
-            let tile = try VietmapVectorTileDecoder.decode(response.body)
-            let scene = try VietmapSceneBuilder.build(
-                tile: tile,
-                sourceLayers: Set(template.sourceLayers),
-                latitude: request.latitude,
-                longitude: request.longitude,
-                zoom: zoom,
-                tileX: coordinate.x,
-                tileY: coordinate.y,
-                headingDegrees: 0,
-                maneuver: .straight,
-                distanceMeters: 0
-            )
-            guard !scene.segments.isEmpty else { throw Error.tileHasNoRoads }
-            return try makeVectorAsset(scene)
         }
+    }
+
+    private func makeVietmapScene(tileMapKey: String?, maximumSegments: Int) async throws -> NavigationScene {
+        guard let tileMapKey, let styleClient, let tileTransport else {
+            throw Error.missingTileMapConfiguration
+        }
+        let template = try await styleClient.discover(tileMapKey: tileMapKey)
+        let zoom = Self.clampedZoom(request.zoom, template: template)
+        let coordinate = Self.tileCoordinate(
+            latitude: request.latitude,
+            longitude: request.longitude,
+            zoom: zoom
+        )
+        let tileURL = try template.url(
+            z: zoom,
+            x: coordinate.x,
+            y: coordinate.y,
+            tileMapKey: tileMapKey
+        )
+        let response = try await tileTransport.execute(MapHTTPRequest(
+            method: "GET",
+            url: tileURL,
+            headers: [
+                "Accept": "application/vnd.mapbox-vector-tile, application/x-protobuf, application/octet-stream",
+            ],
+            body: Data(),
+            maximumResponseBytes: MapboxVectorTile.maximumBodyBytes
+        ))
+        guard response.statusCode == 200 else { throw Error.tileHTTPStatus(response.statusCode) }
+        guard Self.isVectorTileContentType(response.header(named: "Content-Type"), url: tileURL) else {
+            throw Error.tileWrongContentType
+        }
+        guard !response.body.isEmpty else { throw Error.tileEmpty }
+        let tile = try VietmapVectorTileDecoder.decode(response.body)
+        let scene = try VietmapSceneBuilder.build(
+            tile: tile,
+            sourceLayers: Set(template.sourceLayers),
+            latitude: request.latitude,
+            longitude: request.longitude,
+            zoom: zoom,
+            tileX: coordinate.x,
+            tileY: coordinate.y,
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0,
+            maximumSegments: maximumSegments
+        )
+        guard !scene.segments.isEmpty else { throw Error.tileHasNoRoads }
+        return scene
     }
 
     private func makeVectorAsset(_ scene: NavigationScene) throws -> RenderAsset {

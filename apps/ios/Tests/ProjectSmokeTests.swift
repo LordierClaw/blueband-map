@@ -6,7 +6,7 @@ final class ProjectSmokeTests: XCTestCase {
     func testIdentityConstantsAreStable() {
         XCTAssertEqual(BlueBandProduct.bundleIdentifier, "dev.lordierclaw.bluebandmap")
         XCTAssertEqual(BlueBandProduct.rpkPackage, "dev.lordierclaw.bluebandmap.band")
-        XCTAssertEqual(BlueBandProduct.version, "0.1.5")
+        XCTAssertEqual(BlueBandProduct.version, "0.1.6")
     }
 
     func testM1StateHasOnlyTheApprovedCases() {
@@ -52,8 +52,8 @@ final class ProjectSmokeTests: XCTestCase {
         let viewSource = try! String(contentsOf: sourceRoot.appendingPathComponent("App/ContentView.swift"))
         let factorySource = try! String(contentsOf: sourceRoot.appendingPathComponent("Adapters/Rendering/H1AssetFactory.swift"))
 
-        XCTAssertTrue(stateSource.contains("case rasterBaseline"))
-        XCTAssertTrue(stateSource.contains("case vectorVietmap"))
+        XCTAssertTrue(stateSource.contains("case rasterStaticCompact"))
+        XCTAssertTrue(stateSource.contains("case vectorTileMap40"))
         XCTAssertTrue(modelSource.contains("func startH1(mode: H1TestMode) async"))
         XCTAssertTrue(viewSource.contains("ForEach(H1TestMode.allCases"))
         XCTAssertTrue(factorySource.contains("VietmapStyleClient"))

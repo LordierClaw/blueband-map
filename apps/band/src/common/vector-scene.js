@@ -1,16 +1,21 @@
 const LIMITS = Object.freeze({
   width: 212,
   height: 360,
-  maximumSegments: 40,
+  maximumSegments: 60,
   headerBytes: 22,
   segmentBytes: 9
 })
 
 const MAGIC = Object.freeze([0x42, 0x42, 0x4d, 0x56])
 const COLORS = Object.freeze({
-  0: "#7897b8",
+  0: "#9bb2c9",
   1: "#d7e7f7",
   2: "#5dffb0"
+})
+const EDGE_COLORS = Object.freeze({
+  0: "#45627e",
+  1: "#7897b8",
+  2: "#168cff"
 })
 
 function asBytes(value) {
@@ -95,10 +100,11 @@ function sceneToNativeSegments(scene) {
   return scene.segments.map((segment, index) => {
     const dx = segment.end.x - segment.start.x
     const dy = segment.end.y - segment.start.y
-    const length = Math.max(1, Math.round(Math.sqrt(dx * dx + dy * dy)))
+    const length = Math.min(LIMITS.width, Math.max(3, Math.round(Math.sqrt(dx * dx + dy * dy)) + 2))
     const angle = Math.round(Math.atan2(dy, dx) * 180 / Math.PI * 10) / 10
     const color = COLORS[segment.lineClass] || COLORS[0]
-    const thickness = segment.lineClass === 2 ? 3 : (segment.lineClass === 1 ? 2 : 1)
+    const edgeColor = EDGE_COLORS[segment.lineClass] || EDGE_COLORS[0]
+    const thickness = segment.lineClass === 2 ? 7 : (segment.lineClass === 1 ? 6 : 5)
     const left = Math.round(((segment.start.x + segment.end.x - length) / 2) * 10) / 10
     const top = Math.round(((segment.start.y + segment.end.y - thickness) / 2) * 10) / 10
     return {
@@ -109,6 +115,7 @@ function sceneToNativeSegments(scene) {
       height: thickness,
       angle,
       color,
+      edgeColor,
       style: {
         position: "absolute",
         left: left + "px",
@@ -116,6 +123,10 @@ function sceneToNativeSegments(scene) {
         width: length + "px",
         height: thickness + "px",
         backgroundColor: color,
+        borderWidth: "1px",
+        borderStyle: "solid",
+        borderColor: edgeColor,
+        borderRadius: "2px",
         transform: JSON.stringify({ rotate: angle + "deg" })
       }
     }

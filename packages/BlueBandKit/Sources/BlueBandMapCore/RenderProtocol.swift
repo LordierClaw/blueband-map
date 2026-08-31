@@ -44,7 +44,7 @@ public enum RenderProtocol {
     public static let viewportWidth = 212
     public static let viewportHeight = 360
     public static let maximumPayloadBytes = 64 * 1_024
-    public static let maximumPrimitives = 40
+    public static let maximumPrimitives = 60
     public static let maximumIdentifierBytes = 24
 
     public static func isValidIdentifier(_ value: String) -> Bool {

@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.8</text>
+      <text class="version">RPK 0.2.9</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.8 • ENV V1</text>
+        <text class="version">RPK 0.2.9 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -179,7 +179,7 @@ var renderProtocolLimits = {
   payloadBytes: 64 * 1024,
   width: 212,
   height: 360,
-  maximumPrimitives: 40,
+  maximumPrimitives: 60,
   formatVersion: 1,
   maximumIdentifierBytes: 24
 }
@@ -281,7 +281,7 @@ var renderProtocol = {
 var vectorSceneLimits = {
   width: 212,
   height: 360,
-  maximumSegments: 40,
+  maximumSegments: 60,
   headerBytes: 22,
   segmentBytes: 9
 }
@@ -374,16 +374,18 @@ function vectorSceneDecodeBBMV(value) {
 
 function vectorSceneNativeSegments(scene) {
   if (!scene || !Array.isArray(scene.segments) || scene.segments.length > vectorSceneLimits.maximumSegments) return []
-  var colors = ["#7897b8", "#d7e7f7", "#5dffb0"]
+  var colors = ["#9bb2c9", "#d7e7f7", "#5dffb0"]
+  var edgeColors = ["#45627e", "#7897b8", "#168cff"]
   var segments = []
   for (var index = 0; index < scene.segments.length; index += 1) {
     var segment = scene.segments[index]
     var dx = segment.end.x - segment.start.x
     var dy = segment.end.y - segment.start.y
-    var length = Math.max(1, Math.round(Math.sqrt(dx * dx + dy * dy)))
+    var length = Math.min(vectorSceneLimits.width, Math.max(3, Math.round(Math.sqrt(dx * dx + dy * dy)) + 2))
     var angle = Math.round(Math.atan2(dy, dx) * 180 / Math.PI * 10) / 10
     var color = colors[segment.lineClass] || colors[0]
-    var thickness = segment.lineClass === 2 ? 3 : (segment.lineClass === 1 ? 2 : 1)
+    var edgeColor = edgeColors[segment.lineClass] || edgeColors[0]
+    var thickness = segment.lineClass === 2 ? 7 : (segment.lineClass === 1 ? 6 : 5)
     var left = Math.round(((segment.start.x + segment.end.x - length) / 2) * 10) / 10
     var top = Math.round(((segment.start.y + segment.end.y - thickness) / 2) * 10) / 10
     segments.push({
@@ -394,6 +396,7 @@ function vectorSceneNativeSegments(scene) {
       height: thickness,
       angle: angle,
       color: color,
+      edgeColor: edgeColor,
       style: {
         position: "absolute",
         left: left + "px",
@@ -401,6 +404,10 @@ function vectorSceneNativeSegments(scene) {
         width: length + "px",
         height: thickness + "px",
         backgroundColor: color,
+        borderWidth: "1px",
+        borderStyle: "solid",
+        borderColor: edgeColor,
+        borderRadius: "2px",
         transform: JSON.stringify({ rotate: angle + "deg" })
       }
     })

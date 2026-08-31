@@ -1,10 +1,30 @@
 import Foundation
+import CoreGraphics
+import ImageIO
 import XCTest
 import BlueBandMapCore
 @testable import BlueBandMap
 
 final class H1AssetFactoryTests: XCTestCase {
     private let key = "tile-test-key"
+
+    func testOptimizedRasterRequestsReducedVietmapImageAndScalesItToTheBandViewport() async throws {
+        let provider = H1RecordingStaticMapProvider()
+        let factory = H1AssetFactory(staticMapProvider: provider)
+
+        let asset = try await factory.make(
+            mode: .rasterStaticCompact,
+            serviceKey: "service-test-key",
+            tileMapKey: nil
+        )
+
+        let requests = await provider.requests
+        XCTAssertEqual(requests.map { [$0.width, $0.height] }, [[159, 270]])
+        XCTAssertEqual(requests.map(\.zoom), [16])
+        XCTAssertEqual(asset.kind, .raster)
+        XCTAssertEqual(asset.width, RenderProtocol.viewportWidth)
+        XCTAssertEqual(asset.height, RenderProtocol.viewportHeight)
+    }
 
     func testVectorVietmapClampsZ17ToZ14AndAcceptsLegacyVietmapTile() async throws {
         let styleTransport = H1HTTPTransport(responses: [styleResponse(maximumZoom: 14)])
@@ -14,13 +34,27 @@ final class H1AssetFactoryTests: XCTestCase {
         )])
         let factory = makeFactory(styleTransport: styleTransport, tileTransport: tileTransport)
 
-        let asset = try await factory.make(mode: .vectorVietmap, serviceKey: nil, tileMapKey: key)
+        let asset = try await factory.make(mode: .vectorTileMap40, serviceKey: nil, tileMapKey: key)
 
         XCTAssertEqual(asset.kind, .vector)
         XCTAssertGreaterThan(asset.primitives, 0)
         let requests = await tileTransport.recordedRequests
         let request = try XCTUnwrap(requests.first)
         XCTAssertEqual(request.url.path, "/mt/tile/data-20250529/14/13046/7699")
+    }
+
+    func testTileMapRasterUsesRealVectorTileGeometryAndProducesOnePNG() async throws {
+        let asset = try await makeFactory(
+            styleTransport: H1HTTPTransport(responses: [styleResponse(maximumZoom: 14)]),
+            tileTransport: H1HTTPTransport(responses: [tileResponse(
+                contentType: "application/x-protobuf",
+                body: H1VectorTileFixture.centeredLineTile(y: 1_783)
+            )])
+        ).make(mode: .rasterTileMap, serviceKey: nil, tileMapKey: key)
+
+        XCTAssertEqual(asset.kind, .raster)
+        XCTAssertEqual(asset.primitives, 0)
+        _ = try MapAsset.png(data: asset.data, expectedWidth: 212, expectedHeight: 360)
     }
 
     func testVectorVietmapKeepsExistingVectorMIMEType() async throws {
@@ -33,7 +67,7 @@ final class H1AssetFactoryTests: XCTestCase {
         let asset = try await makeFactory(
             styleTransport: styleTransport,
             tileTransport: tileTransport
-        ).make(mode: .vectorVietmap, serviceKey: nil, tileMapKey: key)
+        ).make(mode: .vectorTileMap40, serviceKey: nil, tileMapKey: key)
 
         XCTAssertEqual(asset.kind, .vector)
     }
@@ -49,7 +83,7 @@ final class H1AssetFactoryTests: XCTestCase {
         let asset = try await makeFactory(
             styleTransport: styleTransport,
             tileTransport: tileTransport
-        ).make(mode: .vectorVietmap, serviceKey: nil, tileMapKey: key)
+        ).make(mode: .vectorTileMap40, serviceKey: nil, tileMapKey: key)
 
         XCTAssertEqual(asset.kind, .vector)
         XCTAssertGreaterThan(asset.primitives, 0)
@@ -63,7 +97,7 @@ final class H1AssetFactoryTests: XCTestCase {
             tileTransport: H1HTTPTransport(responses: [tileResponse(contentType: "text/plain", body: validBody)])
         )
         do {
-            _ = try await wrongPathFactory.make(mode: .vectorVietmap, serviceKey: nil, tileMapKey: key)
+            _ = try await wrongPathFactory.make(mode: .vectorTileMap40, serviceKey: nil, tileMapKey: key)
             XCTFail("Expected text/plain on a non-PBF path to fail")
         } catch {
             XCTAssertEqual(error as? H1AssetFactory.Error, .tileWrongContentType)
@@ -74,7 +108,7 @@ final class H1AssetFactoryTests: XCTestCase {
             tileTransport: H1HTTPTransport(responses: [tileResponse(contentType: "text/plain", body: Data([0x1a, 0x80]))])
         )
         do {
-            _ = try await invalidBodyFactory.make(mode: .vectorVietmap, serviceKey: nil, tileMapKey: key)
+            _ = try await invalidBodyFactory.make(mode: .vectorTileMap40, serviceKey: nil, tileMapKey: key)
             XCTFail("Expected invalid MVT data to fail")
         } catch {
             XCTAssertEqual(error as? MapboxVectorTile.Error, .truncated)
@@ -95,7 +129,7 @@ final class H1AssetFactoryTests: XCTestCase {
             _ = try await makeFactory(
                 styleTransport: styleTransport,
                 tileTransport: tileTransport
-            ).make(mode: .vectorVietmap, serviceKey: nil, tileMapKey: key)
+            ).make(mode: .vectorTileMap40, serviceKey: nil, tileMapKey: key)
             XCTFail("Expected foreign tile host rejection")
         } catch {
             XCTAssertEqual(error as? VietmapStyleError, .invalidTileTemplate)
@@ -150,6 +184,37 @@ private struct H1UnusedStaticMapProvider: StaticMapProviding {
     func fetch(_ request: StaticMapRequest, serviceKey: String) async throws -> MapAsset {
         throw VietmapStaticMapError.invalidRequest
     }
+}
+
+private actor H1RecordingStaticMapProvider: StaticMapProviding {
+    private(set) var requests: [StaticMapRequest] = []
+
+    func fetch(_ request: StaticMapRequest, serviceKey: String) async throws -> MapAsset {
+        requests.append(request)
+        return try MapAsset.png(
+            data: h1PNG(width: request.width, height: request.height),
+            expectedWidth: request.width,
+            expectedHeight: request.height
+        )
+    }
+}
+
+private func h1PNG(width: Int, height: Int) throws -> Data {
+    let pixels = Data(repeating: 0xCC, count: width * height * 4)
+    guard let provider = CGDataProvider(data: pixels as CFData),
+          let image = CGImage(
+            width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+          ) else { throw IndexedPNGEncoder.Error.imageCreationFailed }
+    let output = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(output, "public.png" as CFString, 1, nil) else {
+        throw IndexedPNGEncoder.Error.destinationCreationFailed
+    }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else { throw IndexedPNGEncoder.Error.encodingFailed }
+    return output as Data
 }
 
 private actor H1HTTPTransport: MapHTTPTransport {

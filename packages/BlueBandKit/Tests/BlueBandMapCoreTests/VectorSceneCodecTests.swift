@@ -30,7 +30,7 @@ final class VectorSceneCodecTests: XCTestCase {
     }
 
     func testCodecRoundTripsSyntheticFixturesAndRejectsMalformedCounts() throws {
-        for count in [8, 20, 40] {
+        for count in [40, 60] {
             let scene = try NavigationScene.synthetic(segmentCount: count)
             let decoded = try VectorSceneCodec.decode(try VectorSceneCodec.encode(scene))
             XCTAssertEqual(decoded, scene)
@@ -42,7 +42,7 @@ final class VectorSceneCodecTests: XCTestCase {
         malformed[5] = 0xd4
         malformed[7] = 0x68
         malformed[8] = 0x01
-        malformed[9] = 41
+        malformed[9] = 61
         XCTAssertThrowsError(try VectorSceneCodec.decode(malformed)) { error in
             XCTAssertEqual(error as? VectorSceneCodec.Error, .tooManySegments)
         }

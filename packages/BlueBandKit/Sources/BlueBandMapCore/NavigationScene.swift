@@ -43,7 +43,7 @@ public struct NavigationScene: Equatable, Sendable {
         case invalidHeading
     }
 
-    public static let maximumSegments = RenderProtocol.maximumPrimitives
+    public static let maximumSegments = 200
 
     public let currentPosition: ScenePoint
     public let headingDegrees: UInt16
@@ -84,11 +84,11 @@ public struct NavigationScene: Equatable, Sendable {
     }
 
     public static func synthetic(segmentCount: Int) throws -> NavigationScene {
-        guard (0...maximumSegments).contains(segmentCount) else { throw Error.tooManySegments }
+        guard (0...RenderProtocol.maximumPrimitives).contains(segmentCount) else { throw Error.tooManySegments }
         let xs: [UInt16] = [16, 52, 88, 124, 160, 196]
         let ys: [UInt16] = [40, 100, 160, 220, 280, 340]
         var grid = [SceneSegment]()
-        for y in ys.prefix(5) {
+        for y in ys {
             for index in 0..<(xs.count - 1) {
                 grid.append(SceneSegment(
                     start: ScenePoint(x: xs[index], y: y),
@@ -97,7 +97,7 @@ public struct NavigationScene: Equatable, Sendable {
                 ))
             }
         }
-        for x in [xs[0], xs[3], xs[5]] {
+        for x in xs {
             for index in 0..<(ys.count - 1) {
                 grid.append(SceneSegment(
                     start: ScenePoint(x: x, y: ys[index]),

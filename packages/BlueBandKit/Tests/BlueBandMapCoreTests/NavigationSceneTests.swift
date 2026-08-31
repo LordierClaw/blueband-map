@@ -3,13 +3,12 @@ import XCTest
 
 final class NavigationSceneTests: XCTestCase {
     func testSyntheticFixturesHaveTheRequestedBoundedSizes() throws {
-        XCTAssertEqual(try NavigationScene.synthetic(segmentCount: 8).segments.count, 8)
-        XCTAssertEqual(try NavigationScene.synthetic(segmentCount: 20).segments.count, 20)
         XCTAssertEqual(try NavigationScene.synthetic(segmentCount: 40).segments.count, 40)
+        XCTAssertEqual(try NavigationScene.synthetic(segmentCount: 60).segments.count, 60)
     }
 
-    func testSyntheticFortyFormsConnectedRoadsInsteadOfIsolatedDashes() throws {
-        let segments = try NavigationScene.synthetic(segmentCount: 40).segments
+    func testSyntheticSixtyFormsConnectedRoadsInsteadOfIsolatedDashes() throws {
+        let segments = try NavigationScene.synthetic(segmentCount: 60).segments
         for segment in segments {
             XCTAssertTrue(segments.contains { candidate in
                 candidate != segment && [candidate.start, candidate.end].contains(segment.start)
@@ -17,8 +16,22 @@ final class NavigationSceneTests: XCTestCase {
         }
     }
 
-    func testSceneRejectsMoreThanFortySegmentsAndOutOfViewportPoints() {
-        XCTAssertThrowsError(try NavigationScene.synthetic(segmentCount: 41)) { error in
+    func testSceneRejectsMoreThanItsModeAndRasterBudgetsAndOutOfViewportPoints() {
+        XCTAssertThrowsError(try NavigationScene.synthetic(segmentCount: 61)) { error in
+            XCTAssertEqual(error as? NavigationScene.Error, .tooManySegments)
+        }
+        let segment = SceneSegment(
+            start: ScenePoint(x: 0, y: 0),
+            end: ScenePoint(x: 1, y: 1),
+            lineClass: .minor
+        )
+        XCTAssertThrowsError(try NavigationScene(
+            currentPosition: ScenePoint(x: 1, y: 1),
+            headingDegrees: 0,
+            maneuver: .straight,
+            distanceMeters: 0,
+            segments: Array(repeating: segment, count: 201)
+        )) { error in
             XCTAssertEqual(error as? NavigationScene.Error, .tooManySegments)
         }
 

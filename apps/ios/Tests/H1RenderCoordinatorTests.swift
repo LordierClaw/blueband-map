@@ -10,14 +10,13 @@ final class H1RenderCoordinatorTests: XCTestCase {
     private let scene1 = "scene-000000000001"
 
     func testModesAreExplicitAndChooseTheirRenderer() {
-        XCTAssertEqual(H1TestMode.allCases.count, 6)
-        XCTAssertEqual(H1TestMode.rasterBaseline.renderer, .raster)
-        XCTAssertEqual(H1TestMode.rasterOptimized.renderer, .raster)
-        XCTAssertEqual(H1TestMode.vectorSynthetic8.renderer, .vector)
-        XCTAssertEqual(H1TestMode.vectorSynthetic20.renderer, .vector)
-        XCTAssertEqual(H1TestMode.vectorSynthetic40.renderer, .vector)
-        XCTAssertEqual(H1TestMode.vectorVietmap.renderer, .vector)
-        XCTAssertEqual(H1TestMode.vectorSynthetic40.expectedPrimitives, 40)
+        XCTAssertEqual(H1TestMode.allCases.count, 4)
+        XCTAssertEqual(H1TestMode.rasterStaticCompact.renderer, .raster)
+        XCTAssertEqual(H1TestMode.rasterTileMap.renderer, .raster)
+        XCTAssertEqual(H1TestMode.vectorTileMap40.renderer, .vector)
+        XCTAssertEqual(H1TestMode.vectorTileMap60.renderer, .vector)
+        XCTAssertEqual(H1TestMode.vectorTileMap40.expectedPrimitives, 40)
+        XCTAssertEqual(H1TestMode.vectorTileMap60.expectedPrimitives, 60)
     }
 
     func testProviderHTTPStatusIsPreservedWithoutProviderBodyOrKey() async {
@@ -30,9 +29,9 @@ final class H1RenderCoordinatorTests: XCTestCase {
             sceneIDGenerator: { "scene-000000000001" }
         )
 
-        await coordinator.start(mode: .vectorVietmap, tileMapKey: "not-exported")
+        await coordinator.start(mode: .vectorTileMap40, tileMapKey: "not-exported")
 
-        XCTAssertEqual(coordinator.state, .failed(mode: .vectorVietmap, code: "STYLE_HTTP_403"))
+        XCTAssertEqual(coordinator.state, .failed(mode: .vectorTileMap40, code: "STYLE_HTTP_403"))
         let startedCount = await sender.startedCount
         XCTAssertEqual(startedCount, 0)
     }
@@ -47,9 +46,9 @@ final class H1RenderCoordinatorTests: XCTestCase {
             sceneIDGenerator: { "scene-000000000001" }
         )
 
-        await coordinator.start(mode: .vectorVietmap, tileMapKey: "not-exported")
+        await coordinator.start(mode: .vectorTileMap40, tileMapKey: "not-exported")
 
-        XCTAssertEqual(coordinator.state, .failed(mode: .vectorVietmap, code: "TILE_HTTP_404"))
+        XCTAssertEqual(coordinator.state, .failed(mode: .vectorTileMap40, code: "TILE_HTTP_404"))
         let startedCount = await sender.startedCount
         XCTAssertEqual(startedCount, 0)
     }
@@ -68,9 +67,9 @@ final class H1RenderCoordinatorTests: XCTestCase {
                 sceneIDGenerator: { "scene-000000000001" }
             )
 
-            await coordinator.start(mode: .vectorVietmap, tileMapKey: "not-exported")
+            await coordinator.start(mode: .vectorTileMap40, tileMapKey: "not-exported")
 
-            XCTAssertEqual(coordinator.state, .failed(mode: .vectorVietmap, code: code))
+            XCTAssertEqual(coordinator.state, .failed(mode: .vectorTileMap40, code: code))
         }
     }
 
@@ -78,7 +77,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: try makeAsset(kind: .vector))
         let coordinator = makeCoordinator(sender: sender, provider: provider)
-        let start = Task { await coordinator.start(mode: .vectorSynthetic8) }
+        let start = Task { await coordinator.start(mode: .vectorTileMap40) }
 
         await waitUntil { await sender.startedCount == 1 }
         coordinator.consume(readyEnvelope(runID: run1, sceneID: scene1, renderer: "vector"))
@@ -89,7 +88,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
 
         await sender.failNext(CancellationError())
         await start.value
-        XCTAssertEqual(coordinator.state, .failed(mode: .vectorSynthetic8, code: "TRANSFER_CANCELLED"))
+        XCTAssertEqual(coordinator.state, .failed(mode: .vectorTileMap40, code: "TRANSFER_CANCELLED"))
         XCTAssertNotNil(coordinator.lastRunRecord)
     }
 
@@ -97,7 +96,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: try makeAsset(kind: .raster))
         let coordinator = makeCoordinator(sender: sender, provider: provider)
-        let start = Task { await coordinator.start(mode: .rasterBaseline) }
+        let start = Task { await coordinator.start(mode: .rasterStaticCompact) }
 
         await waitUntil { await sender.startedCount == 1 }
         coordinator.consume(rejectEnvelope(runID: run1, sceneID: scene1, code: "payloadTooLarge"))
@@ -106,7 +105,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
 
         let steps = await sender.steps
         XCTAssertEqual(steps.map(\.topic), ["render.prepare"])
-        XCTAssertEqual(coordinator.state, .failed(mode: .rasterBaseline, code: "payloadTooLarge"))
+        XCTAssertEqual(coordinator.state, .failed(mode: .rasterStaticCompact, code: "payloadTooLarge"))
     }
 
     func testResultBeforeFinalACKIsBufferedAndDisplaysAfterExactConfirmation() async throws {
@@ -114,7 +113,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: asset)
         let coordinator = makeCoordinator(sender: sender, provider: provider)
-        let start = Task { await coordinator.start(mode: .vectorSynthetic8) }
+        let start = Task { await coordinator.start(mode: .vectorTileMap40) }
 
         await waitUntil { await sender.startedCount == 1 }
         coordinator.consume(readyEnvelope(runID: run1, sceneID: scene1, renderer: "vector"))
@@ -133,7 +132,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         await start.value
 
         XCTAssertEqual(coordinator.state, .displayed(
-            mode: .vectorSynthetic8, runID: run1, hashPrefix: String(asset.sha256.prefix(8))
+            mode: .vectorTileMap40, runID: run1, hashPrefix: String(asset.sha256.prefix(8))
         ))
         XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "displayed")
     }
@@ -143,7 +142,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: asset)
         let coordinator = makeCoordinator(sender: sender, provider: provider)
-        let start = Task { await coordinator.start(mode: .vectorSynthetic8) }
+        let start = Task { await coordinator.start(mode: .vectorTileMap40) }
 
         await waitUntil { await sender.startedCount == 1 }
         coordinator.consume(readyEnvelope(runID: run1, sceneID: scene1, renderer: "vector"))
@@ -162,7 +161,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         await start.value
 
         XCTAssertEqual(coordinator.state, .failed(
-            mode: .vectorSynthetic8, code: "RESULT_SCHEMA_INVALID"
+            mode: .vectorTileMap40, code: "RESULT_SCHEMA_INVALID"
         ))
         XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "RESULT_SCHEMA_INVALID")
     }
@@ -172,7 +171,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: asset)
         let coordinator = makeCoordinator(sender: sender, provider: provider)
-        let start = Task { await coordinator.start(mode: .vectorSynthetic8) }
+        let start = Task { await coordinator.start(mode: .vectorTileMap40) }
 
         await waitUntil { await sender.startedCount == 1 }
         coordinator.consume(readyEnvelope(runID: run1, sceneID: scene1, renderer: "vector"))
@@ -186,7 +185,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         await start.value
 
         XCTAssertEqual(coordinator.state, .failed(
-            mode: .vectorSynthetic8, code: "RESULT_EARLY"
+            mode: .vectorTileMap40, code: "RESULT_EARLY"
         ))
         XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "RESULT_EARLY")
     }
@@ -196,7 +195,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: asset)
         let coordinator = makeCoordinator(sender: sender, provider: provider)
-        let start = Task { await coordinator.start(mode: .vectorSynthetic8) }
+        let start = Task { await coordinator.start(mode: .vectorTileMap40) }
 
         await waitUntil { await sender.startedCount == 1 }
         coordinator.consume(readyEnvelope(runID: run1, sceneID: scene1, renderer: "vector"))
@@ -215,7 +214,7 @@ final class H1RenderCoordinatorTests: XCTestCase {
         await start.value
 
         XCTAssertEqual(coordinator.state, .failed(
-            mode: .vectorSynthetic8, code: "RESULT_BYTES_MISMATCH"
+            mode: .vectorTileMap40, code: "RESULT_BYTES_MISMATCH"
         ))
         XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "RESULT_BYTES_MISMATCH")
     }
@@ -224,33 +223,33 @@ final class H1RenderCoordinatorTests: XCTestCase {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: try makeAsset(kind: .vector))
         let coordinator = makeCoordinator(sender: sender, provider: provider, runIDs: [run1])
-        let start = Task { await coordinator.start(mode: .vectorSynthetic8) }
+        let start = Task { await coordinator.start(mode: .vectorTileMap40) }
         await waitUntil { await sender.startedCount == 1 }
         coordinator.consume(resultEnvelope(
             runID: "h1-run-stale-00001", sceneID: scene1, renderer: "vector", success: true,
             bytes: 3, primitives: 8
         ))
-        XCTAssertEqual(coordinator.state, .preparing(mode: .vectorSynthetic8, runID: run1))
+        XCTAssertEqual(coordinator.state, .preparing(mode: .vectorTileMap40, runID: run1))
         coordinator.consume(rejectEnvelope(runID: run1, sceneID: scene1, code: "unsupportedRenderer"))
         await sender.acknowledgeNext()
         await start.value
 
         let modes = await provider.modes
-        XCTAssertEqual(modes, [.vectorSynthetic8])
-        XCTAssertEqual(coordinator.state, .failed(mode: .vectorSynthetic8, code: "unsupportedRenderer"))
+        XCTAssertEqual(modes, [.vectorTileMap40])
+        XCTAssertEqual(coordinator.state, .failed(mode: .vectorTileMap40, code: "unsupportedRenderer"))
     }
 
     func testDisconnectCancelsOwnershipAndClosesRunRecord() async throws {
         let sender = H1TestSender()
         let provider = H1TestProvider(asset: try makeAsset(kind: .raster))
         let coordinator = makeCoordinator(sender: sender, provider: provider)
-        let start = Task { await coordinator.start(mode: .rasterBaseline) }
+        let start = Task { await coordinator.start(mode: .rasterStaticCompact) }
         await waitUntil { await sender.startedCount == 1 }
         coordinator.disconnected()
         await sender.failNext(InterconnectDeliveryError.disconnected)
         await start.value
 
-        XCTAssertEqual(coordinator.state, .failed(mode: .rasterBaseline, code: "TRANSFER_DISCONNECTED"))
+        XCTAssertEqual(coordinator.state, .failed(mode: .rasterStaticCompact, code: "TRANSFER_DISCONNECTED"))
         XCTAssertTrue(coordinator.requiresReconnect)
         XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "TRANSFER_DISCONNECTED")
     }

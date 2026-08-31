@@ -1,8 +1,8 @@
 {
   "package": "dev.lordierclaw.bluebandmap.band",
   "name": "BlueBandMap",
-  "versionName": "0.2.8",
-  "versionCode": 10,
+  "versionName": "0.2.9",
+  "versionCode": 11,
   "minPlatformVersion": 1000,
   "icon": "/common/icon.png",
   "deviceTypeList": ["watch"],

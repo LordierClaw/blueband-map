@@ -50,13 +50,13 @@ test("decodes the exact BBMV header and bounded scene records", () => {
   assert.equal(result.scene.distanceMeters, 120)
 })
 
-test("accepts 8, 20 and 40 records but rejects the 41-record boundary", () => {
-  for (const count of [8, 20, 40]) {
+test("accepts the 40 and 60 POC budgets but rejects the 61-record boundary", () => {
+  for (const count of [40, 60]) {
     const result = decodeBBMV(bbmv(count))
     assert.equal(result.ok, true)
     assert.equal(result.scene.segments.length, count)
   }
-  assert.deepEqual(decodeBBMV(bbmv(41)), { ok: false, code: "tooManySegments" })
+  assert.deepEqual(decodeBBMV(bbmv(61)), { ok: false, code: "tooManySegments" })
 })
 
 test("rejects malformed BBMV without allocating a scene", () => {
@@ -83,5 +83,9 @@ test("converts each accepted segment to a Toolkit 2 dynamic style object", () =>
   assert.equal(segments.filter(segment => segment.color === "#5dffb0").length, 2)
   assert.ok(segments.every(segment => segment.width >= 1 && segment.width <= 212))
   assert.ok(segments.every(segment => typeof segment.style === "object" && segment.style.position === "absolute"))
+  assert.ok(segments.every(segment => segment.style.borderWidth === "1px"))
+  assert.ok(segments.every(segment => segment.style.borderStyle === "solid"))
+  assert.ok(segments.every(segment => segment.style.borderColor === segment.edgeColor))
+  assert.ok(segments.every(segment => segment.style.borderRadius === "2px"))
   assert.ok(segments.every(segment => /^-?[0-9]+(?:\.[0-9]+)?deg$/.test(JSON.parse(segment.style.transform).rotate)))
 })

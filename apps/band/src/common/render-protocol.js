@@ -3,7 +3,7 @@ const LIMITS = Object.freeze({
   payloadBytes: 64 * 1024,
   width: 212,
   height: 360,
-  maximumPrimitives: 40,
+  maximumPrimitives: 60,
   formatVersion: 1,
   maximumIdentifierBytes: 24
 })

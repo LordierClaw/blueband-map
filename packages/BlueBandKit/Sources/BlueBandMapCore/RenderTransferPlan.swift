@@ -14,15 +14,16 @@ public struct RenderTransferStep: Equatable, Sendable {
 public enum RenderTransferPlan {
     public enum Error: Swift.Error, Equatable, Sendable {
         case cannotFitChunk
+        case tooManyChunks
         case invalidRunID
         case invalidSceneID
     }
 
     public static let maximumRunIDBytes = RenderProtocol.maximumIdentifierBytes
     public static let maximumSceneIDBytes = RenderProtocol.maximumIdentifierBytes
+    public static let maximumDataChunks = 60
     private static let envelopeID = String(repeating: "\\", count: 32)
     private static let maximumChunkBytes = 320
-    private static let sizingID = String(repeating: "r", count: RenderProtocol.maximumIdentifierBytes)
 
     public static func make(asset: RenderAsset, runID: String, sceneID: String) throws -> [RenderTransferStep] {
         guard RenderProtocol.isValidIdentifier(runID) else { throw Error.invalidRunID }
@@ -37,7 +38,13 @@ public enum RenderTransferPlan {
         var steps = [begin]
         var offset = 0
         while offset < asset.byteCount {
-            let chunkByteCount = maximumFittingChunkByteCount(for: asset, offset: offset)
+            guard steps.count - 1 < maximumDataChunks else { throw Error.tooManyChunks }
+            let chunkByteCount = maximumFittingChunkByteCount(
+                for: asset,
+                offset: offset,
+                runID: runID,
+                sceneID: sceneID
+            )
             guard chunkByteCount > 0 else { throw Error.cannotFitChunk }
             let step = chunkStep(for: asset, offset: offset, byteCount: chunkByteCount, runID: runID, sceneID: sceneID)
             guard fitsEnvelope(step) else { throw Error.cannotFitChunk }
@@ -75,7 +82,12 @@ public enum RenderTransferPlan {
         ]
     }
 
-    private static func maximumFittingChunkByteCount(for asset: RenderAsset, offset: Int) -> Int {
+    private static func maximumFittingChunkByteCount(
+        for asset: RenderAsset,
+        offset: Int,
+        runID: String,
+        sceneID: String
+    ) -> Int {
         var lowerBound = 1
         var upperBound = min(maximumChunkBytes, asset.byteCount - offset)
         var best = 0
@@ -85,8 +97,8 @@ public enum RenderTransferPlan {
                 for: asset,
                 offset: offset,
                 byteCount: candidate,
-                runID: sizingID,
-                sceneID: sizingID
+                runID: runID,
+                sceneID: sceneID
             )
             if fitsEnvelope(step) {
                 best = candidate

@@ -103,7 +103,7 @@ final class RenderProtocolTests: XCTestCase {
             width: 212,
             height: 360,
             data: Data([0x01]),
-            primitives: 41
+            primitives: 61
         )) { error in
             XCTAssertEqual(error as? RenderAsset.Error, .tooManyPrimitives)
         }
@@ -154,5 +154,39 @@ final class RenderProtocolTests: XCTestCase {
         XCTAssertEqual(steps.first?.body["renderer"], .string("raster"))
         XCTAssertEqual(steps.first?.body["format"], .string(RenderFormat.raster.rawValue))
         XCTAssertEqual(steps.first?.body["primitives"], .number(0))
+    }
+
+    func testRenderTransferUsesActualIdentifiersAndRejectsMoreThanSixtyDataChunks() throws {
+        let actualRunID = "h1-run-0123456789abcdef"
+        let actualSceneID = "scene-0123456789abcdef"
+        let compact = try RenderAsset(
+            kind: .raster,
+            formatVersion: 1,
+            width: 212,
+            height: 360,
+            data: Data(repeating: 0x37, count: 7_014),
+            primitives: 0
+        )
+        let steps = try RenderTransferPlan.make(asset: compact, runID: actualRunID, sceneID: actualSceneID)
+        let firstChunk = try XCTUnwrap(steps.first { $0.topic == "map.asset.chunk" })
+        guard case let .string(encoded)? = firstChunk.body["data"] else { return XCTFail("missing chunk data") }
+        XCTAssertEqual(Data(base64Encoded: encoded)?.count, 189)
+        XCTAssertLessThanOrEqual(steps.count - 2, RenderTransferPlan.maximumDataChunks)
+
+        let slow = try RenderAsset(
+            kind: .raster,
+            formatVersion: 1,
+            width: 212,
+            height: 360,
+            data: Data(repeating: 0x37, count: 12_000),
+            primitives: 0
+        )
+        XCTAssertThrowsError(try RenderTransferPlan.make(
+            asset: slow,
+            runID: actualRunID,
+            sceneID: actualSceneID
+        )) { error in
+            XCTAssertEqual(error as? RenderTransferPlan.Error, .tooManyChunks)
+        }
     }
 }
