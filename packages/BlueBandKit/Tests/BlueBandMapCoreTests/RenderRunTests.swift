@@ -48,6 +48,35 @@ final class RenderRunTests: XCTestCase {
         XCTAssertTrue(text.contains("ackP95Ms"))
     }
 
+    func testLongRasterExportStaysValidAndBounded() throws {
+        let base = try makeRecord()
+        let metrics = try RenderRunMetrics(
+            totalMilliseconds: 45_842,
+            providerMilliseconds: 313,
+            prepareMilliseconds: 94,
+            transferMilliseconds: 45_196,
+            validateMilliseconds: 0,
+            renderMilliseconds: 239,
+            bytes: 21_567,
+            chunks: 120,
+            retries: 0,
+            primitives: 0,
+            providerCalls: 1,
+            ackDurationsMilliseconds: Array(repeating: 420, count: 121),
+            terminalCode: "displayed"
+        )
+        let record = RenderRunRecord(
+            identity: base.identity,
+            events: base.events,
+            metrics: metrics,
+            payloadSHA256: base.payloadSHA256
+        )
+
+        let data = try record.sanitizedExportData()
+        XCTAssertLessThan(data.count, 1_024)
+        XCTAssertNoThrow(try JSONSerialization.jsonObject(with: data))
+    }
+
     func testMetricsRejectNegativeDurationsAndCounters() {
         XCTAssertThrowsError(try RenderRunMetrics(
             totalMilliseconds: -1,

@@ -531,21 +531,18 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
   assert.equal(sent.filter(message => message.id === "begin-1").length, 2)
 
   page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAE=" }) })
-  assert.equal(sent.length, 2, "chunk must wait for write success")
-  assert.equal(writes[0].uri, URI)
-  assert.equal(writes[0].position, 0)
-  assert.ok(writes[0].buffer instanceof Uint8Array)
-  assert.deepEqual([...writes[0].buffer], [0, 1])
-  writes[0].success()
+  assert.equal(writes.length, 0, "chunks stay in the bounded transfer buffer")
   assert.deepEqual(sent.at(-1), { v: 1, id: "chunk-1", src: "band", type: "ack" })
 
   page.receiveMessage({ data: envelope("chunk-2", "map.asset.chunk", { asset: ASSET, offset: 2, data: "AgM=" }) })
-  assert.equal(writes[1].position, 2)
-  assert.deepEqual([...writes[1].buffer], [2, 3])
-  assert.equal(sent.length, 3)
-  writes[1].success()
+  assert.equal(writes.length, 0)
 
   page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
+  assert.equal(writes.length, 1, "the completed asset is written once")
+  assert.equal(writes[0].uri, URI)
+  assert.equal(writes[0].position, 0)
+  assert.deepEqual([...writes[0].buffer], [0, 1, 2, 3])
+  writes[0].success()
   assert.deepEqual([...stored], [0, 1, 2, 3])
   assert.equal(page.mapReady, true)
   assert.equal(page.mapPath, URI)
@@ -578,15 +575,12 @@ test("deduplicates successful and in-flight asset messages without repeating sid
   const chunk = envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
   page.receiveMessage({ data: chunk })
   page.receiveMessage({ data: chunk })
-  assert.equal(writes.length, 1)
-  assert.equal(sent.filter(message => message.id === "chunk-1").length, 0)
-  writes[0].success()
-  assert.equal(sent.filter(message => message.id === "chunk-1").length, 1)
-  page.receiveMessage({ data: chunk })
-  assert.equal(writes.length, 1)
   assert.equal(sent.filter(message => message.id === "chunk-1").length, 2)
 
   page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
+  assert.equal(writes.length, 1)
+  assert.equal(sent.filter(message => message.id === "end-1").length, 0)
+  writes[0].success()
   const resultCount = sent.filter(message => message.topic === "map.asset.result").length
   page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
@@ -638,52 +632,6 @@ test("holds asset A ownership through rendering and blocks the full asset B sequ
   assert.equal(file.accesses.length, 2)
   assert.equal(page.activeTransfer.asset, ASSET_B)
   assert.equal(sent.filter(message => message.type === "ack" && message.id === "begin-b-retry").length, 1)
-})
-
-test("serializes distinct chunks while coalescing the same in-flight ID", async () => {
-  const file = memoryFile()
-  const writes = []
-  file.writeArrayBuffer = options => writes.push(options)
-  const { page, sent } = await readyHarness(file)
-  page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody()) })
-  const chunkA = envelope("chunk-a", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
-  const busyChunkB = envelope("chunk-b", "map.asset.chunk", { asset: ASSET, offset: 0, data: "+vv8/Q==" })
-  page.receiveMessage({ data: chunkA })
-  page.receiveMessage({ data: chunkA })
-  page.receiveMessage({ data: busyChunkB })
-  assert.equal(writes.length, 1)
-  assert.equal(writes[0].position, 0)
-  assert.equal(sent.at(-2).body.code, "ASSET_BUSY")
-  assert.equal(sent.filter(message => message.type === "ack" && message.id === "chunk-b").length, 1)
-  writes[0].success()
-  assert.equal(page.activeMapOperationID, "")
-
-  page.receiveMessage({
-    data: envelope("chunk-b-retry", "map.asset.chunk", { asset: ASSET, offset: 4, data: "+vv8/Q==" })
-  })
-  assert.equal(writes.length, 2)
-  assert.equal(writes[1].position, 4)
-  writes[1].success()
-  assert.equal(sent.filter(message => message.type === "ack" && message.id === "chunk-b-retry").length, 1)
-})
-
-test("connection unlock does not release a held map operation", async () => {
-  const file = memoryFile()
-  const writes = []
-  file.writeArrayBuffer = options => writes.push(options)
-  const { page, sent } = await readyHarness(file)
-  page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody()) })
-  page.receiveMessage({
-    data: envelope("chunk-a", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
-  })
-  page.unlock()
-  page.receiveMessage({
-    data: envelope("chunk-b", "map.asset.chunk", { asset: ASSET, offset: 0, data: "+vv8/Q==" })
-  })
-  assert.equal(writes.length, 1)
-  assert.equal(sent.at(-2).body.code, "ASSET_BUSY")
-  writes[0].success()
-  assert.equal(page.activeMapOperationID, "")
 })
 
 test("render failure publishes only after URI cleanup and permits immediate same-asset retry", async () => {
@@ -821,7 +769,7 @@ test("rejects wrong final length and digest mismatch with stable results", async
   }
 })
 
-test("handled write failure is deduplicated and a new chunk cannot revive the aborted run", async () => {
+test("handled final write failure is deduplicated and cannot revive the aborted run", async () => {
   const file = memoryFile()
   let failFirst = true
   file.writeArrayBuffer = options => {
@@ -835,11 +783,13 @@ test("handled write failure is deduplicated and a new chunk cannot revive the ab
   page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({ bytes: 4 })) })
   const chunk = envelope("retry-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
   page.receiveMessage({ data: chunk })
-  assert.equal(sent.at(-2).body.code, "ASSET_WRITE_FAILED")
   assert.equal(sent.filter(message => message.type === "ack" && message.id === "retry-1").length, 1)
-  page.receiveMessage({ data: chunk })
+  const end = envelope("retry-end", "map.asset.end", { asset: ASSET })
+  page.receiveMessage({ data: end })
+  assert.equal(sent.at(-2).body.code, "ASSET_WRITE_FAILED")
   assert.equal(file.writes.length, 1)
-  assert.equal(sent.filter(message => message.type === "ack" && message.id === "retry-1").length, 2)
+  page.receiveMessage({ data: end })
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "retry-end").length, 2)
   page.receiveMessage({ data: envelope("retry-2", "map.asset.chunk", chunk.body) })
   assert.equal(file.writes.length, 1)
   assert.equal(sent.at(-2).body.code, "ASSET_NO_TRANSFER")
@@ -862,18 +812,19 @@ test("current-run write failure publishes only after cleanup and permits a fresh
   page.receiveMessage({ data: envelope("cleanup-chunk", "map.asset.chunk", {
     asset: ASSET, offset: 0, data: "AAECAw==", run: RUN
   }) })
+  page.receiveMessage({ data: envelope("cleanup-end", "map.asset.end", { asset: ASSET, run: RUN }) })
 
   assert.equal(page.activeTransfer, null)
   assert.deepEqual(page.pendingDeleteURIs, [URI])
   assert.equal(heldDeletes.length, 1)
   assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
-  assert.equal(sent.some(message => message.type === "ack" && message.id === "cleanup-chunk"), false)
+  assert.equal(sent.some(message => message.type === "ack" && message.id === "cleanup-end"), false)
 
   file.storage.delete(URI)
   heldDeletes[0].success()
   assert.equal(sent.at(-2).body.code, "ASSET_WRITE_FAILED")
   assert.equal(sent.at(-2).body.run, RUN)
-  assert.deepEqual(sent.at(-1), { v: 1, id: "cleanup-chunk", src: "band", type: "ack" })
+  assert.deepEqual(sent.at(-1), { v: 1, id: "cleanup-end", src: "band", type: "ack" })
   assert.deepEqual(page.pendingDeleteURIs, [])
 
   page.receiveMessage({ data: envelope("fresh-begin", "map.asset.begin", beginBody({
@@ -983,6 +934,9 @@ test("lifecycle teardown makes pending access, delete and write callbacks inert 
           data: envelope(`${lifecycle}-${stage}-chunk`, "map.asset.chunk", {
             asset: ASSET, offset: 0, data: "AAECAw=="
           })
+        })
+        page.receiveMessage({
+          data: envelope(`${lifecycle}-${stage}-end`, "map.asset.end", { asset: ASSET })
         })
       }
       const callback = pending[stage][0]

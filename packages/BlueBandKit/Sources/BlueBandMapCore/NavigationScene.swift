@@ -85,25 +85,28 @@ public struct NavigationScene: Equatable, Sendable {
 
     public static func synthetic(segmentCount: Int) throws -> NavigationScene {
         guard (0...maximumSegments).contains(segmentCount) else { throw Error.tooManySegments }
-        let segments = (0..<segmentCount).map { index in
-            let x = UInt16(8 + ((index * 19) % 190))
-            let y = UInt16(12 + ((index * 23) % 330))
-            let nextX = UInt16(min(RenderProtocol.viewportWidth - 1, Int(x) + 12))
-            let nextY = UInt16(min(RenderProtocol.viewportHeight - 1, Int(y) + 9))
-            let lineClass: SceneLineClass
-            if index % 5 == 0 {
-                lineClass = .route
-            } else if index % 2 == 0 {
-                lineClass = .major
-            } else {
-                lineClass = .minor
+        let xs: [UInt16] = [16, 52, 88, 124, 160, 196]
+        let ys: [UInt16] = [40, 100, 160, 220, 280, 340]
+        var grid = [SceneSegment]()
+        for y in ys.prefix(5) {
+            for index in 0..<(xs.count - 1) {
+                grid.append(SceneSegment(
+                    start: ScenePoint(x: xs[index], y: y),
+                    end: ScenePoint(x: xs[index + 1], y: y),
+                    lineClass: y == 160 ? .route : .minor
+                ))
             }
-            return SceneSegment(
-                start: ScenePoint(x: x, y: y),
-                end: ScenePoint(x: nextX, y: nextY),
-                lineClass: lineClass
-            )
         }
+        for x in [xs[0], xs[3], xs[5]] {
+            for index in 0..<(ys.count - 1) {
+                grid.append(SceneSegment(
+                    start: ScenePoint(x: x, y: ys[index]),
+                    end: ScenePoint(x: x, y: ys[index + 1]),
+                    lineClass: .major
+                ))
+            }
+        }
+        let segments = Array(grid.prefix(segmentCount))
         return try NavigationScene(
             currentPosition: ScenePoint(x: 106, y: 180),
             headingDegrees: 90,

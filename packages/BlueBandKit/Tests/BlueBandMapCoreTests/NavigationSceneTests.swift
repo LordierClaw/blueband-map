@@ -8,6 +8,15 @@ final class NavigationSceneTests: XCTestCase {
         XCTAssertEqual(try NavigationScene.synthetic(segmentCount: 40).segments.count, 40)
     }
 
+    func testSyntheticFortyFormsConnectedRoadsInsteadOfIsolatedDashes() throws {
+        let segments = try NavigationScene.synthetic(segmentCount: 40).segments
+        for segment in segments {
+            XCTAssertTrue(segments.contains { candidate in
+                candidate != segment && [candidate.start, candidate.end].contains(segment.start)
+            })
+        }
+    }
+
     func testSceneRejectsMoreThanFortySegmentsAndOutOfViewportPoints() {
         XCTAssertThrowsError(try NavigationScene.synthetic(segmentCount: 41)) { error in
             XCTAssertEqual(error as? NavigationScene.Error, .tooManySegments)

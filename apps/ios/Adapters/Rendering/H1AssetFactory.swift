@@ -107,6 +107,7 @@ struct H1AssetFactory: Sendable {
             let tile = try VietmapVectorTileDecoder.decode(response.body)
             let scene = try VietmapSceneBuilder.build(
                 tile: tile,
+                sourceLayers: Set(template.sourceLayers),
                 latitude: request.latitude,
                 longitude: request.longitude,
                 zoom: zoom,

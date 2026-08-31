@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.7</text>
+      <text class="version">RPK 0.2.8</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.7 • ENV V1</text>
+        <text class="version">RPK 0.2.8 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -830,6 +830,7 @@ export default {
       startedAt: Date.now(),
       uri: "internal://files/" + body.asset + (h1 && body.renderer === "vector" ? ".bbmv" : ".png"),
       digest: sha256Create(),
+      buffer: new Uint8Array(body.bytes),
       receivedBytes: 0,
       validatedAt: 0,
       renderStartedAt: 0
@@ -903,10 +904,8 @@ export default {
   },
 
   writeAssetChunk(message) {
-    var page = this
     var transfer = this.activeTransfer
     var body = message.body
-    var epoch = this.lifecycleEpoch
     if (!transfer) {
       this.failAsset(message, "ASSET_NO_TRANSFER")
       return
@@ -932,27 +931,10 @@ export default {
       this.failAsset(message, "ASSET_OVERFLOW")
       return
     }
-    try {
-      this.unconfirmedURI = transfer.uri
-      this.unconfirmedTouched = true
-      file.writeArrayBuffer({
-        uri: transfer.uri,
-        buffer: buffer,
-        position: body.offset,
-        success: function () {
-          if (!page.ownsMapOperation(message.id, epoch)) return
-          sha256Update(transfer.digest, buffer)
-          transfer.receivedBytes = transfer.receivedBytes + buffer.length
-          page.succeedAsset(message.id)
-        },
-        fail: function () {
-          if (!page.ownsMapOperation(message.id, epoch)) return
-          page.failAsset(message, "ASSET_WRITE_FAILED")
-        }
-      })
-    } catch (error) {
-      if (this.ownsMapOperation(message.id, epoch)) this.failAsset(message, "ASSET_WRITE_FAILED")
-    }
+    transfer.buffer.set(buffer, body.offset)
+    sha256Update(transfer.digest, buffer)
+    transfer.receivedBytes = transfer.receivedBytes + buffer.length
+    this.succeedAsset(message.id)
   },
 
   endAsset(message) {
@@ -984,6 +966,30 @@ export default {
       this.failAsset(message, "ASSET_DIGEST_MISMATCH")
       return
     }
+    var page = this
+    var epoch = this.lifecycleEpoch
+    try {
+      this.unconfirmedURI = transfer.uri
+      this.unconfirmedTouched = true
+      file.writeArrayBuffer({
+        uri: transfer.uri,
+        buffer: transfer.buffer,
+        position: 0,
+        success: function () {
+          if (!page.ownsMapOperation(message.id, epoch) || page.activeTransfer !== transfer) return
+          transfer.buffer = null
+          page.publishWrittenAsset(message, transfer)
+        },
+        fail: function () {
+          if (page.ownsMapOperation(message.id, epoch)) page.failAsset(message, "ASSET_WRITE_FAILED")
+        }
+      })
+    } catch (error) {
+      if (this.ownsMapOperation(message.id, epoch)) this.failAsset(message, "ASSET_WRITE_FAILED")
+    }
+  },
+
+  publishWrittenAsset(message, transfer) {
     var asset = transfer.asset
     var bytes = transfer.bytes
     var prefix = transfer.sha256.slice(0, 8)

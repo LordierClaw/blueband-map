@@ -14,6 +14,7 @@ public enum VietmapSceneBuilder {
 
     public static func build(
         tile: MapboxVectorTile,
+        sourceLayers: Set<String>? = nil,
         latitude: Double,
         longitude: Double,
         zoom: Int,
@@ -25,6 +26,7 @@ public enum VietmapSceneBuilder {
     ) throws -> NavigationScene {
         try build(
             tiles: [tile],
+            sourceLayers: sourceLayers,
             latitude: latitude,
             longitude: longitude,
             zoom: zoom,
@@ -38,6 +40,7 @@ public enum VietmapSceneBuilder {
 
     public static func build(
         tiles: [MapboxVectorTile],
+        sourceLayers: Set<String>? = nil,
         latitude: Double,
         longitude: Double,
         zoom: Int,
@@ -57,7 +60,7 @@ public enum VietmapSceneBuilder {
         var ranked = [RankedSegment]()
         var order = 0
         for tile in tiles {
-            for layer in tile.layers {
+            for layer in tile.layers where sourceLayers == nil || sourceLayers?.contains(layer.name) == true {
                 for feature in layer.features where feature.geometryType == .lineString {
                     let lineClass = classify(feature.properties)
                     let rank = lineClass == .route ? 0 : (lineClass == .major ? 1 : 2)
@@ -125,19 +128,20 @@ public enum VietmapSceneBuilder {
         lineClass: SceneLineClass
     ) -> SceneSegment? {
         let scale = pow(2, Double(zoom))
-        let tileSize = Double(extent)
+        let tileSize = 256.0
+        let extentScale = tileSize / Double(extent)
         let worldWidth = scale * tileSize
         let safeLatitude = min(max(latitude, -85.05112878), 85.05112878)
         let sine = sin(safeLatitude * .pi / 180)
         let centerX = (longitude + 180) / 360 * worldWidth
         let centerY = (0.5 - log((1 + sine) / (1 - sine)) / (4 * .pi)) * worldWidth
         let startWorld = (
-            Double(tileX) * tileSize + Double(start.x),
-            Double(tileY) * tileSize + Double(start.y)
+            Double(tileX) * tileSize + Double(start.x) * extentScale,
+            Double(tileY) * tileSize + Double(start.y) * extentScale
         )
         let endWorld = (
-            Double(tileX) * tileSize + Double(end.x),
-            Double(tileY) * tileSize + Double(end.y)
+            Double(tileX) * tileSize + Double(end.x) * extentScale,
+            Double(tileY) * tileSize + Double(end.y) * extentScale
         )
         var x0 = startWorld.0 - centerX + Double(RenderProtocol.viewportWidth / 2)
         var y0 = startWorld.1 - centerY + Double(RenderProtocol.viewportHeight / 2)

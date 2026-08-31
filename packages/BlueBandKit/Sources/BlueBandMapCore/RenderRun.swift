@@ -148,6 +148,26 @@ public struct RenderRunMetrics: Codable, Equatable, Sendable {
         case terminalCode
     }
 
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(totalMilliseconds, forKey: .totalMilliseconds)
+        try container.encode(providerMilliseconds, forKey: .providerMilliseconds)
+        try container.encode(prepareMilliseconds, forKey: .prepareMilliseconds)
+        try container.encode(transferMilliseconds, forKey: .transferMilliseconds)
+        try container.encode(validateMilliseconds, forKey: .validateMilliseconds)
+        try container.encode(renderMilliseconds, forKey: .renderMilliseconds)
+        try container.encode(bytes, forKey: .bytes)
+        try container.encode(chunks, forKey: .chunks)
+        try container.encode(retries, forKey: .retries)
+        try container.encode(primitives, forKey: .primitives)
+        try container.encode(providerCalls, forKey: .providerCalls)
+        try container.encode(Array(ackDurationsMilliseconds.prefix(32)), forKey: .ackDurationsMilliseconds)
+        try container.encodeIfPresent(ackP50Milliseconds, forKey: .ackP50Milliseconds)
+        try container.encodeIfPresent(ackP95Milliseconds, forKey: .ackP95Milliseconds)
+        try container.encodeIfPresent(ackMaxMilliseconds, forKey: .ackMaxMilliseconds)
+        try container.encode(terminalCode, forKey: .terminalCode)
+    }
+
     private static func percentile(_ values: [Int], percentile: Double) -> Int? {
         guard !values.isEmpty else { return nil }
         let sorted = values.sorted()
