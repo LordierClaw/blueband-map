@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.6</text>
+      <text class="version">RPK 0.2.7</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.6 • ENV V1</text>
+        <text class="version">RPK 0.2.7 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -384,17 +384,25 @@ function vectorSceneNativeSegments(scene) {
     var angle = Math.round(Math.atan2(dy, dx) * 180 / Math.PI * 10) / 10
     var color = colors[segment.lineClass] || colors[0]
     var thickness = segment.lineClass === 2 ? 3 : (segment.lineClass === 1 ? 2 : 1)
+    var left = Math.round(((segment.start.x + segment.end.x - length) / 2) * 10) / 10
+    var top = Math.round(((segment.start.y + segment.end.y - thickness) / 2) * 10) / 10
     segments.push({
       key: "segment-" + index,
-      left: segment.start.x,
-      top: segment.start.y,
+      left: left,
+      top: top,
       width: length,
       height: thickness,
       angle: angle,
       color: color,
-      style: "position:absolute;left:" + segment.start.x + "px;top:" + segment.start.y +
-        "px;width:" + length + "px;height:" + thickness + "px;background-color:" + color +
-        ";transform-origin:0 50%;transform:rotate(" + angle + "deg);"
+      style: {
+        position: "absolute",
+        left: left + "px",
+        top: top + "px",
+        width: length + "px",
+        height: thickness + "px",
+        backgroundColor: color,
+        transform: JSON.stringify({ rotate: angle + "deg" })
+      }
     })
   }
   return segments

@@ -99,17 +99,25 @@ function sceneToNativeSegments(scene) {
     const angle = Math.round(Math.atan2(dy, dx) * 180 / Math.PI * 10) / 10
     const color = COLORS[segment.lineClass] || COLORS[0]
     const thickness = segment.lineClass === 2 ? 3 : (segment.lineClass === 1 ? 2 : 1)
+    const left = Math.round(((segment.start.x + segment.end.x - length) / 2) * 10) / 10
+    const top = Math.round(((segment.start.y + segment.end.y - thickness) / 2) * 10) / 10
     return {
       key: "segment-" + index,
-      left: segment.start.x,
-      top: segment.start.y,
+      left,
+      top,
       width: length,
       height: thickness,
       angle,
       color,
-      style: "position:absolute;left:" + segment.start.x + "px;top:" + segment.start.y +
-        "px;width:" + length + "px;height:" + thickness + "px;background-color:" + color +
-        ";transform-origin:0 50%;transform:rotate(" + angle + "deg);"
+      style: {
+        position: "absolute",
+        left: left + "px",
+        top: top + "px",
+        width: length + "px",
+        height: thickness + "px",
+        backgroundColor: color,
+        transform: JSON.stringify({ rotate: angle + "deg" })
+      }
     }
   })
 }

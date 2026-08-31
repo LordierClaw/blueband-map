@@ -76,11 +76,12 @@ test("rejects malformed BBMV without allocating a scene", () => {
   }
 })
 
-test("converts each accepted segment once to a bounded native style", () => {
+test("converts each accepted segment to a Toolkit 2 dynamic style object", () => {
   const result = decodeBBMV(bbmv(8, { routeCount: 2 }))
   const segments = sceneToNativeSegments(result.scene)
   assert.equal(segments.length, 10)
   assert.equal(segments.filter(segment => segment.color === "#5dffb0").length, 2)
   assert.ok(segments.every(segment => segment.width >= 1 && segment.width <= 212))
-  assert.ok(segments.every(segment => segment.style.includes("position:absolute")))
+  assert.ok(segments.every(segment => typeof segment.style === "object" && segment.style.position === "absolute"))
+  assert.ok(segments.every(segment => /^-?[0-9]+(?:\.[0-9]+)?deg$/.test(JSON.parse(segment.style.transform).rotate)))
 })
