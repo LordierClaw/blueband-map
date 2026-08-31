@@ -785,7 +785,7 @@ export default {
       digest: sha256Create(),
       buffer: new Uint8Array(body.bytes),
       receivedBytes: 0,
-      pendingChunk: null,
+      pendingChunks: [],
       validatedAt: 0,
       renderStartedAt: 0
     }
@@ -879,23 +879,40 @@ export default {
       this.failAsset(message, "ASSET_OVERFLOW")
       return
     }
-    if (body.offset > transfer.receivedBytes) {
-      if (transfer.pendingChunk) {
+    var chunkEnd = body.offset + buffer.length
+    for (var index = 0; index < transfer.pendingChunks.length; index = index + 1) {
+      var pending = transfer.pendingChunks[index]
+      if (body.offset < pending.offset + pending.buffer.length && chunkEnd > pending.offset) {
         this.failAsset(message, "ASSET_OFFSET_INVALID")
         return
       }
-      transfer.pendingChunk = { offset: body.offset, buffer: buffer }
+    }
+    if (body.offset > transfer.receivedBytes) {
+      if (transfer.pendingChunks.length >= 3) {
+        this.failAsset(message, "ASSET_OFFSET_INVALID")
+        return
+      }
+      transfer.pendingChunks.push({ offset: body.offset, buffer: buffer })
       this.succeedAsset(message.id)
       return
     }
     transfer.buffer.set(buffer, body.offset)
     sha256Update(transfer.digest, buffer)
     transfer.receivedBytes = transfer.receivedBytes + buffer.length
-    if (transfer.pendingChunk && transfer.pendingChunk.offset === transfer.receivedBytes) {
-      transfer.buffer.set(transfer.pendingChunk.buffer, transfer.pendingChunk.offset)
-      sha256Update(transfer.digest, transfer.pendingChunk.buffer)
-      transfer.receivedBytes = transfer.receivedBytes + transfer.pendingChunk.buffer.length
-      transfer.pendingChunk = null
+    var appended = true
+    while (appended) {
+      appended = false
+      for (index = 0; index < transfer.pendingChunks.length; index = index + 1) {
+        pending = transfer.pendingChunks[index]
+        if (pending.offset === transfer.receivedBytes) {
+          transfer.buffer.set(pending.buffer, pending.offset)
+          sha256Update(transfer.digest, pending.buffer)
+          transfer.receivedBytes = transfer.receivedBytes + pending.buffer.length
+          transfer.pendingChunks.splice(index, 1)
+          appended = true
+          break
+        }
+      }
     }
     this.succeedAsset(message.id)
   },

@@ -212,16 +212,13 @@ test("cancelled refresh restores the confirmed scene guidance", async () => {
   assert.equal(page.navStreet, "Latest Road")
 })
 
-test("one out-of-order windowed chunk is buffered until its predecessor", async () => {
+test("three out-of-order windowed chunks are buffered until their predecessor", async () => {
   const { page, sent, file } = await harness()
-  const first = BYTES.slice(0, 2), second = BYTES.slice(2)
   page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
   page.receiveMessage({ data: envelope("begin", "map.asset.begin", begin()) })
-  page.receiveMessage({ data: envelope("chunk-2", "map.asset.chunk", {
-    asset: ASSET, run: RUN, scene: SCENE, offset: 2, data: Buffer.from(second).toString("base64")
-  }) })
-  page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", {
-    asset: ASSET, run: RUN, scene: SCENE, offset: 0, data: Buffer.from(first).toString("base64")
+  for (const offset of [3, 2, 1, 0]) page.receiveMessage({ data: envelope(`chunk-${offset}`, "map.asset.chunk", {
+    asset: ASSET, run: RUN, scene: SCENE, offset,
+    data: Buffer.from(BYTES.slice(offset, offset + 1)).toString("base64")
   }) })
   page.receiveMessage({ data: envelope("end", "map.asset.end", { asset: ASSET, run: RUN, scene: SCENE }) })
 
