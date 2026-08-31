@@ -53,6 +53,8 @@ struct ContentView: View {
                 contentType: .plainText,
                 defaultFilename: "BlueBandMap-navigation-debug.txt"
             ) { _ in }
+            .onAppear { model.navigationScreenActive(true) }
+            .onDisappear { model.navigationScreenActive(false) }
         }
     }
 
@@ -88,7 +90,7 @@ struct ContentView: View {
             if let data = model.routePreviewPNG, let image = UIImage(data: data) {
                 Image(uiImage: image)
                     .resizable().interpolation(.none).scaledToFit()
-                    .frame(maxWidth: 212).accessibilityLabel("Route card đang hiển thị trên band")
+                    .frame(maxWidth: 212).accessibilityLabel("Bản đồ điều hướng đang hiển thị trên band")
             }
             if navigationIsActive {
                 Button("Dừng điều hướng", role: .destructive) { model.stopNavigation() }
@@ -108,7 +110,7 @@ struct ContentView: View {
                     }
                 }
             }
-            Text("Ảnh preview dùng cùng PNG và scene với Smart Band.")
+            Text("Ảnh preview dùng cùng snapshot PNG và scene với Smart Band.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -133,7 +135,7 @@ struct ContentView: View {
         case .idle: "Sẵn sàng"
         case .waitingForGPS: "Chờ GPS ≤25 m"
         case .routing: "Đang lấy tuyến"
-        case .transferring: "Đang gửi route-card"
+        case .transferring: "Đang gửi bản đồ"
         case .navigating: "Đang điều hướng"
         case .gpsLow: "GPS LOW"
         case .limitedMap: "LIMITED MAP"

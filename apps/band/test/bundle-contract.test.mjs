@@ -45,6 +45,11 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /<image[^>]+for="\{\{ renderItems \}\}"/)
   assert.doesNotMatch(page, /<image[^>]+object-fit=/)
   assert.match(page, /\.map\s*\{[^}]*object-fit:\s*contain;/s)
+  assert.match(page, /\.map-frame\s*\{[^}]*width:\s*212px;[^}]*height:\s*520px;/s)
+  assert.match(page, /\.nav-header\s*\{[^}]*width:\s*184px;[^}]*height:\s*12[0-8]px;[^}]*rgba\(4,\s*12,\s*20,\s*0\.68\)/s)
+  assert.match(page, /navStatusVisible\s*=\s*body\.status\s*!==\s*["']navigating["']/)
+  assert.match(page, /navStatus\s*=\s*["']LOADING MAP["']/)
+  assert.match(page, /\.nav-marker\s*\{[^}]*border-color:\s*#00e5ff;[^}]*background-color:\s*#ffffff;/s)
 })
 
 test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 }, async () => {

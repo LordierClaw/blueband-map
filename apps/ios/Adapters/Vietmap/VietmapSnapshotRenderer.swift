@@ -31,6 +31,16 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
     let zoom: Double
     let center: GeoPoint
 
+    func point(for coordinate: GeoPoint) -> CGPoint {
+        let centerWorld = world(center), pointWorld = world(coordinate)
+        let angle = heading * .pi / 180
+        let x = pointWorld.x - centerWorld.x, y = pointWorld.y - centerWorld.y
+        return CGPoint(
+            x: size.width / 2 + x * cos(angle) + y * sin(angle),
+            y: size.height / 2 - x * sin(angle) + y * cos(angle)
+        )
+    }
+
     static func make(_ request: VietmapSnapshotRequest) throws -> Self {
         guard request.route.points.count >= 2,
               request.route.points.indices.contains(request.progressIndex),
@@ -41,21 +51,57 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
         }
         let distance = meters(request.matchedPosition, request.nextManeuver)
         let zoom: Double = distance <= 150 ? 17 : distance <= 500 ? 16 : distance <= 1_500 ? 15 : 14
+        let size = CGSize(width: RenderProtocol.viewportWidth, height: RenderProtocol.viewportHeight)
+        let center = cameraCenter(
+            matched: request.matchedPosition,
+            heading: request.headingDegrees,
+            zoom: zoom,
+            desiredPoint: CGPoint(x: size.width / 2, y: size.height * 0.72),
+            size: size
+        )
         return Self(
-            size: CGSize(width: RenderProtocol.viewportWidth, height: RenderProtocol.viewportHeight),
+            size: size,
             scale: 1,
             pitch: 0,
             heading: request.headingDegrees,
             userVerticalFraction: 0.72,
             overlayInsets: EdgeInsets(top: 144, left: 14, bottom: 12, right: 14),
             zoom: zoom,
-            center: interpolate(request.matchedPosition, request.nextManeuver, fraction: 0.22)
+            center: center
         )
     }
 
-    private static func interpolate(_ a: GeoPoint, _ b: GeoPoint, fraction: Double) -> GeoPoint {
-        GeoPoint(latitude: a.latitude + (b.latitude - a.latitude) * fraction,
-                 longitude: a.longitude + (b.longitude - a.longitude) * fraction)
+    private static func cameraCenter(
+        matched: GeoPoint,
+        heading: Double,
+        zoom: Double,
+        desiredPoint: CGPoint,
+        size: CGSize
+    ) -> GeoPoint {
+        let matchedWorld = world(matched, zoom: zoom)
+        let screenX = desiredPoint.x - size.width / 2, screenY = desiredPoint.y - size.height / 2
+        let angle = heading * .pi / 180
+        let worldX = screenX * cos(angle) - screenY * sin(angle)
+        let worldY = screenX * sin(angle) + screenY * cos(angle)
+        return coordinate(CGPoint(x: matchedWorld.x - worldX, y: matchedWorld.y - worldY), zoom: zoom)
+    }
+
+    private func world(_ point: GeoPoint) -> CGPoint { Self.world(point, zoom: zoom) }
+
+    private static func world(_ point: GeoPoint, zoom: Double) -> CGPoint {
+        let scale = 256 * pow(2, zoom)
+        let latitude = min(85.051_128_78, max(-85.051_128_78, point.latitude)) * .pi / 180
+        return CGPoint(
+            x: (point.longitude + 180) / 360 * scale,
+            y: (1 - log(tan(latitude) + 1 / cos(latitude)) / .pi) / 2 * scale
+        )
+    }
+
+    private static func coordinate(_ point: CGPoint, zoom: Double) -> GeoPoint {
+        let scale = 256 * pow(2, zoom)
+        let longitude = point.x / scale * 360 - 180
+        let n = .pi - 2 * .pi * point.y / scale
+        return GeoPoint(latitude: atan(sinh(n)) * 180 / .pi, longitude: longitude)
     }
 
     private static func meters(_ a: GeoPoint, _ b: GeoPoint) -> Double {
@@ -136,6 +182,7 @@ struct VietmapSnapshotOutput: @unchecked Sendable {
     let styleLoadMilliseconds: Int
     let snapshotMilliseconds: Int
     let cacheState: String
+    let configuration: VietmapSnapshotConfiguration
 }
 
 @MainActor
@@ -223,22 +270,23 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     private func complete(snapshot: MGLMapSnapshot?, error: Swift.Error?) {
         guard let continuation else { return }
         let now = nowMilliseconds()
-        let zoom = configuration?.zoom ?? 0
+        let finishedConfiguration = configuration
         self.continuation = nil
         self.snapshotter = nil
         self.configuration = nil
         if error != nil {
             continuation.resume(throwing: styleLoadedMilliseconds == 0 ? Error.styleLoadFailed : Error.snapshotFailed)
-        } else if let image = snapshot?.image.cgImage {
+        } else if let image = snapshot?.image.cgImage, let finishedConfiguration {
             continuation.resume(returning: VietmapSnapshotOutput(
                 image: image,
                 retainedFillLayers: retainedFillLayers,
                 retainedLineLayers: retainedLineLayers,
                 retainedSymbolLayers: retainedSymbolLayers,
-                zoom: zoom,
+                zoom: finishedConfiguration.zoom,
                 styleLoadMilliseconds: styleLoadedMilliseconds == 0 ? 0 : max(0, styleLoadedMilliseconds - startedMilliseconds),
                 snapshotMilliseconds: max(0, now - max(styleLoadedMilliseconds, startedMilliseconds)),
-                cacheState: "unknown"
+                cacheState: "unknown",
+                configuration: finishedConfiguration
             ))
         } else {
             continuation.resume(throwing: Error.imageUnavailable)

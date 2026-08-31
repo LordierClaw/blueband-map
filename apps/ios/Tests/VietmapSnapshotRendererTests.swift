@@ -43,6 +43,8 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         XCTAssertEqual(configuration.userVerticalFraction, 0.72, accuracy: 0.001)
         XCTAssertEqual(configuration.overlayInsets, EdgeInsets(top: 144, left: 14, bottom: 12, right: 14))
         XCTAssertTrue((14...17).contains(configuration.zoom))
+        XCTAssertEqual(configuration.point(for: request.matchedPosition).x, 106, accuracy: 0.5)
+        XCTAssertEqual(configuration.point(for: request.matchedPosition).y, 520 * 0.72, accuracy: 0.5)
     }
 
     func testOverlayCommandsKeepRouteGeometryAndManeuverAboveRoads() throws {

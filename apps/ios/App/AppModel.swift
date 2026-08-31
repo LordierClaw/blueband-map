@@ -11,6 +11,7 @@ enum LiveNavigationState: Equatable, Sendable {
     case idle, waitingForGPS, routing, transferring, navigating, gpsLow, limitedMap, rerouting, arrived
     case failed(String)
 }
+enum NavigationRuntimeError: Swift.Error { case bandDisplayFailed }
 
 struct EchoEntry: Identifiable, Equatable, Sendable {
     let id: String
@@ -56,7 +57,7 @@ final class AppModel: ObservableObject {
     private let central: any BandCentralProtocol
     private let session: BandSession
     private let routeClient: VietmapRouteClient
-    private let assetFactory: RouteCardAssetFactory
+    private let snapshotRenderer: VietmapSnapshotRenderer
     private let locationClient: ForegroundLocationClient
     private let renderCoordinator: RouteCardRenderCoordinator
     private let updateClock: any BlueBandClock
@@ -69,7 +70,8 @@ final class AppModel: ObservableObject {
     private var updateCoalescer = NavigationUpdateCoalescer()
     private var updateSequence = 0
     private var activeSceneID: String?
-    private var activeAnchorIndex = 0
+    private var activeSnapshotConfiguration: VietmapSnapshotConfiguration?
+    private var activeManeuverUpperBound: Int?
     private var navigationStartedMilliseconds = 0
     private var navigationDebugSequence = 0
 
@@ -81,7 +83,7 @@ final class AppModel: ObservableObject {
         central: any BandCentralProtocol,
         session: BandSession,
         routeClient: VietmapRouteClient,
-        assetFactory: RouteCardAssetFactory,
+        snapshotRenderer: VietmapSnapshotRenderer,
         locationClient: ForegroundLocationClient,
         routeCardSession: (any RouteCardSessionSending)? = nil,
         updateClock: any BlueBandClock = ContinuousBlueBandClock(),
@@ -95,7 +97,7 @@ final class AppModel: ObservableObject {
         self.central = central
         self.session = session
         self.routeClient = routeClient
-        self.assetFactory = assetFactory
+        self.snapshotRenderer = snapshotRenderer
         self.locationClient = locationClient
         self.updateClock = updateClock
         self.defaults = defaults
@@ -273,8 +275,19 @@ final class AppModel: ObservableObject {
         updateCoalescer.reset()
         locationClient.stop()
         activeSceneID = nil
+        activeSnapshotConfiguration = nil
+        activeManeuverUpperBound = nil
         routePreviewPNG = nil
         navigationState = .idle
+    }
+
+    func navigationScreenActive(_ active: Bool) {
+        if active {
+            locationClient.startPrewarming()
+            snapshotRenderer.prewarm()
+        } else {
+            locationClient.stopPrewarming()
+        }
     }
 
     private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String) async {
@@ -283,12 +296,14 @@ final class AppModel: ObservableObject {
         logNavigation("gps.wait", "requiredAccuracyM=25")
         do {
             var iterator = locationClient.locations().makeAsyncIterator()
-            var first: CLLocation?
-            while let location = try await iterator.next() {
-                guard !Task.isCancelled else { return }
-                if location.horizontalAccuracy <= 25 { first = location; break }
-                navigationState = .gpsLow
-                logNavigation("gps.low", "accuracyM=\(Int(location.horizontalAccuracy.rounded()))")
+            var first = locationClient.recentLocation()
+            if first == nil {
+                while let location = try await iterator.next() {
+                    guard !Task.isCancelled else { return }
+                    if location.horizontalAccuracy <= 25 { first = location; break }
+                    navigationState = .gpsLow
+                    logNavigation("gps.low", "accuracyM=\(Int(location.horizontalAccuracy.rounded()))")
+                }
             }
             guard !Task.isCancelled else { return }
             guard let first else { throw ForegroundLocationClient.Error.unavailable }
@@ -301,7 +316,7 @@ final class AppModel: ObservableObject {
             var route = try await makeRoute(from: first, to: destination, serviceKey: serviceKey)
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
-            var limitedMap = try await publish(route: route, progressIndex: progress.pointIndex, tileMapKey: tileMapKey)
+            var limitedMap = try await publish(route: route, progress: progress, location: first, tileMapKey: tileMapKey)
             var lastReroute = Date.distantPast
             var lastGoodLocation = first.geoPoint
             sendNavigationUpdate(route: route, progress: progress, location: first.geoPoint, status: limitedMap ? .limitedMap : .navigating)
@@ -317,19 +332,29 @@ final class AppModel: ObservableObject {
                     sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, status: .arrived)
                     return
                 }
+                var contextRefreshed = false
                 if progress.shouldReroute, Date().timeIntervalSince(lastReroute) >= 15 {
                     navigationState = .rerouting
                     sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, status: .rerouting)
                     route = try await makeRoute(from: location, to: destination, serviceKey: serviceKey)
                     tracker = RouteProgressTracker()
                     progress = tracker.update(route: route, location: location.geoPoint, horizontalAccuracyMeters: location.horizontalAccuracy)
-                    limitedMap = try await publish(route: route, progressIndex: progress.pointIndex, tileMapKey: tileMapKey)
+                    limitedMap = await refresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey)
                     lastReroute = Date()
+                    contextRefreshed = true
                 }
                 var status: NavigationStatus = progress.status == .gpsLow ? .gpsLow : (limitedMap ? .limitedMap : .navigating)
-                if status != .gpsLow,
-                   RouteCardBuilder.marker(route: route, anchorProgressIndex: activeAnchorIndex, location: location.geoPoint) == nil {
-                    limitedMap = try await publish(route: route, progressIndex: progress.pointIndex, tileMapKey: tileMapKey)
+                let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
+                let markerPoint = activeSnapshotConfiguration?.point(for: displayedLocation)
+                if !contextRefreshed && status != .gpsLow && SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
+                    marker: markerPoint.map { ScreenPoint(x: Int($0.x.rounded()), y: Int($0.y.rounded())) },
+                    safeViewport: SnapshotRefreshPolicy.defaultSafeViewport,
+                    maneuverContextChanged: instruction?.interval.upperBound != activeManeuverUpperBound,
+                    rerouteSucceeded: false,
+                    zoomContextLost: !(instruction.flatMap { route.points.indices.contains($0.interval.upperBound) ? activeSnapshotConfiguration?.point(for: route.points[$0.interval.upperBound]) : nil }
+                        .map { (0..<212).contains(Int($0.x)) && (0..<520).contains(Int($0.y)) } ?? false)
+                )) {
+                    limitedMap = await refresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey)
                     status = limitedMap ? .limitedMap : .navigating
                 }
                 navigationState = Self.state(status)
@@ -371,38 +396,67 @@ final class AppModel: ObservableObject {
         return route
     }
 
-    private func publish(route: RoutePlan, progressIndex: Int, tileMapKey: String) async throws -> Bool {
+    private func publish(route: RoutePlan, progress: RouteProgress, location: CLLocation, tileMapKey: String) async throws -> Bool {
         navigationState = .transferring
-        let output = try await assetFactory.make(
-            input: RouteCardRenderInput(route: route, progressIndex: progressIndex),
+        let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
+        let maneuverIndex = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
+        let snapshot = try await snapshotRenderer.render(VietmapSnapshotRequest(
+            route: route,
+            progressIndex: progress.pointIndex,
+            matchedPosition: progress.matchedLocation ?? location.geoPoint,
+            headingDegrees: location.course >= 0 ? location.course : Double(instruction?.headingDegrees ?? 0),
+            nextManeuver: route.points[maneuverIndex],
             tileMapKey: tileMapKey
+        ))
+        let encoded = try SnapshotPNGEncoder.encode(snapshot.image)
+        let asset = try RenderAsset(
+            kind: .raster,
+            formatVersion: RenderProtocol.formatVersion,
+            width: RenderProtocol.viewportWidth,
+            height: RenderProtocol.viewportHeight,
+            data: encoded.data,
+            primitives: 0
         )
-        routePreviewPNG = output.asset.data
+        routePreviewPNG = asset.data
         logNavigation(
             "map.rendered",
-            "bytes=\(output.asset.byteCount) limitedMap=\(output.limitedMap) " +
-            "sideRoads=\(output.scene.sideRoads.count) maneuver=\(output.scene.maneuver.rawValue) " +
-            "distanceM=\(output.scene.distanceMeters)"
+            "bytes=\(asset.byteCount) palette=\(encoded.colorCount) zoom=\(Int(snapshot.zoom)) " +
+            "layers=\(snapshot.retainedFillLayers)/\(snapshot.retainedLineLayers)/\(snapshot.retainedSymbolLayers) " +
+            "styleMs=\(snapshot.styleLoadMilliseconds) snapshotMs=\(snapshot.snapshotMilliseconds) encodeMs=\(encoded.durationMilliseconds)"
         )
-        await renderCoordinator.start(asset: output.asset)
+        await renderCoordinator.start(asset: asset)
         guard case .displayed = renderCoordinator.state,
-              let sceneID = renderCoordinator.lastDisplayedSceneID else { throw RouteCardAssetFactory.Error.bandDisplayFailed }
+              let sceneID = renderCoordinator.lastDisplayedSceneID else { throw NavigationRuntimeError.bandDisplayFailed }
         activeSceneID = sceneID
-        activeAnchorIndex = progressIndex
-        navigationManeuver = output.scene.maneuver
-        navigationDistanceMeters = output.scene.distanceMeters
-        navigationStreet = output.scene.streetName
-        navigationState = output.limitedMap ? .limitedMap : .navigating
+        activeSnapshotConfiguration = snapshot.configuration
+        activeManeuverUpperBound = instruction?.interval.upperBound
+        navigationManeuver = instruction?.maneuver ?? .straight
+        navigationDistanceMeters = Self.remainingDistance(route: route, location: location.geoPoint, progressIndex: progress.pointIndex, instruction: instruction)
+        navigationStreet = instruction?.streetName ?? ""
+        navigationState = .navigating
         logNavigation("band.displayed", "scene=\(sceneID) status=\(navigationStateCode)")
-        return output.limitedMap
+        return false
+    }
+
+    private func refresh(route: RoutePlan, progress: RouteProgress, location: CLLocation, tileMapKey: String) async -> Bool {
+        do { return try await publish(route: route, progress: progress, location: location, tileMapKey: tileMapKey) }
+        catch is CancellationError { return true }
+        catch {
+            navigationState = .limitedMap
+            logNavigation("map.refresh.failed", "code=LIMITED_MAP")
+            return true
+        }
     }
 
     private func sendNavigationUpdate(route: RoutePlan, progress: RouteProgress, location: GeoPoint, status: NavigationStatus) {
         guard let scene = activeSceneID else { return }
         let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
         let markerLocation = progress.matchedLocation ?? location
-        let marker = RouteCardBuilder.marker(route: route, anchorProgressIndex: activeAnchorIndex, location: markerLocation)
-            ?? ScreenPoint(x: 106, y: 320)
+        let projected = activeSnapshotConfiguration?.point(for: markerLocation) ?? CGPoint(x: 106, y: 374)
+        let marker = ScreenPoint(
+            x: max(0, min(RenderProtocol.viewportWidth - 1, Int(projected.x.rounded()))),
+            y: max(0, min(RenderProtocol.viewportHeight - 1, Int(projected.y.rounded())))
+        )
         updateSequence += 1
         guard let update = try? NavigationUpdate(
             scene: scene,
@@ -590,18 +644,18 @@ final class AppModel: ObservableObject {
         case VietmapRouteClient.Error.invalidResponse: "ROUTE_RESPONSE_INVALID"
         case let VietmapRouteClient.Error.provider(code): "ROUTE_PROVIDER_\(safeErrorCode(code))"
         case ForegroundLocationClient.Error.unavailable: "GPS_UNAVAILABLE"
-        case let RouteCardAssetFactory.Error.tileHTTPStatus(status): "MAP_TILE_HTTP_\(status)"
-        case RouteCardAssetFactory.Error.tileWrongContentType: "MAP_TILE_CONTENT_TYPE"
-        case RouteCardAssetFactory.Error.tileEmpty: "MAP_TILE_EMPTY"
-        case RouteCardAssetFactory.Error.payloadTooLarge: "MAP_PAYLOAD_TOO_LARGE"
-        case RouteCardAssetFactory.Error.bandDisplayFailed: "BAND_DISPLAY_FAILED"
+        case VietmapSnapshotRenderer.Error.invalidRequest: "MAP_INVALID_REQUEST"
+        case VietmapSnapshotRenderer.Error.styleLoadFailed: "MAP_STYLE_FAILED"
+        case VietmapSnapshotRenderer.Error.snapshotFailed, VietmapSnapshotRenderer.Error.imageUnavailable: "MAP_SNAPSHOT_FAILED"
+        case SnapshotPNGEncoder.Error.payloadTooLarge: "MAP_PAYLOAD_TOO_LARGE"
+        case NavigationRuntimeError.bandDisplayFailed: "BAND_DISPLAY_FAILED"
         default: "NAVIGATION_ERROR"
         }
     }
 
     private static func navigationErrorDetail(for error: Swift.Error) -> String {
         switch error {
-        case let RouteCardAssetFactory.Error.payloadTooLarge(bytes):
+        case let SnapshotPNGEncoder.Error.payloadTooLarge(bytes):
             "encodedBytes=\(bytes) budgetBytes=\(RenderProtocol.maximumPayloadBytes)"
         default: ""
         }

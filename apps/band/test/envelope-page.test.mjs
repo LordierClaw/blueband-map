@@ -140,16 +140,21 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
 
   assert.equal(page.navStatus, "ARRIVED")
   assert.equal(page.navArrow, "●")
-  assert.equal(page.navMarkerStyle, "left:100px;top:292px;")
+  assert.equal(page.navMarkerStyle, "left:99px;top:291px;")
+  assert.equal(page.navStatusVisible, true)
+  page.receiveMessage({ data: envelope("nav-5", "nav.update", {
+    scene: SCENE, seq: 5, x: 104, y: 296, maneuver: "straight", distanceM: 120, street: "Next Road", status: "navigating"
+  }) })
+  assert.equal(page.navStatusVisible, false)
   page.receiveMessage({ data: envelope("stale", "nav.update", {
     scene: SCENE, seq: 3, x: 1, y: 1, maneuver: "left", distanceM: 1, street: "Stale", status: "navigating"
   }) })
   page.receiveMessage({ data: envelope("wrong", "nav.update", {
     scene: "wrong-scene", seq: 99, x: 1, y: 1, maneuver: "left", distanceM: 1, street: "Wrong", status: "navigating"
   }) })
-  assert.equal(page.navSequence, 4)
+  assert.equal(page.navSequence, 5)
   assert.equal(page.navStreet, "Next Road")
-  assert.equal(sent.filter(message => message.type === "ack" && /^nav-|stale|wrong/.test(message.id)).length, 7)
+  assert.equal(sent.filter(message => message.type === "ack" && /^nav-|stale|wrong/.test(message.id)).length, 8)
 })
 
 test("disconnect clears transfer ownership and nav sequence without accepting queued messages", async () => {

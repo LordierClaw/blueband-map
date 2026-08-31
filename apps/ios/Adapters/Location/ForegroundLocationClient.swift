@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import BlueBandMapCore
 
 @MainActor
 final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
@@ -7,6 +8,8 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
 
     private let manager = CLLocationManager()
     private var continuation: AsyncThrowingStream<CLLocation, Swift.Error>.Continuation?
+    private var cachedLocation: CLLocation?
+    private var prewarming = false
 
     override init() {
         super.init()
@@ -18,9 +21,10 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     }
 
     func locations() -> AsyncThrowingStream<CLLocation, Swift.Error> {
-        AsyncThrowingStream { continuation in
+        AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             self.continuation?.finish()
             self.continuation = continuation
+            if let cachedLocation { continuation.yield(cachedLocation) }
             continuation.onTermination = { @Sendable [weak self] _ in
                 Task { @MainActor in self?.stop() }
             }
@@ -32,10 +36,33 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    func startPrewarming() {
+        prewarming = true
+        switch manager.authorizationStatus {
+        case .notDetermined: manager.requestWhenInUseAuthorization()
+        case .authorizedAlways, .authorizedWhenInUse: manager.startUpdatingLocation()
+        default: break
+        }
+    }
+
+    func stopPrewarming() {
+        prewarming = false
+        if continuation == nil { manager.stopUpdatingLocation() }
+    }
+
+    func recentLocation(now: Date = Date()) -> CLLocation? {
+        guard let cachedLocation,
+              ReusableLocationPolicy.isReusable(
+                horizontalAccuracyMeters: cachedLocation.horizontalAccuracy,
+                ageSeconds: now.timeIntervalSince(cachedLocation.timestamp)
+              ) else { return nil }
+        return cachedLocation
+    }
+
     func stop() {
-        manager.stopUpdatingLocation()
         continuation?.finish()
         continuation = nil
+        if !prewarming { manager.stopUpdatingLocation() }
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -48,6 +75,7 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         for location in locations where location.horizontalAccuracy >= 0 {
+            if cachedLocation == nil || location.timestamp >= cachedLocation!.timestamp { cachedLocation = location }
             continuation?.yield(location)
         }
     }

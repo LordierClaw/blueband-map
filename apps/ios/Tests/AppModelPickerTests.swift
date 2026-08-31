@@ -96,10 +96,7 @@ final class AppModelPickerTests: XCTestCase {
             central: central,
             session: session,
             routeClient: VietmapRouteClient(transport: transport),
-            assetFactory: RouteCardAssetFactory(
-                styleClient: VietmapStyleClient(transport: transport),
-                tileTransport: transport
-            ),
+            snapshotRenderer: VietmapSnapshotRenderer(),
             locationClient: ForegroundLocationClient(),
             scanDuration: .seconds(3_600)
         )

@@ -27,10 +27,6 @@ struct BlueBandMapApp: App {
             trustedRPKStore: trustStore,
             expectedPackage: BlueBandProduct.rpkPackage
         )
-        let routeCardAssetFactory = RouteCardAssetFactory(
-            styleClient: VietmapStyleClient(transport: vietmapTransport),
-            tileTransport: vietmapTransport
-        )
         _model = StateObject(wrappedValue: AppModel(
             keyStore: KeychainAuthKeyStore(),
             vietmapKeyStore: vietmapKeyStore,
@@ -39,7 +35,7 @@ struct BlueBandMapApp: App {
             central: central,
             session: session,
             routeClient: VietmapRouteClient(transport: vietmapTransport),
-            assetFactory: routeCardAssetFactory,
+            snapshotRenderer: VietmapSnapshotRenderer(),
             locationClient: ForegroundLocationClient(),
             routeCardSession: BandSessionRouteCardSender(session: session)
         ))
