@@ -4,22 +4,26 @@ This handoff applies only to the exact artifacts below. CI and live provider che
 
 ## Artifact identity
 
-- Source commit: `f9aa484918d029cdbb496ee4ee1978dd3f07798b`
+- Source commit: `5a1c7397ae100593e1dc93e9d13565c9351cb2e8`
 - IPA: `artifacts/h1-hybrid/BlueBandMap-unsigned.ipa`
 - IPA version/build: `0.1.4 (5)`
 - IPA bytes / SHA-256: `782211` / `8744e887b99ef0de2a79ae02076dc16c4972fe856bb349f51193d12bfd276c18`
-- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.6.rpk`
-- RPK version/code: `0.2.6 (8)`
-- RPK bytes / SHA-256: `24902` / `74408b469f50a45958f60e9872a139bd9a74331b9da656019e563967a8abe820`
-- This fix changes only the RPK. If IPA `0.1.4 (5)` is already installed, do not reinstall it. Fully remove the previous RPK before installing `0.2.6 (8)` so Vela cannot reuse a cached package.
+- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.7.rpk`
+- RPK version/code: `0.2.7 (9)`
+- RPK bytes / SHA-256: `24979` / `74352b31fed618189a3a80370adb3aeb9c2621c163386cb159c2a2a8e956b12e`
+- This fix changes only the RPK. If IPA `0.1.4 (5)` is already installed, do not reinstall it. Fully remove the previous RPK before installing `0.2.7 (9)` so Vela cannot reuse a cached package.
 
 The IPA is unsigned. Keep signing credentials, profiles and private keys outside this repository.
 
 ## What was fixed
 
+The `0.2.6 (8)` owner run transferred and validated Synthetic 8 successfully, and the iPhone received a successful `render.result`, but the Band screen then went black and the Band rebooted. That ordering proves transfer, Base64, SHA-256 and BBMV decoding completed; the failure occurred when Vela painted the reactive vector elements after the success response. The vector renderer supplied `transform:rotate(...)` inside a dynamically assembled CSS string. [AIoT Toolkit 2.0 migration guidance](https://iot.mi.com/vela/quickapp/en/tools/toolkit/update.html) requires dynamic transforms to use a bound style object whose `transform` value is `JSON.stringify({ rotate: "...deg" })`; incorrect syntax can affect startup/runtime behavior.
+
+RPK `0.2.7 (9)` changes only that render boundary: each line now uses the documented Toolkit 2 style object and rotates around a precomputed segment midpoint, avoiding dynamic `transform-origin`. Protocol, transfer, Base64, SHA-256 and the eight-line payload are unchanged.
+
 The latest three owner logs all reached asset validation and transfer start, then failed on the first chunk with `ASSET_BASE64_INVALID` for real raster, real vector and synthetic vector payloads. The shared failure was the Band page's use of `@system.crypto`: [Xiaomi's official compatibility table](https://iot.mi.com/vela/quickapp/en/features/security/crypto.html) marks that module unsupported on Xiaomi Smart Band 10. The Node harness mocked `crypto.atob` and `crypto.hashDigest`, which falsely made the old implementation pass locally.
 
-RPK `0.2.6 (8)` therefore:
+RPK `0.2.6 (8)` previously:
 
 1. Removes the unsupported `system.crypto` feature/import completely.
 2. Decodes Base64 directly into `Uint8Array`, following Xiaomi's documented pure-JavaScript approach.
@@ -56,7 +60,7 @@ No key, provider URL, raw tile body, UUID or BLE secret is included in an H1 exp
 - iPhone 13 Pro Max on the intended iOS 26 build.
 - Xiaomi Smart Band 10 on the latest firmware; Mi Fitness fully closed during the session.
 - AuthKey, Vietmap Service key and Vietmap TileMap key show `SAVED` in Config.
-- Old Band package fully uninstalled, then RPK `0.2.6 (8)` installed.
+- Old Band package fully uninstalled, then RPK `0.2.7 (9)` installed.
 - IPA `0.1.4 (5)` installed and signed through the tester's normal process.
 - Test while stationary.
 
@@ -65,7 +69,7 @@ No key, provider URL, raw tile body, UUID or BLE secret is included in an H1 exp
 Run one mode at a time. After any terminal failure, disconnect and reconnect before the next attempt.
 
 1. Open the Band app.
-   - Expected: `BLUEBAND MAP`, a ready/link status and `RPK 0.2.6` appear immediately.
+   - Expected: `BLUEBAND MAP`, a ready/link status and `RPK 0.2.7` appear immediately.
    - Stop if the screen is black, frozen or displays another version.
 2. Connect from the compact device picker and complete authentication/trust.
    - Expected iPhone state: `Đã xác thực`.
