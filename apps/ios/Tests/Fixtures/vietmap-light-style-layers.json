@@ -15,7 +15,9 @@
   {"id":"road_primary_label","type":"symbol"},
   {"id":"road_secondary_label","type":"symbol"},
   {"id":"poi_hospital","type":"symbol"},
+  {"id":"poi_school","type":"symbol"},
   {"id":"transit_station","type":"symbol"},
+  {"id":"parking","type":"symbol"},
   {"id":"place_city","type":"symbol"},
   {"id":"admin_country","type":"line"},
   {"id":"building_3d","type":"fill-extrusion"}

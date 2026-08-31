@@ -131,7 +131,7 @@ enum VietmapStyleLayerPolicy {
         switch type {
         case "background": return id == "background"
         case "fill":
-            if id == "building" { return zoom >= 16 }
+            if id.contains("building") { return zoom >= 16 }
             if !profile.keepsLowPriorityLandUse,
                ["residential", "cemetery", "theme_park", "grass", "wood"].contains(where: id.contains) {
                 return false
@@ -141,8 +141,11 @@ enum VietmapStyleLayerPolicy {
                 .contains { id.contains($0) }
         case "line": return ["road", "tunnel", "bridge"].contains { id.contains($0) }
         case "symbol":
-            guard id.hasPrefix("road_"), id.contains("label") else { return false }
-            return profile.keepsLowPriorityLabels || ["motorway", "trunk", "primary"].contains(where: id.contains)
+            if id.hasPrefix("road_"), id.contains("label") {
+                return profile.keepsLowPriorityLabels || ["motorway", "trunk", "primary"].contains(where: id.contains)
+            }
+            return profile.keepsLowPriorityLabels && zoom >= 16 &&
+                ["poi_hospital", "poi_school", "transit_station", "parking"].contains(where: id.contains)
         default: return false
         }
     }
@@ -154,10 +157,15 @@ enum VietmapDarkStyle {
         switch type.lowercased() {
         case "background": return "#050e16"
         case "fill" where id.contains("water") || id.contains("ocean"): return "#004f6e"
-        case "fill" where id.contains("park") || id.contains("grass") || id.contains("wood"): return "#206239"
+        case "fill" where id.contains("park") || id.contains("grass") || id.contains("wood"): return "#163d2b"
+        case "fill" where id.contains("hospital") || id.contains("school"): return "#25304a"
+        case "fill" where id.contains("building"): return "#28343f"
+        case "fill" where id.contains("residential"): return "#1c2b32"
         case "fill": return "#101c23"
-        case "line" where id.contains("primary") || id.contains("motorway") || id.contains("trunk"): return "#607062"
-        case "line": return "#3a4b4b"
+        case "line" where id.contains("casing"): return "#223047"
+        case "line" where id.contains("primary") || id.contains("motorway") || id.contains("trunk"): return "#60738f"
+        case "line" where id.contains("secondary") || id.contains("tertiary"): return "#465a74"
+        case "line": return "#2f4057"
         case "symbol": return "#f4f3e5"
         default: return "#1c2b32"
         }

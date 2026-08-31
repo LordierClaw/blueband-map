@@ -18,6 +18,7 @@ final class VietmapSnapshotRendererTests: XCTestCase {
             "landuse_residential", "landuse_school", "landuse_hospital", "building",
             "road_minor_casing", "road_minor", "road_primary_casing", "road_primary",
             "bridge_primary", "road_primary_label", "road_secondary_label",
+            "poi_hospital", "poi_school", "transit_station", "parking",
         ])
     }
 
@@ -28,13 +29,18 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         )
         XCTAssertEqual(VietmapDarkStyle.colorHex(id: "background", type: "background"), "#050e16")
         XCTAssertEqual(VietmapDarkStyle.colorHex(id: "water", type: "fill"), "#004f6e")
-        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "road_primary", type: "line"), "#607062")
+        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "building", type: "fill"), "#28343f")
+        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "landuse_hospital", type: "fill"), "#25304a")
+        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "road_minor", type: "line"), "#2f4057")
+        XCTAssertEqual(VietmapDarkStyle.colorHex(id: "road_primary", type: "line"), "#60738f")
         XCTAssertEqual(VietmapDarkStyle.colorHex(id: "road_primary_label", type: "symbol"), "#f4f3e5")
     }
 
     func testDegradedProfilesRemoveLowPriorityStyleLayers() {
         XCTAssertTrue(VietmapStyleLayerPolicy.keeps(id: "road_minor_label", type: "symbol", zoom: 16, profile: .colors16Labels))
         XCTAssertFalse(VietmapStyleLayerPolicy.keeps(id: "road_minor_label", type: "symbol", zoom: 16, profile: .colors16NoLowPriorityLabels))
+        XCTAssertTrue(VietmapStyleLayerPolicy.keeps(id: "poi_hospital", type: "symbol", zoom: 16, profile: .colors16Labels))
+        XCTAssertFalse(VietmapStyleLayerPolicy.keeps(id: "poi_hospital", type: "symbol", zoom: 16, profile: .colors16NoLowPriorityLabels))
         XCTAssertTrue(VietmapStyleLayerPolicy.keeps(id: "road_primary_label", type: "symbol", zoom: 16, profile: .colors16NoLowPriorityLabels))
         XCTAssertFalse(VietmapStyleLayerPolicy.keeps(id: "landuse_residential", type: "fill", zoom: 16, profile: .colors16NoLowPriorityLandUse))
         XCTAssertTrue(VietmapStyleLayerPolicy.keeps(id: "water", type: "fill", zoom: 16, profile: .colors16NoLowPriorityLandUse))

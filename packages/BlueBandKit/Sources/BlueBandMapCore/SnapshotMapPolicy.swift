@@ -18,7 +18,7 @@ public enum SnapshotPaletteProfile: String, CaseIterable, Codable, Sendable {
 }
 
 public enum SnapshotPayloadAdmission {
-    public static let preferredMaximumBytes = 4_096
+    public static let preferredMaximumBytes = 5_120
 
     public static func choose(
         _ candidates: [(profile: SnapshotPaletteProfile, byteCount: Int)]
