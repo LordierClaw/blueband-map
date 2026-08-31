@@ -41,6 +41,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var navigationDistanceMeters = 0
     @Published private(set) var navigationStreet = ""
     @Published private(set) var routePreviewPNG: Data?
+    @Published private(set) var navigationStart: GeoPoint?
+    @Published private(set) var navigationDestination: GeoPoint?
+    @Published private(set) var navigationRouteDistanceMeters: Int?
+    @Published private(set) var navigationAlternativePathCount: Int?
+    @Published private(set) var navigationInstructions: [RouteInstruction] = []
+    @Published private(set) var navigationDebugEntries: [NavigationDebugEntry] = []
     @Published private(set) var errorMessage: String?
 
     private let keyStore: any AuthKeyStoreProtocol
@@ -64,6 +70,8 @@ final class AppModel: ObservableObject {
     private var updateSequence = 0
     private var activeSceneID: String?
     private var activeAnchorIndex = 0
+    private var navigationStartedMilliseconds = 0
+    private var navigationDebugSequence = 0
 
     init(
         keyStore: any AuthKeyStoreProtocol,
@@ -226,14 +234,28 @@ final class AppModel: ObservableObject {
 
     func startNavigation() {
         guard navigationTask == nil, rpkState == .ready else {
+            resetNavigationDebug()
             navigationState = .failed("RPK_NOT_READY")
+            errorMessage = "Navigation Failed (RPK_NOT_READY). Hãy kết nối và chờ xác thực band."
+            logNavigation("navigation.rejected", "reason=RPK_NOT_READY")
             return
         }
         guard let destination, let serviceKey = loadVietmapKey(.service) else {
+            resetNavigationDebug()
             navigationState = .failed("CONFIG_MISSING")
+            errorMessage = "Navigation Failed (CONFIG_MISSING). Hãy lưu tọa độ đích và Service/API key."
+            logNavigation("navigation.rejected", "reason=CONFIG_MISSING")
             return
         }
         saveDestination()
+        resetNavigationDebug()
+        navigationDestination = destination
+        let tileMapAvailability = loadVietmapKey(.tileMap)?.isEmpty == false ? "present" : "absent"
+        logNavigation(
+            "navigation.start",
+            "destination=\(NavigationDebugFormatter.coordinateSummary(destination)) " +
+            "serviceKey=present tileMapKey=\(tileMapAvailability)"
+        )
         navigationTask = Task { @MainActor [weak self] in
             await self?.runNavigation(
                 destination: destination,
@@ -258,6 +280,7 @@ final class AppModel: ObservableObject {
     private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String) async {
         defer { navigationTask = nil }
         navigationState = .waitingForGPS
+        logNavigation("gps.wait", "requiredAccuracyM=25")
         do {
             var iterator = locationClient.locations().makeAsyncIterator()
             var first: CLLocation?
@@ -265,9 +288,16 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 if location.horizontalAccuracy <= 25 { first = location; break }
                 navigationState = .gpsLow
+                logNavigation("gps.low", "accuracyM=\(Int(location.horizontalAccuracy.rounded()))")
             }
             guard !Task.isCancelled else { return }
             guard let first else { throw ForegroundLocationClient.Error.unavailable }
+            navigationStart = first.geoPoint
+            logNavigation(
+                "gps.fix",
+                "start=\(NavigationDebugFormatter.coordinateSummary(first.geoPoint)) " +
+                "accuracyM=\(Int(first.horizontalAccuracy.rounded()))"
+            )
             var route = try await makeRoute(from: first, to: destination, serviceKey: serviceKey)
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
@@ -308,19 +338,37 @@ final class AppModel: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
-            navigationState = .failed("NAVIGATION_FAILED")
-            errorMessage = "Không thể bắt đầu điều hướng bằng dữ liệu thật."
+            let code = Self.navigationErrorCode(for: error)
+            navigationState = .failed(code)
+            errorMessage = "Navigation Failed (\(code)). Mở Debug log để xem từng bước."
+            logNavigation("navigation.failed", "code=\(code)")
         }
     }
 
     private func makeRoute(from location: CLLocation, to destination: GeoPoint, serviceKey: String) async throws -> RoutePlan {
         navigationState = .routing
-        return try await routeClient.route(
+        let heading = location.course >= 0 ? Int(location.course.rounded()) : nil
+        logNavigation(
+            "route.request",
+            "origin=\(NavigationDebugFormatter.coordinateSummary(location.geoPoint)) " +
+            "destination=\(NavigationDebugFormatter.coordinateSummary(destination)) " +
+            "heading=\(heading.map(String.init) ?? "unknown")"
+        )
+        let route = try await routeClient.route(
             origin: location.geoPoint,
             destination: destination,
             serviceKey: serviceKey,
-            headingDegrees: location.course >= 0 ? Int(location.course.rounded()) : nil
+            headingDegrees: heading
         )
+        navigationRouteDistanceMeters = Int(route.distanceMeters.rounded())
+        navigationAlternativePathCount = route.alternativePathCount
+        navigationInstructions = route.instructions
+        logNavigation(
+            "route.response",
+            "distanceM=\(navigationRouteDistanceMeters ?? 0) points=\(route.points.count) " +
+            "instructions=\(route.instructions.count) paths=\(route.alternativePathCount)"
+        )
+        return route
     }
 
     private func publish(route: RoutePlan, progressIndex: Int, tileMapKey: String) async throws -> Bool {
@@ -330,6 +378,11 @@ final class AppModel: ObservableObject {
             tileMapKey: tileMapKey
         )
         routePreviewPNG = output.asset.data
+        logNavigation(
+            "map.rendered",
+            "bytes=\(output.asset.byteCount) limitedMap=\(output.limitedMap) " +
+            "maneuver=\(output.scene.maneuver.rawValue) distanceM=\(output.scene.distanceMeters)"
+        )
         await renderCoordinator.start(asset: output.asset)
         guard case .displayed = renderCoordinator.state,
               let sceneID = renderCoordinator.lastDisplayedSceneID else { throw RouteCardAssetFactory.Error.payloadTooLarge }
@@ -339,6 +392,7 @@ final class AppModel: ObservableObject {
         navigationDistanceMeters = output.scene.distanceMeters
         navigationStreet = output.scene.streetName
         navigationState = output.limitedMap ? .limitedMap : .navigating
+        logNavigation("band.displayed", "scene=\(sceneID) status=\(navigationStateCode)")
         return output.limitedMap
     }
 
@@ -362,8 +416,73 @@ final class AppModel: ObservableObject {
         navigationManeuver = update.maneuver
         navigationDistanceMeters = update.distanceMeters
         navigationStreet = update.street
+        logNavigation(
+            "nav.update",
+            "maneuver=\(update.maneuver.rawValue) distanceM=\(update.distanceMeters) " +
+            "status=\(update.status.rawValue) marker=\(update.x),\(update.y)"
+        )
         guard let first = updateCoalescer.enqueue(update), updateTask == nil else { return }
         updateTask = Task { @MainActor [weak self] in await self?.drainUpdates(first) }
+    }
+
+    var navigationStartText: String { Self.fullCoordinate(navigationStart) }
+    var navigationDestinationText: String { Self.fullCoordinate(navigationDestination) }
+
+    var navigationStateCode: String {
+        switch navigationState {
+        case .idle: "idle"
+        case .waitingForGPS: "waitingForGPS"
+        case .routing: "routing"
+        case .transferring: "transferring"
+        case .navigating: "navigating"
+        case .gpsLow: "gpsLow"
+        case .limitedMap: "limitedMap"
+        case .rerouting: "rerouting"
+        case .arrived: "arrived"
+        case let .failed(code): "failed:\(code)"
+        }
+    }
+
+    var navigationDebugExport: String {
+        NavigationDebugFormatter.export(
+            state: navigationStateCode,
+            start: navigationStart,
+            destination: navigationDestination,
+            routeDistanceMeters: navigationRouteDistanceMeters.map(Double.init),
+            alternativePathCount: navigationAlternativePathCount,
+            instructions: navigationInstructions,
+            entries: navigationDebugEntries
+        )
+    }
+
+    private func resetNavigationDebug() {
+        navigationStartedMilliseconds = Self.nowMilliseconds()
+        navigationDebugSequence = 0
+        navigationDebugEntries = []
+        navigationStart = nil
+        navigationDestination = nil
+        navigationRouteDistanceMeters = nil
+        navigationAlternativePathCount = nil
+        navigationInstructions = []
+        navigationManeuver = .straight
+        navigationDistanceMeters = 0
+        navigationStreet = ""
+        routePreviewPNG = nil
+        errorMessage = nil
+    }
+
+    private func logNavigation(_ stage: String, _ detail: String) {
+        navigationDebugSequence += 1
+        let entry = NavigationDebugEntry(
+            sequence: navigationDebugSequence,
+            elapsedMilliseconds: max(0, Self.nowMilliseconds() - navigationStartedMilliseconds),
+            stage: stage,
+            detail: detail
+        )
+        navigationDebugEntries.append(entry)
+        if navigationDebugEntries.count > 120 {
+            navigationDebugEntries.removeFirst(navigationDebugEntries.count - 120)
+        }
     }
 
     private func drainUpdates(_ first: NavigationUpdate) async {
@@ -462,6 +581,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private static func navigationErrorCode(for error: Swift.Error) -> String {
+        switch error {
+        case VietmapRouteClient.Error.invalidRequest: "ROUTE_INVALID_REQUEST"
+        case let VietmapRouteClient.Error.httpStatus(status): "ROUTE_HTTP_\(status)"
+        case VietmapRouteClient.Error.wrongContentType: "ROUTE_CONTENT_TYPE"
+        case VietmapRouteClient.Error.invalidResponse: "ROUTE_RESPONSE_INVALID"
+        case let VietmapRouteClient.Error.provider(code): "ROUTE_PROVIDER_\(safeErrorCode(code))"
+        case ForegroundLocationClient.Error.unavailable: "GPS_UNAVAILABLE"
+        case let RouteCardAssetFactory.Error.tileHTTPStatus(status): "MAP_TILE_HTTP_\(status)"
+        case RouteCardAssetFactory.Error.tileWrongContentType: "MAP_TILE_CONTENT_TYPE"
+        case RouteCardAssetFactory.Error.tileEmpty: "MAP_TILE_EMPTY"
+        case RouteCardAssetFactory.Error.payloadTooLarge: "MAP_PAYLOAD_TOO_LARGE"
+        default: "NAVIGATION_ERROR"
+        }
+    }
+
+    private static func safeErrorCode(_ value: String) -> String {
+        let allowed = value.uppercased().map { character in
+            character.isLetter || character.isNumber || character == "_" || character == "-" ? character : "_"
+        }
+        return String(allowed.prefix(32))
+    }
+
     private static func state(_ status: NavigationStatus) -> LiveNavigationState {
         switch status {
         case .navigating: .navigating
@@ -475,6 +617,20 @@ final class AppModel: ObservableObject {
     private static func meters(_ a: GeoPoint, _ b: GeoPoint) -> Double {
         let latitude = (a.latitude + b.latitude) / 2 * .pi / 180
         return hypot((b.longitude - a.longitude) * 111_320 * cos(latitude), (b.latitude - a.latitude) * 111_132)
+    }
+
+    private static func fullCoordinate(_ point: GeoPoint?) -> String {
+        guard let point else { return "—" }
+        return String(
+            format: "%.6f,%.6f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            point.latitude,
+            point.longitude
+        )
+    }
+
+    private static func nowMilliseconds() -> Int {
+        Int(Date().timeIntervalSince1970 * 1_000)
     }
 
     private static func remainingDistance(

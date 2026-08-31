@@ -51,9 +51,32 @@ struct ContentView: View {
     private var navigationSection: some View {
         Section("Live Route Card") {
             LabeledContent("Trạng thái", value: navigationLabel)
-            LabeledContent("Chỉ dẫn", value: model.navigationManeuver.rawValue)
-            LabeledContent("Khoảng cách", value: "\(model.navigationDistanceMeters) m")
+            LabeledContent("Điểm bắt đầu", value: model.navigationStartText)
+            LabeledContent("Điểm đến", value: model.navigationDestinationText)
+            LabeledContent("Chỉ dẫn", value: instructionLabel)
+            LabeledContent("Khoảng cách tới lượt", value: instructionDistanceLabel)
             if !model.navigationStreet.isEmpty { Text(model.navigationStreet) }
+            if let distance = model.navigationRouteDistanceMeters {
+                LabeledContent(
+                    "Tổng tuyến",
+                    value: "\(distance) m • \(model.navigationInstructions.count) bước • \(model.navigationAlternativePathCount ?? 1) tuyến nhận được"
+                )
+            }
+            if !model.navigationInstructions.isEmpty {
+                DisclosureGroup("Các bước chỉ dẫn") {
+                    ForEach(Array(model.navigationInstructions.enumerated()), id: \.offset) { index, instruction in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(index + 1). \(instruction.maneuver.rawValue) • \(Int(instruction.distanceMeters.rounded())) m")
+                                .font(.subheadline)
+                            if !instruction.streetName.isEmpty {
+                                Text(instruction.streetName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
             if let data = model.routePreviewPNG, let image = UIImage(data: data) {
                 Image(uiImage: image)
                     .resizable().interpolation(.none).scaledToFit()
@@ -65,9 +88,33 @@ struct ContentView: View {
                 Button("Bắt đầu điều hướng") { model.startNavigation() }
                     .disabled(model.rpkState != .ready)
             }
+            if !model.navigationDebugEntries.isEmpty {
+                ShareLink(
+                    item: model.navigationDebugExport,
+                    subject: Text("BlueBandMap navigation debug"),
+                    message: Text("Log đã loại bỏ key, UUID và tọa độ đầy đủ.")
+                ) {
+                    Label("Export debug log", systemImage: "square.and.arrow.up")
+                }
+                DisclosureGroup("Debug log (\(model.navigationDebugEntries.count))") {
+                    ForEach(model.navigationDebugEntries, id: \.sequence) { entry in
+                        Text("[\(entry.elapsedMilliseconds)ms] #\(entry.sequence) \(entry.stage) \(entry.detail)")
+                            .font(.caption2)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
             Text("Ảnh preview dùng cùng PNG và scene với Smart Band.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private var instructionLabel: String {
+        model.navigationRouteDistanceMeters == nil ? "—" : model.navigationManeuver.rawValue
+    }
+
+    private var instructionDistanceLabel: String {
+        model.navigationRouteDistanceMeters == nil ? "—" : "\(model.navigationDistanceMeters) m"
     }
 
     private var navigationIsActive: Bool {

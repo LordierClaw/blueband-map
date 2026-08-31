@@ -20,12 +20,23 @@ final class VietmapRouteTests: XCTestCase {
         XCTAssertEqual(route.instructions[1].streetName, "Đường B")
     }
 
-    func testRejectsInvalidIntervalsAndMultiplePaths() {
+    func testSelectsShortestValidPathWhenProviderReturnsAlternatives() throws {
+        let body = Data(#"{"code":"OK","paths":[{"distance":20,"points_encoded":true,"points":"??gE?gEgE","instructions":[{"distance":20,"heading":0,"sign":0,"interval":[0,2],"street_name":"Long"}]},{"distance":10,"points_encoded":true,"points":"??gE?gEgE","instructions":[{"distance":10,"heading":90,"sign":2,"interval":[0,2],"street_name":"Short"}]}]}"#.utf8)
+
+        let route = try VietmapRouteClient.parse(body)
+
+        XCTAssertEqual(route.distanceMeters, 10)
+        XCTAssertEqual(route.alternativePathCount, 2)
+        XCTAssertEqual(route.instructions.first?.streetName, "Short")
+        XCTAssertEqual(route.instructions.first?.maneuver, .right)
+    }
+
+    func testRejectsInvalidIntervalsAndSelectsShortestOfMultiplePaths() throws {
         let invalidInterval = Data(#"{"code":"OK","paths":[{"distance":1,"points_encoded":true,"points":"????","instructions":[{"distance":1,"heading":0,"sign":0,"interval":[0,9],"street_name":""}]}]}"#.utf8)
         let multiplePaths = Data(#"{"code":"OK","paths":[{"distance":1,"points_encoded":true,"points":"????","instructions":[]},{"distance":1,"points_encoded":true,"points":"????","instructions":[]}]}"#.utf8)
 
         XCTAssertThrowsError(try VietmapRouteClient.parse(invalidInterval))
-        XCTAssertThrowsError(try VietmapRouteClient.parse(multiplePaths))
+        XCTAssertEqual(try VietmapRouteClient.parse(multiplePaths).distanceMeters, 1)
     }
 
     func testBuildsBoundedMotorcycleRequestWithoutAnnotations() throws {

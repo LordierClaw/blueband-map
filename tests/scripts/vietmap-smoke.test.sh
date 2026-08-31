@@ -26,7 +26,7 @@ while (($#)); do
 done
 printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' >"$headers"
 if [[ "$FAKE_MODE" == route ]]; then
-  printf '{"code":"OK","paths":[{"points":"abc","instructions":[]}]}' >"$body"
+  printf '{"code":"OK","paths":[{"points":"abc","instructions":[]},{"points":"def","instructions":[]}]}' >"$body"
 else
   printf '{"version":8}' >"$body"
 fi

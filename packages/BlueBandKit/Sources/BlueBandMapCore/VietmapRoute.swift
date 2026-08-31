@@ -59,11 +59,18 @@ public struct RoutePlan: Equatable, Sendable {
     public let points: [GeoPoint]
     public let instructions: [RouteInstruction]
     public let distanceMeters: Double
+    public let alternativePathCount: Int
 
-    public init(points: [GeoPoint], instructions: [RouteInstruction], distanceMeters: Double) {
+    public init(
+        points: [GeoPoint],
+        instructions: [RouteInstruction],
+        distanceMeters: Double,
+        alternativePathCount: Int = 1
+    ) {
         self.points = points
         self.instructions = instructions
         self.distanceMeters = distanceMeters
+        self.alternativePathCount = alternativePathCount
     }
 }
 
@@ -185,23 +192,34 @@ public struct VietmapRouteClient: Sendable {
         guard data.count <= 256 * 1_024,
               let response = try? JSONDecoder().decode(Response.self, from: data) else { throw Error.invalidResponse }
         guard response.code == "OK" else { throw Error.provider(response.code) }
-        guard let paths = response.paths, paths.count == 1, paths[0].pointsEncoded,
-              paths[0].distance.isFinite, paths[0].distance >= 0 else { throw Error.invalidResponse }
-        let points = try GooglePolyline5.decode(paths[0].points)
-        let instructions = try paths[0].instructions.map { instruction -> RouteInstruction in
-            guard instruction.distance.isFinite, instruction.distance >= 0,
-                  (0...360).contains(instruction.heading), instruction.interval.count == 2,
-                  instruction.interval[0] >= 0, instruction.interval[0] <= instruction.interval[1],
-                  instruction.interval[1] < points.count else { throw Error.invalidResponse }
-            return RouteInstruction(
-                distanceMeters: instruction.distance,
-                headingDegrees: instruction.heading,
-                sign: instruction.sign,
-                interval: instruction.interval[0]...instruction.interval[1],
-                streetName: instruction.streetName
+        guard let paths = response.paths, !paths.isEmpty else { throw Error.invalidResponse }
+        let validRoutes = paths.compactMap { path -> RoutePlan? in
+            guard path.pointsEncoded, path.distance.isFinite, path.distance >= 0,
+                  let points = try? GooglePolyline5.decode(path.points) else { return nil }
+            guard let instructions = try? path.instructions.map({ instruction -> RouteInstruction in
+                guard instruction.distance.isFinite, instruction.distance >= 0,
+                      (0...360).contains(instruction.heading), instruction.interval.count == 2,
+                      instruction.interval[0] >= 0, instruction.interval[0] <= instruction.interval[1],
+                      instruction.interval[1] < points.count else { throw Error.invalidResponse }
+                return RouteInstruction(
+                    distanceMeters: instruction.distance,
+                    headingDegrees: instruction.heading,
+                    sign: instruction.sign,
+                    interval: instruction.interval[0]...instruction.interval[1],
+                    streetName: instruction.streetName
+                )
+            }) else { return nil }
+            return RoutePlan(
+                points: points,
+                instructions: instructions,
+                distanceMeters: path.distance,
+                alternativePathCount: paths.count
             )
         }
-        return RoutePlan(points: points, instructions: instructions, distanceMeters: paths[0].distance)
+        guard let route = validRoutes.min(by: { $0.distanceMeters < $1.distanceMeters }) else {
+            throw Error.invalidResponse
+        }
+        return route
     }
 
     private static func decimal(_ value: Double) -> String {

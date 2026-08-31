@@ -52,7 +52,7 @@ with open(path, "rb") as handle:
     payload = json.load(handle)
 if mode == "route":
     paths = payload.get("paths")
-    if payload.get("code") != "OK" or not isinstance(paths, list) or len(paths) != 1:
+    if payload.get("code") != "OK" or not isinstance(paths, list) or not paths:
         raise SystemExit("invalid route response")
     route = paths[0]
     if not isinstance(route.get("points"), str) or not isinstance(route.get("instructions"), list):
