@@ -40,4 +40,17 @@ jobs:
       - name: Build and inspect unsigned arm64 device app
         run: |
           xcodebuild -project apps/ios/BlueBandMap.xcodeproj -scheme BlueBandMap -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
-          scripts/verify-ios-artifact.sh "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/BlueBandMap.app"
+          app="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/BlueBandMap.app"
+          scripts/verify-ios-artifact.sh "$app"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          ditto "$app" "$RUNNER_TEMP/Payload/BlueBandMap.app"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/Payload" "$RUNNER_TEMP/BlueBandMap-unsigned.ipa"
+          shasum -a 256 "$RUNNER_TEMP/BlueBandMap-unsigned.ipa" > "$RUNNER_TEMP/BlueBandMap-unsigned.ipa.sha256"
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: blueband-map-ios-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/BlueBandMap-unsigned.ipa
+            ${{ runner.temp }}/BlueBandMap-unsigned.ipa.sha256
