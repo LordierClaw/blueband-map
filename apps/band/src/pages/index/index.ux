@@ -635,12 +635,23 @@ export default {
       var labels = { navigating: "NAVIGATING", gpsLow: "GPS LOW", limitedMap: "LIMITED MAP", rerouting: "REROUTING", arrived: "ARRIVED" }
       this.navScene = body.scene
       this.navSequence = body.seq
-      this.navArrowPath = "/common/maneuver-" + body.maneuver + ".png"
       this.navMarkerPath = "/common/marker-" + body.heading + ".png"
-      this.navDistance = body.status === "arrived" ? "ARRIVED" : body.distanceM + " m"
-      this.navStreet = body.street
-      this.navStatus = labels[body.status]
-      this.navStatusVisible = body.status !== "navigating"
+      var navigation = {
+        arrowPath: "/common/maneuver-" + body.maneuver + ".png",
+        distance: body.status === "arrived" ? "ARRIVED" : body.distanceM + " m",
+        street: body.street,
+        status: labels[body.status],
+        statusVisible: body.status !== "navigating"
+      }
+      if (this.preparedRender && this.preparedRender.preview && this.preparedRender.sceneId !== body.scene) {
+        this.preparedRender.previousNavigation = navigation
+      } else {
+        this.navArrowPath = navigation.arrowPath
+        this.navDistance = navigation.distance
+        this.navStreet = navigation.street
+        this.navStatus = navigation.status
+        this.navStatusVisible = navigation.statusVisible
+      }
       this.navMarkerStyle = "left:" + Math.max(0, Math.min(186, body.x - 13)) + "px;top:" +
         Math.max(0, Math.min(488, body.y - 16)) + "px;"
     }
@@ -774,6 +785,7 @@ export default {
       digest: sha256Create(),
       buffer: new Uint8Array(body.bytes),
       receivedBytes: 0,
+      pendingChunk: null,
       validatedAt: 0,
       renderStartedAt: 0
     }
@@ -854,7 +866,7 @@ export default {
       this.failAsset(message, "ASSET_RUN_MISMATCH")
       return
     }
-    if (!this.validInteger(body.offset) || body.offset !== transfer.receivedBytes) {
+    if (!this.validInteger(body.offset) || body.offset < transfer.receivedBytes) {
       this.failAsset(message, "ASSET_OFFSET_INVALID")
       return
     }
@@ -863,13 +875,28 @@ export default {
       this.failAsset(message, "ASSET_BASE64_INVALID")
       return
     }
-    if (transfer.receivedBytes + buffer.length > transfer.bytes) {
+    if (body.offset + buffer.length > transfer.bytes) {
       this.failAsset(message, "ASSET_OVERFLOW")
+      return
+    }
+    if (body.offset > transfer.receivedBytes) {
+      if (transfer.pendingChunk) {
+        this.failAsset(message, "ASSET_OFFSET_INVALID")
+        return
+      }
+      transfer.pendingChunk = { offset: body.offset, buffer: buffer }
+      this.succeedAsset(message.id)
       return
     }
     transfer.buffer.set(buffer, body.offset)
     sha256Update(transfer.digest, buffer)
     transfer.receivedBytes = transfer.receivedBytes + buffer.length
+    if (transfer.pendingChunk && transfer.pendingChunk.offset === transfer.receivedBytes) {
+      transfer.buffer.set(transfer.pendingChunk.buffer, transfer.pendingChunk.offset)
+      sha256Update(transfer.digest, transfer.pendingChunk.buffer)
+      transfer.receivedBytes = transfer.receivedBytes + transfer.pendingChunk.buffer.length
+      transfer.pendingChunk = null
+    }
     this.succeedAsset(message.id)
   },
 

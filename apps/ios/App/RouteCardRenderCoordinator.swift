@@ -351,24 +351,31 @@ final class RouteCardRenderCoordinator {
             state = .transferring(mode: mode, completed: 1, total: steps.count)
 
             var completed = 1
-            try await withThrowingTaskGroup(of: Int.self) { group in
+            try await withThrowingTaskGroup(of: (Int, Int).self) { group in
                 var next = 0
+                var contiguous = 0
+                var finished = Set<Int>()
                 func addNext() {
+                    let index = next
                     let step = chunks[next]
                     next += 1
                     let session = session
                     group.addTask {
                         let started = Self.nowMilliseconds()
                         _ = try await session.sendAwaitingAcknowledgement(topic: step.topic, body: step.body)
-                        return started
+                        return (index, started)
                     }
                 }
                 while next < min(transferWindow, chunks.count) { addNext() }
-                while let started = try await group.next() {
+                while let (index, started) = try await group.next() {
                     recordAck(started: started)
                     completed += 1
                     state = .transferring(mode: mode, completed: completed, total: steps.count)
-                    if next < chunks.count { addNext() }
+                    finished.insert(index)
+                    while finished.remove(contiguous) != nil {
+                        contiguous += 1
+                        if next < chunks.count { addNext() }
+                    }
                 }
             }
 

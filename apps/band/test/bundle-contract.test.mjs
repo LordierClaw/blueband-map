@@ -54,7 +54,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /<div class="nav-marker"/)
   assert.match(page, /\.nav-header\s*\{[^}]*left:\s*0;[^}]*top:\s*0;[^}]*width:\s*212px;[^}]*height:\s*96px;/s)
   assert.doesNotMatch(page, /\.nav-header\s*\{[^}]*background-color:/s)
-  assert.match(page, /navStatusVisible\s*=\s*body\.status\s*!==\s*["']navigating["']/)
+  assert.match(page, /statusVisible:\s*body\.status\s*!==\s*["']navigating["']/)
   assert.match(page, /navStatus\s*=\s*["']LOADING MAP["']/)
   assert.match(page, /\.nav-marker\s*\{[^}]*width:\s*26px;[^}]*height:\s*32px;/s)
 })

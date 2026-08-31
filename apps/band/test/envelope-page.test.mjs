@@ -198,13 +198,35 @@ test("cancelled refresh restores the confirmed scene guidance", async () => {
     sceneId: "scene-refresh-01",
     preview: { maneuver: "right", distanceM: 88, street: "New Road" }
   })) })
+  page.receiveMessage({ data: envelope("nav-latest", "nav.update", {
+    scene: SCENE, seq: 2, x: 108, y: 318, heading: 3,
+    maneuver: "straight", distanceM: 120, street: "Latest Road", status: "navigating"
+  }) })
+  assert.equal(page.navStreet, "New Road")
   page.receiveMessage({ data: envelope("cancel-new", "render.cancel", {
     runId: RUN, sceneId: "scene-refresh-01"
   }) })
 
-  assert.equal(page.navArrowPath, "/common/maneuver-left.png")
-  assert.equal(page.navDistance, "140 m")
-  assert.equal(page.navStreet, "Old Road")
+  assert.equal(page.navArrowPath, "/common/maneuver-straight.png")
+  assert.equal(page.navDistance, "120 m")
+  assert.equal(page.navStreet, "Latest Road")
+})
+
+test("one out-of-order windowed chunk is buffered until its predecessor", async () => {
+  const { page, sent, file } = await harness()
+  const first = BYTES.slice(0, 2), second = BYTES.slice(2)
+  page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
+  page.receiveMessage({ data: envelope("begin", "map.asset.begin", begin()) })
+  page.receiveMessage({ data: envelope("chunk-2", "map.asset.chunk", {
+    asset: ASSET, run: RUN, scene: SCENE, offset: 2, data: Buffer.from(second).toString("base64")
+  }) })
+  page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", {
+    asset: ASSET, run: RUN, scene: SCENE, offset: 0, data: Buffer.from(first).toString("base64")
+  }) })
+  page.receiveMessage({ data: envelope("end", "map.asset.end", { asset: ASSET, run: RUN, scene: SCENE }) })
+
+  assert.deepEqual(file.storage.get(`internal://files/${ASSET}.png`), BYTES)
+  assert.equal(sent.some(message => message.body && message.body.errorCode === "ASSET_OFFSET_INVALID"), false)
 })
 
 test("disconnect clears transfer ownership and nav sequence without accepting queued messages", async () => {
@@ -269,11 +291,14 @@ test("wrong windowed offset aborts the refresh and keeps the confirmed map", asy
   page.receiveMessage({ data: envelope("prepare-2", "render.prepare", prepare()) })
   page.receiveMessage({ data: envelope("begin-2", "map.asset.begin", begin()) })
   page.receiveMessage({ data: envelope("chunk-wrong", "map.asset.chunk", {
-    asset: ASSET, run: RUN, scene: SCENE, offset: 2,
+    asset: ASSET, run: RUN, scene: SCENE, offset: 3,
     data: Buffer.from(BYTES.slice(0, 2)).toString("base64")
   }) })
+  page.receiveMessage({ data: envelope("end-wrong", "map.asset.end", {
+    asset: ASSET, run: RUN, scene: SCENE
+  }) })
 
-  assert.equal(sent.find(message => message.topic === "render.result" && message.body.status === "error").body.errorCode, "ASSET_OFFSET_INVALID")
+  assert.equal(sent.find(message => message.topic === "render.result" && message.body.status === "error").body.errorCode, "ASSET_OVERFLOW")
   assert.equal(page.confirmedMap.uri, confirmed.uri)
   assert.equal(page.mapPath, confirmed.uri)
 })

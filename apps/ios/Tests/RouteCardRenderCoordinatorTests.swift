@@ -100,7 +100,7 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
     }
 
     func testDefaultWindowIsTwoAndPrepareCarriesNavigationPreview() async throws {
-        let session = WindowedRouteCardSession()
+        let session = WindowedRouteCardSession(delayFirstChunk: true)
         let coordinator = RouteCardRenderCoordinator(
             session: session,
             runIDGenerator: { "nav-run-preview" },
@@ -120,8 +120,10 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         await coordinator.start(asset: asset, preview: preview)
 
         let maximumConcurrentChunks = await session.maximumConcurrentChunks
+        let chunksStartedWhileFirstPending = await session.chunksStartedWhileFirstPending
         let preparedPreview = await session.prepareValue("preview")
         XCTAssertEqual(maximumConcurrentChunks, 2)
+        XCTAssertEqual(chunksStartedWhileFirstPending, 1)
         XCTAssertEqual(preparedPreview, .object(preview.jsonBody()))
     }
 }
@@ -141,9 +143,15 @@ private actor WindowedRouteCardSession: RouteCardSessionSending {
     private var prepareBody: [String: JSONValue] = [:]
     private var activeChunks = 0
     private(set) var maximumConcurrentChunks = 0
+    private(set) var chunksStartedWhileFirstPending = 0
     private let chunkDelay: Duration
+    private let delayFirstChunk: Bool
+    private var firstChunkPending = false
 
-    init(chunkDelay: Duration = .milliseconds(5)) { self.chunkDelay = chunkDelay }
+    init(chunkDelay: Duration = .milliseconds(5), delayFirstChunk: Bool = false) {
+        self.chunkDelay = chunkDelay
+        self.delayFirstChunk = delayFirstChunk
+    }
 
     func setReceiver(_ receiver: @escaping Receiver) { self.receiver = receiver }
 
@@ -161,7 +169,18 @@ private actor WindowedRouteCardSession: RouteCardSessionSending {
         } else if topic == "map.asset.chunk" {
             activeChunks += 1
             maximumConcurrentChunks = max(maximumConcurrentChunks, activeChunks)
-            try await Task.sleep(for: chunkDelay)
+            let offset: Int
+            if case let .number(value)? = body["offset"] { offset = Int(value) }
+            else { offset = -1 }
+            if delayFirstChunk, offset == 0 {
+                firstChunkPending = true
+                try await Task.sleep(for: .milliseconds(25))
+                firstChunkPending = false
+            } else {
+                if delayFirstChunk { try await Task.sleep(for: .milliseconds(1)) }
+                if firstChunkPending { chunksStartedWhileFirstPending += 1 }
+                try await Task.sleep(for: chunkDelay)
+            }
             activeChunks -= 1
         } else if topic == "map.asset.end" {
             await receive(RenderProtocol.resultTopic, body: [
