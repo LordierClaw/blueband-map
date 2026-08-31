@@ -1,88 +1,102 @@
-# H1 owner hardware test handoff — hybrid renderer
+# H1 hybrid renderer — owner hardware handoff
 
-This document is the H1 hardware acceptance procedure. It is not evidence that a Xiaomi Smart Band 10 has accepted or rendered the payload until the owner completes the steps with the exact IPA and RPK artifacts listed in the final bundle.
+This handoff applies only to the exact artifacts below. CI and live provider checks do not prove Xiaomi Smart Band 10 hardware acceptance; the owner test is the acceptance boundary.
 
 ## Artifact identity
 
-These values were checked against the downloaded CI artifact; never infer them from source metadata:
-
-- Source commit: `068a3473bc96fb46a55559ab3b1b116bb9ee73d0`
+- Source commit: `01100865f402d306c6cda2a7ae0c35b8f8ae5084`
 - IPA: `artifacts/h1-hybrid/BlueBandMap-unsigned.ipa`
-- IPA bytes / SHA-256: `777511` / `953d17cd6f6a01656d5642d59f07011504ec591253317406a40f6d360ae6084d`
-- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.4.rpk`
-- RPK bytes / SHA-256: `23235` / `e01d656062a033dc5ebe2338aa3125970ce78f25f22b6c0d432fd9a77ce13d95`
-- iOS version/build: `0.1.3 (4)`
-- RPK version/code: `0.2.4 (6)`
-- Files to update on the test devices: **both IPA and RPK**. RPK `0.2.4` sends explicit success metadata and must not be paired with an older IPA/RPK.
+- IPA version/build: `0.1.4 (5)`
+- IPA bytes / SHA-256: `782211` / `b7127112b9c5e34694ac95d9dbbfa4bb5194f1dd2829da9168e209eeee3d6201`
+- RPK: `artifacts/h1-hybrid/dev.lordierclaw.bluebandmap.band.debug.0.2.5.rpk`
+- RPK version/code: `0.2.5 (7)`
+- RPK bytes / SHA-256: `23139` / `43583ebcb09219579abbfb04eda4a351de3ca7e0abb1a77d550a87f4295f82fd`
+- Update **both** IPA and RPK. Fully remove the previous RPK first so Vela cannot reuse a cached package.
 
-An unsigned IPA needs a valid tester signing/sideload process. Do not put Apple credentials, profiles or signing keys in this repository.
+The IPA is unsigned. Keep signing credentials, profiles and private keys outside this repository.
 
-## What H1 proves
+## What was fixed
 
-The iPhone selects exactly one renderer before transfer. The Band acknowledges `render.prepare` with `render.ready` or `render.reject`; only `render.ready` allows the existing `map.asset.*` stop-and-wait transfer. A matching semantic response may race the transport ACK and is buffered. A vector failure never falls back to raster.
+The supplied run logs proved three independent failures:
 
-All H1 payloads are bounded to 212×360, 64 KiB, and at most 40 vector line primitives. The fixed-record vector payload is `BBMV` v1. Xiaomi BLE, SPP, authentication, encryption and transport-ACK bytes are unchanged.
+1. Raster and Synthetic 8 reached a Band `status=ok`, but the returned byte count did not match the transferred payload. The RPK success function had six parameters and depended on optional JavaScript arguments. It now has four parameters and returns the already validated publication metadata directly.
+2. The exported JSON was truncated at exactly 1,025 bytes. Export is now compact, sorted JSON below 1,024 bytes while internal run records remain detailed.
+3. Vietmap vector tiles are transformed before protobuf parsing. The iPhone now applies the transform used by Vietmap GL JS, then decodes the correct MVT 2.1 layer fields and bounded buffer coordinates observed in a real tile.
 
-Owner exports showed that both a real raster (`21567 / 0`) and Synthetic 8 (`94 / 8`) reached a Band `status=ok` response but ended as `RESULT_METADATA_INVALID`. RPK `0.2.4` now passes `bytes` and the eight-character SHA prefix explicitly at both raster and vector success call sites instead of relying on omitted JavaScript arguments in the Vela runtime. The iOS app keeps exact validation and now reports the mismatched field as `RESULT_RENDERER_MISMATCH`, `RESULT_FORMAT_MISMATCH`, `RESULT_BYTES_MISMATCH`, `RESULT_PRIMITIVES_MISMATCH`, or `RESULT_HASH_MISMATCH`; it does not convert a mismatch into success. Deterministic tests and CI cover the call contract, but only this owner run can confirm the Vela hardware behavior.
+Vietmap's current `vlc-20260824` tile encoding did not decode with the transform published in Vietmap GL JS 6.x. H1 therefore discovers the compatible legacy style at `/mt/tm/style.json`, clamps the POC request to zoom 14, downloads one tile, decodes it on the iPhone, and sends at most 40 compact BBMV line primitives to the Band. The multi-megabyte provider tile is never transferred to the Band.
 
-The developer live-smoked Vietmap Static Map with the saved Service key: HTTP 200, `image/png`, 212×360, 21,567 bytes. The saved TileMap key was also used for one bounded diagnosis: style HTTP 200 `application/json` (113,407 bytes), then tile z15/26093/15398 HTTP 200 (340,726 bytes) with no `Content-Type` header. The app now permits a missing tile MIME only for an HTTPS `maps.vietmap.vn` `.pbf` URL without userinfo and still requires bounded MVT decoding to succeed; a present but unsupported MIME remains rejected. Style and tile MIME failures are separated as `STYLE_MIME` and `TILE_MIME`. No URL, body, or key is exported.
+Fresh live checks with the saved keys returned:
 
-The two metadata-failure JSON files received from the prior IPA were truncated at exactly 1,025 bytes. IPA `0.1.3` exports the existing sanitized JSON through a file transfer representation rather than sharing its URL value. A valid exported run must parse as JSON and contain the complete 64-character `payloadSHA256` field.
+- Static Map: HTTP 200, `image/png`, 212×360, 21,567 bytes.
+- Current TileMap style: HTTP 200, `application/json`, 113,407 bytes.
+- Compatible legacy tile used during diagnosis: HTTP 200, 2,339,760 bytes; production Swift decoding produced a non-empty road scene for the fixed POC coordinate.
 
-## Mode matrix
+No key, provider URL, raw tile body, UUID or BLE secret is included in an H1 export.
 
-| Mode | iPhone source | Expected Band renderer | Provider call | Purpose |
-|---|---|---|---:|---|
-| Raster · Vietmap Static Map | Vietmap Static Map PNG | native PNG | 1 | real provider baseline |
-| Raster · Indexed PNG | local four-color rasterization | native PNG | 0 | smaller raster comparison |
-| Vector · Synthetic 8 lines | deterministic scene | native BBMV lines | 0 | first vector proof |
-| Vector · Synthetic 20 lines | deterministic scene | native BBMV lines | 0 | moderate primitive load |
-| Vector · Synthetic 40 lines | deterministic scene | native BBMV lines | 0 | H1 primitive ceiling |
-| Vector · Vietmap TileMap | style/TileJSON + one MVT tile | native BBMV lines | 1 style/tile flow | real vector provider proof |
+## H1 contract
 
-The UI has one button per mode. Run one button at a time and wait for a terminal state before starting another. The TileMap key is required only by the final vector mode; the Service key is required only by the Static Map mode.
+- The iPhone selects exactly one renderer before transfer.
+- The Band must answer `render.prepare` with `render.ready` before asset chunks are sent.
+- Raster uses a 212×360 PNG. Vector uses BBMV v1 with no more than 40 line primitives.
+- Vector never silently falls back to raster.
+- Transfer remains stop-and-wait and preserves the verified Xiaomi BLE/SPP/auth bytes.
+- Success requires an exact semantic result: renderer, format, bytes, primitives and hash prefix.
 
 ## Preconditions
 
-- iPhone 13 Pro Max with the exact iOS 26.x version recorded.
-- Xiaomi Smart Band 10 with the exact current firmware recorded.
-- Mi Fitness fully closed while BlueBandMap owns the session.
-- AuthKey, Vietmap Service key and Vietmap TileMap key saved through Config; record only `SAVED`, `MISSING` or `UNREADABLE`, never values.
-- Test stationary. Do not operate the phone or Band while riding.
-- Fully uninstall the previous `dev.lordierclaw.bluebandmap.band` package first and confirm its icon disappears; this prevents a cached old RPK from being mistaken for `0.2.4`.
-- Install the RPK and IPA whose hashes are recorded above.
+- iPhone 13 Pro Max on the intended iOS 26 build.
+- Xiaomi Smart Band 10 on the latest firmware; Mi Fitness fully closed during the session.
+- AuthKey, Vietmap Service key and Vietmap TileMap key show `SAVED` in Config.
+- Old Band package fully uninstalled, then RPK `0.2.5 (7)` installed.
+- IPA `0.1.4 (5)` installed and signed through the tester's normal process.
+- Test while stationary.
 
-## Test sequence
+## Test sequence and expected output
 
-1. Verify the IPA/RPK hashes and versions against the bundle. If any identity is missing, return `BLOCKED-ENV`.
-2. Open Config, close it, reopen it, and confirm saved-key health persists without displaying values.
-3. Open the RPK. The entry page must immediately show `BLUEBAND MAP`, `PAGE READY` or `IOS LINK OPEN`, `CHECK CONNECTION`, and `RPK 0.2.4`; it must not be black or unresponsive. If it is black, stop and record the artifact hash before retrying.
-4. Open the compact Band picker, select the intended Band, complete device proof and RPK trust, and reach `Đã xác thực`.
-5. Run `Raster · Vietmap Static Map` once. Expect one provider call, a prepare/ready exchange, serialized transfer, a recognizable PNG, and terminal state `displayed` rather than `ASSET_RESULT_INVALID`. Record the displayed eight-character hash prefix and H1 metrics.
-6. Disconnect and reconnect, then run `Raster · Indexed PNG` once. Expect zero additional provider calls, a visible four-color map, and terminal state `displayed`.
-7. For each of Synthetic 8, 20, and 40 lines: disconnect/reconnect, run exactly one mode, then record bytes, primitive count, total time, ACK p95, terminal state, and whether the Band stayed responsive. The expected primitive counts are 8, 20, and 40; the 40-line run is a ceiling test, not an assumption of support.
-8. Disconnect/reconnect and run `Vector · Vietmap TileMap` once. Expect style discovery and one bounded MVT tile, then a vector result with a non-zero road primitive count. If it fails before transfer, record the exact safe code—especially `STYLE_HTTP_###`, `TILE_HTTP_###`, `STYLE_MIME`, or `TILE_MIME`—and do not retry after a rate-limit response.
-9. Use `Export log H1` after each terminal run. Save the file, confirm it is larger than 1,025 bytes when the run contains the full metric set, parse it as JSON, and confirm `payloadSHA256` has 64 characters. Keep only sanitized JSON and redacted screenshots.
+Run one mode at a time. After any terminal failure, disconnect and reconnect before the next attempt.
 
-## Recovery checks
+1. Open the Band app.
+   - Expected: `BLUEBAND MAP`, a ready/link status and `RPK 0.2.5` appear immediately.
+   - Stop if the screen is black, frozen or displays another version.
+2. Connect from the compact device picker and complete authentication/trust.
+   - Expected iPhone state: `Đã xác thực`.
+3. Run `Vector · Synthetic 8 lines` first.
+   - Expected metrics: `94 / 8`.
+   - Expected terminal state: displayed/success, not `RESULT_BYTES_MISMATCH` or `ASSET_RESULT_INVALID`.
+   - Expected Band output: eight visible line primitives and a responsive UI.
+4. Disconnect/reconnect and run `Raster · Indexed PNG`.
+   - Expected: zero provider calls, a visible four-colour raster and displayed/success.
+5. Disconnect/reconnect and run `Raster · Vietmap Static Map`.
+   - Expected: one provider call, approximately 21,567 payload bytes, a recognizable map and displayed/success.
+6. Disconnect/reconnect for each of `Synthetic 20` and `Synthetic 40`.
+   - Expected primitive counts: 20 and 40. Record responsiveness and ACK p95; 40 is the H1 ceiling test.
+7. Disconnect/reconnect and run `Vector · Vietmap TileMap` last.
+   - Expected: legacy style discovery, one zoom-14 tile processed on iPhone, a non-zero primitive count no greater than 40, visible roads and displayed/success.
+   - The provider tile is about 2.3 MB, so preparation can take several seconds. Only the compact BBMV scene is transferred to the Band.
+8. Tap `Export log H1` after every terminal run and save/share the JSON.
+   - Expected: the share sheet appears.
+   - Expected file: valid one-line JSON smaller than 1,024 bytes, with a complete 64-character `payloadSHA256` and no secret values.
 
-Run these only after the positive sequence and only while stationary:
+If a provider mode fails before transfer, return its exact bounded code such as `STYLE_HTTP_###`, `TILE_HTTP_###`, `STYLE_MIME`, `TILE_MIME` or `PROVIDER_DATA`. Do not retry a rate-limited request.
 
-- Disconnect during prepare or transfer. The current run must terminate, partial Band ownership must be cleaned, retry must be blocked until a full reconnect, and no automatic provider request may occur.
-- Deliver a stale result from a different run or scene. It must be ignored and must not change the current state.
-- Deliver a result before the final transport ACK. The iPhone must display only after the exact final ACK is confirmed.
-- Withhold the final result until timeout. The app must report `ASSET_RESULT_TIMEOUT`, preserve the sanitized run record, and make no automatic retry.
-- If vector preparation or rendering fails, the app must report the vector error and must not invoke raster fallback.
+## Evidence to return
 
-## Stop conditions and response
+For each mode, return:
 
-Stop immediately on a crash, hang, unresponsive Band, corrupt/truncated/mismatched payload, provider rate limit, secret/UUID leakage, or unsafe interaction. Return exactly one disposition:
+- terminal status or bounded error code;
+- bytes / primitives;
+- total time and ACK p95;
+- whether the Band remained responsive;
+- exported JSON file;
+- redacted screenshot of the Band result.
 
-- `PASS-HW`: all required positive and recovery checks pass on the recorded artifacts and hardware.
-- `FAIL-HW`: a reproducible hardware failure occurred; include the first step and bounded code.
-- `BLOCKED-ENV`: artifacts, signing, keys, device, firmware, or safe test conditions are unavailable.
-- `NEEDS-MEASURE`: behavior ran but a required count, timing, hash or screenshot evidence is missing.
+Never return AuthKey, Vietmap keys, CoreBluetooth UUIDs, raw BLE captures, nonces, HMACs, derived keys or signing material.
 
-Report only the disposition, artifact identities, exact iOS/firmware versions, key health labels, provider-call counts, bounded error codes, hash prefixes, metrics and redacted screenshot IDs. Do not report AuthKey, Vietmap keys, CoreBluetooth UUIDs, raw captures, nonces, HMACs, derived keys or signing material.
+Use one disposition:
 
-H2 work such as map pan/zoom, multi-tile viewport, routing, navigation instructions and view switching remains intentionally blocked until H1 hardware evidence is returned.
+- `PASS-HW`: all six modes display successfully and exports are valid.
+- `FAIL-HW`: a reproducible crash, hang, render mismatch or provider failure occurred.
+- `BLOCKED-ENV`: artifact, signing, key, device or firmware prerequisites are unavailable.
+- `NEEDS-MEASURE`: behavior ran but required metrics/evidence are missing.
+
+H2 pan/zoom, multi-tile viewport, routing, navigation instructions and view switching remain out of scope until H1 receives owner hardware evidence.
