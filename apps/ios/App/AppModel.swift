@@ -341,7 +341,7 @@ final class AppModel: ObservableObject {
             let code = Self.navigationErrorCode(for: error)
             navigationState = .failed(code)
             errorMessage = "Navigation Failed (\(code)). Mở Debug log để xem từng bước."
-            logNavigation("navigation.failed", "code=\(code)")
+            logNavigation("navigation.failed", "code=\(code) \(Self.navigationErrorDetail(for: error))")
         }
     }
 
@@ -381,11 +381,12 @@ final class AppModel: ObservableObject {
         logNavigation(
             "map.rendered",
             "bytes=\(output.asset.byteCount) limitedMap=\(output.limitedMap) " +
-            "maneuver=\(output.scene.maneuver.rawValue) distanceM=\(output.scene.distanceMeters)"
+            "sideRoads=\(output.scene.sideRoads.count) maneuver=\(output.scene.maneuver.rawValue) " +
+            "distanceM=\(output.scene.distanceMeters)"
         )
         await renderCoordinator.start(asset: output.asset)
         guard case .displayed = renderCoordinator.state,
-              let sceneID = renderCoordinator.lastDisplayedSceneID else { throw RouteCardAssetFactory.Error.payloadTooLarge }
+              let sceneID = renderCoordinator.lastDisplayedSceneID else { throw RouteCardAssetFactory.Error.bandDisplayFailed }
         activeSceneID = sceneID
         activeAnchorIndex = progressIndex
         navigationManeuver = output.scene.maneuver
@@ -593,7 +594,16 @@ final class AppModel: ObservableObject {
         case RouteCardAssetFactory.Error.tileWrongContentType: "MAP_TILE_CONTENT_TYPE"
         case RouteCardAssetFactory.Error.tileEmpty: "MAP_TILE_EMPTY"
         case RouteCardAssetFactory.Error.payloadTooLarge: "MAP_PAYLOAD_TOO_LARGE"
+        case RouteCardAssetFactory.Error.bandDisplayFailed: "BAND_DISPLAY_FAILED"
         default: "NAVIGATION_ERROR"
+        }
+    }
+
+    private static func navigationErrorDetail(for error: Swift.Error) -> String {
+        switch error {
+        case let RouteCardAssetFactory.Error.payloadTooLarge(bytes):
+            "encodedBytes=\(bytes) budgetBytes=\(RenderProtocol.maximumPayloadBytes)"
+        default: ""
         }
     }
 

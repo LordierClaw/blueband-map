@@ -37,6 +37,17 @@ public struct IndexedRaster: Equatable, Sendable {
         return pixels[y * width + x]
     }
 
+    public var twoBitPixels: [UInt8] {
+        let bytesPerRow = (width + 3) / 4
+        var packed = [UInt8](repeating: 0, count: bytesPerRow * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                packed[y * bytesPerRow + x / 4] |= pixels[y * width + x] << (6 - (x % 4) * 2)
+            }
+        }
+        return packed
+    }
+
     public mutating func setPixel(x: Int, y: Int, color: Palette) throws {
         guard x >= 0, x < width, y >= 0, y < height else { throw Error.outOfBounds }
         pixels[y * width + x] = color.rawValue

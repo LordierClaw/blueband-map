@@ -1,11 +1,13 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 import BlueBandCore
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var isConfigPresented = false
     @State private var isBandPickerPresented = false
+    @State private var isDebugExportPresented = false
 
     var body: some View {
         NavigationStack {
@@ -45,6 +47,12 @@ struct ContentView: View {
             .toolbar { Button("Cấu hình") { isConfigPresented = true } }
             .sheet(isPresented: $isConfigPresented) { ConfigView(model: model) }
             .sheet(isPresented: $isBandPickerPresented) { BandPickerView(model: model) }
+            .fileExporter(
+                isPresented: $isDebugExportPresented,
+                document: NavigationDebugDocument(text: model.navigationDebugExport),
+                contentType: .plainText,
+                defaultFilename: "BlueBandMap-navigation-debug.txt"
+            ) { _ in }
         }
     }
 
@@ -89,11 +97,7 @@ struct ContentView: View {
                     .disabled(model.rpkState != .ready)
             }
             if !model.navigationDebugEntries.isEmpty {
-                ShareLink(
-                    item: model.navigationDebugExport,
-                    subject: Text("BlueBandMap navigation debug"),
-                    message: Text("Log đã loại bỏ key, UUID và tọa độ đầy đủ.")
-                ) {
+                Button { isDebugExportPresented = true } label: {
                     Label("Export debug log", systemImage: "square.and.arrow.up")
                 }
                 DisclosureGroup("Debug log (\(model.navigationDebugEntries.count))") {
@@ -146,5 +150,19 @@ struct ContentView: View {
         case .ready: "Đã xác thực"
         case let .failed(message): message
         }
+    }
+}
+
+private struct NavigationDebugDocument: FileDocument {
+    static let readableContentTypes: [UTType] = [.plainText]
+    let text: String
+
+    init(text: String) { self.text = text }
+    init(configuration: ReadConfiguration) throws {
+        text = configuration.file.regularFileContents.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }

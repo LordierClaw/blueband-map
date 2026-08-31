@@ -30,7 +30,8 @@ struct RouteCardAssetFactory: Sendable {
         case tileHTTPStatus(Int)
         case tileWrongContentType
         case tileEmpty
-        case payloadTooLarge
+        case payloadTooLarge(Int)
+        case bandDisplayFailed
     }
 
     let styleClient: VietmapStyleClient
@@ -63,6 +64,7 @@ struct RouteCardAssetFactory: Sendable {
             }
         }
         let maximumSideRoads = min(12, roads.count)
+        var smallestPayload = Int.max
         for count in stride(from: maximumSideRoads, through: 0, by: -1) {
             let tolerances = count == 0 ? [0, 1, 2, 3, 4, 6, 8, 12] : [0]
             for tolerance in tolerances {
@@ -85,14 +87,15 @@ struct RouteCardAssetFactory: Sendable {
                             primitives: 0
                         ),
                         scene: scene,
-                        limitedMap: limitedMap
+                        limitedMap: limitedMap || count < maximumSideRoads
                     )
-                } catch IndexedPNGEncoder.Error.payloadTooLarge {
+                } catch let IndexedPNGEncoder.Error.payloadTooLarge(bytes) {
+                    smallestPayload = min(smallestPayload, bytes)
                     continue
                 }
             }
         }
-        throw Error.payloadTooLarge
+        throw Error.payloadTooLarge(smallestPayload == .max ? 0 : smallestPayload)
     }
 
     private func loadRoads(near point: GeoPoint, tileMapKey: String) async throws -> [RoadPolyline] {

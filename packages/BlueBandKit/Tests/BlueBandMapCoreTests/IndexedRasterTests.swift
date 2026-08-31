@@ -13,4 +13,18 @@ final class IndexedRasterTests: XCTestCase {
         XCTAssertEqual((12...15).map { raster.pixel(x: $0, y: $0) }, Array(repeating: IndexedRaster.Palette.route.rawValue, count: 4))
     }
 
+    func testPacksFourPalettePixelsIntoOneBytePerRow() throws {
+        var raster = try IndexedRaster()
+        try raster.setPixel(x: 0, y: 0, color: .background)
+        try raster.setPixel(x: 1, y: 0, color: .minor)
+        try raster.setPixel(x: 2, y: 0, color: .major)
+        try raster.setPixel(x: 3, y: 0, color: .route)
+
+        let packed = raster.twoBitPixels
+
+        XCTAssertEqual(packed.count, (raster.width + 3) / 4 * raster.height)
+        XCTAssertEqual(packed[0], 0b00011011)
+        XCTAssertEqual(packed[(raster.width + 3) / 4], 0)
+    }
+
 }

@@ -9,7 +9,7 @@ enum IndexedPNGEncoder {
         case imageCreationFailed
         case destinationCreationFailed
         case encodingFailed
-        case payloadTooLarge
+        case payloadTooLarge(Int)
     }
 
     static func encode(_ raster: IndexedRaster) throws -> Data {
@@ -22,7 +22,7 @@ enum IndexedPNGEncoder {
         return try encodeIndexed(
             width: raster.width,
             height: raster.height,
-            pixels: raster.pixels,
+            pixels: raster.twoBitPixels,
             palette: [
                 (5, 14, 22),
                 (55, 72, 84),
@@ -53,9 +53,9 @@ enum IndexedPNGEncoder {
               let image = CGImage(
                 width: width,
                 height: height,
-                bitsPerComponent: 8,
-                bitsPerPixel: 8,
-                bytesPerRow: width,
+                bitsPerComponent: 2,
+                bitsPerPixel: 2,
+                bytesPerRow: (width + 3) / 4,
                 space: colorSpace,
                 bitmapInfo: CGBitmapInfo(rawValue: 0),
                 provider: provider,
@@ -73,7 +73,7 @@ enum IndexedPNGEncoder {
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw Error.encodingFailed }
         let data = output as Data
-        guard data.count <= RenderProtocol.maximumPayloadBytes else { throw Error.payloadTooLarge }
+        guard data.count <= RenderProtocol.maximumPayloadBytes else { throw Error.payloadTooLarge(data.count) }
         return data
     }
 

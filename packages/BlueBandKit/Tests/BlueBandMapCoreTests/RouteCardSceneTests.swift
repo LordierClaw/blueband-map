@@ -64,6 +64,26 @@ final class RouteCardSceneTests: XCTestCase {
         XCTAssertLessThan(scene.upcomingRoute.last!.points.last!.y, scene.marker.y)
     }
 
+    func testManeuverPointMarksTheEndOfTheCurrentInstruction() throws {
+        let route = RoutePlan(
+            points: [
+                GeoPoint(latitude: 10.0000, longitude: 106.0000),
+                GeoPoint(latitude: 10.0010, longitude: 106.0000),
+                GeoPoint(latitude: 10.0020, longitude: 106.0005),
+                GeoPoint(latitude: 10.0030, longitude: 106.0010),
+            ],
+            instructions: [
+                RouteInstruction(distanceMeters: 333, headingDegrees: 0, sign: 2, interval: 0...3, streetName: "Next Road")
+            ],
+            distanceMeters: 400
+        )
+
+        let scene = try RouteCardBuilder.build(route: route, progressIndex: 0, sideRoads: [])
+
+        XCTAssertEqual(scene.maneuverPoint, scene.upcomingRoute[0].points.last)
+        XCTAssertNotEqual(scene.maneuverPoint, scene.marker)
+    }
+
     func testKeepsAtMostTwelveWholeSideRoadPolylines() throws {
         let route = RoutePlan(
             points: [GeoPoint(latitude: 10, longitude: 106), GeoPoint(latitude: 10.004, longitude: 106)],
@@ -80,6 +100,29 @@ final class RouteCardSceneTests: XCTestCase {
         let scene = try RouteCardBuilder.build(route: route, progressIndex: 0, sideRoads: roads)
         XCTAssertEqual(scene.sideRoads.count, 12)
         XCTAssertTrue(scene.sideRoads.allSatisfy { $0.points.count == 2 })
+    }
+
+    func testKeepsAndClipsARoadThatCrossesTheRouteBetweenFarEndpoints() throws {
+        let route = RoutePlan(
+            points: [
+                GeoPoint(latitude: 10, longitude: 106),
+                GeoPoint(latitude: 10.004, longitude: 106),
+            ],
+            instructions: [],
+            distanceMeters: 444
+        )
+        let crossingRoad = RoadPolyline(points: [
+            GeoPoint(latitude: 10.002, longitude: 105.99),
+            GeoPoint(latitude: 10.002, longitude: 106.01),
+        ], isMajor: true)
+
+        let scene = try RouteCardBuilder.build(route: route, progressIndex: 0, sideRoads: [crossingRoad])
+
+        let road = try XCTUnwrap(scene.sideRoads.first)
+        XCTAssertEqual(scene.sideRoads.count, 1)
+        XCTAssertEqual(road.points.first?.x, 0)
+        XCTAssertEqual(road.points.last?.x, 211)
+        XCTAssertEqual(road.points.first?.y, road.points.last?.y)
     }
 
     func testRasterKeepsUpcomingRouteAboveSideRoads() throws {
