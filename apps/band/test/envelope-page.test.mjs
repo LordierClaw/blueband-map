@@ -19,15 +19,14 @@ const VECTOR_DIGEST = createHash("sha256").update(VECTOR_BYTES).digest("hex")
 const VECTOR_ASSET = `h1-${VECTOR_DIGEST.slice(0, 16)}`
 const VECTOR_FORMAT = "application/vnd.blueband.map-vector-v1"
 
-async function loadPage(connection, file, crypto) {
+async function loadPage(connection, file) {
   const ux = await readFile(new URL("../src/pages/index/index.ux", import.meta.url), "utf8")
   const script = ux.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/import interconnect from ["']@system\.interconnect["']/, "")
     .replace(/import file from ["']@system\.file["']/, "")
-    .replace(/import crypto from ["']@system\.crypto["']/, "")
     .replace("export default", "return")
-  const component = new Function("interconnect", "file", "crypto", script)(
-    { instance() { return connection } }, file, crypto
+  const component = new Function("interconnect", "file", script)(
+    { instance() { return connection } }, file
   )
   const page = structuredClone(component.private)
   for (const [name, value] of Object.entries(component)) if (name !== "private") page[name] = value
@@ -83,6 +82,34 @@ test("map transfer requires one bounded run ID and result round-trips it exactly
     status: "ok"
   })
   assertBoundedBandEnvelopes(page, sent)
+})
+
+test("map transfer decodes and hashes binary chunks without system.crypto", async () => {
+  const bytes = Uint8Array.from({ length: 1000 }, (_, index) => (index * 251) & 0xff)
+  const digest = createHash("sha256").update(bytes).digest("hex")
+  const asset = `m1-${digest.slice(0, 16)}`
+  const { page, sent, file } = await readyHarness()
+
+  page.receiveMessage({ data: envelope("native-free-begin", "map.asset.begin", beginBody({
+    asset, bytes: bytes.length, sha256: digest
+  })) })
+  for (let offset = 0; offset < bytes.length; offset += 137) {
+    const chunk = bytes.slice(offset, Math.min(offset + 137, bytes.length))
+    page.receiveMessage({ data: envelope(`native-free-${offset}`, "map.asset.chunk", {
+      asset, offset, data: Buffer.from(chunk).toString("base64"), run: RUN
+    }) })
+  }
+  page.receiveMessage({ data: envelope("native-free-end", "map.asset.end", { asset, run: RUN }) })
+  page.mapComplete(pendingToken(page))
+
+  assert.deepEqual(file.storage.get(`internal://files/${asset}.png`), bytes)
+  assert.deepEqual(sent.findLast(message => message.topic === "map.asset.result").body, {
+    asset,
+    bytes: bytes.length,
+    run: RUN,
+    sha256Prefix: digest.slice(0, 8),
+    status: "ok"
+  })
 })
 
 test("H1 renderer requires matching prepare before asset begin and emits ready", async () => {
@@ -171,8 +198,7 @@ test("H1 prepare while an asset is active rejects as busy", async () => {
 
 test("H1 vector reads BBMV once, publishes native segments, and sends one aggregate result", async () => {
   const file = memoryFile()
-  const crypto = memoryHashCrypto(file)
-  const { page, sent } = await readyHarness(file, crypto)
+  const { page, sent } = await readyHarness(file)
   const prepare = {
     runId: RUN,
     sceneId: "scene-0123456789",
@@ -227,7 +253,7 @@ test("H1 vector read failure is an aggregate error and stale callbacks cannot pu
   const reads = []
   const file = memoryFile()
   file.readArrayBuffer = options => reads.push(options)
-  const { page, sent } = await readyHarness(file, memoryHashCrypto(file))
+  const { page, sent } = await readyHarness(file)
   page.receiveMessage({ data: envelope("vector-prepare", "render.prepare", {
     runId: RUN, sceneId: "scene-0123456789", renderer: "vector", format: VECTOR_FORMAT,
     formatVersion: 1, width: 212, height: 360, bytes: VECTOR_BYTES.length,
@@ -253,7 +279,7 @@ test("H1 vector read failure releases the transfer with a stable aggregate error
   const reads = []
   const file = memoryFile()
   file.readArrayBuffer = options => reads.push(options)
-  const { page, sent } = await readyHarness(file, memoryHashCrypto(file))
+  const { page, sent } = await readyHarness(file)
   page.receiveMessage({ data: envelope("vector-prepare", "render.prepare", {
     runId: RUN, sceneId: "scene-0123456789", renderer: "vector", format: VECTOR_FORMAT,
     formatVersion: 1, width: 212, height: 360, bytes: VECTOR_BYTES.length,
@@ -313,8 +339,7 @@ test("H1 raster uses native image completion but publishes render.result", async
 
 test("H1 renderer replacement retires the previous vector file and leaves one renderer visible", async () => {
   const file = memoryFile()
-  const crypto = memoryHashCrypto(file)
-  const { page, sent } = await readyHarness(file, crypto)
+  const { page, sent } = await readyHarness(file)
   page.receiveMessage({ data: envelope("vector-prepare", "render.prepare", {
     runId: RUN, sceneId: "scene-0123456789", renderer: "vector", format: VECTOR_FORMAT,
     formatVersion: 1, width: 212, height: 360, bytes: VECTOR_BYTES.length,
@@ -371,27 +396,6 @@ test("rejects missing invalid or changed map run correlation", async () => {
   assert.equal(result.body.run, RUN_B)
 })
 
-function fakeCrypto(digest = DIGEST) {
-  const hashCalls = []
-  return {
-    hashCalls,
-    atob(value) { return Buffer.from(value, "base64").toString("binary") },
-    hashDigest(options) { hashCalls.push(options); return digest }
-  }
-}
-
-function memoryHashCrypto(file) {
-  const hashCalls = []
-  return {
-    hashCalls,
-    atob(value) { return Buffer.from(value, "base64").toString("binary") },
-    hashDigest(options) {
-      hashCalls.push(options)
-      return createHash("sha256").update(Buffer.from(file.storage.get(options.uri))).digest("hex")
-    }
-  }
-}
-
 function pendingToken(page) {
   assert.equal(typeof page.pendingPublication?.token, "string")
   return page.pendingPublication.token
@@ -439,15 +443,15 @@ function memoryFile(initial = new Map()) {
   }
 }
 
-async function readyHarness(file = memoryFile(), crypto = fakeCrypto()) {
+async function readyHarness(file = memoryFile()) {
   const sent = []
-  const page = await loadPage({ send(options) { sent.push(options.data) } }, file, crypto)
+  const page = await loadPage({ send(options) { sent.push(options.data) } }, file)
   page.unlock()
-  return { page, sent, file, crypto }
+  return { page, sent, file }
 }
 
-async function pendingPublicationHarness(file = memoryFile(), crypto = fakeCrypto()) {
-  const harness = await readyHarness(file, crypto)
+async function pendingPublicationHarness(file = memoryFile()) {
+  const harness = await readyHarness(file)
   harness.page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({ bytes: 4 })) })
   harness.page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
   harness.page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
@@ -498,8 +502,7 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
   const access = []
   const deletes = []
   const writes = []
-  const stored = new Uint8Array(8)
-  const crypto = fakeCrypto()
+  const stored = new Uint8Array(4)
   const file = {
     access(options) { access.push(options) },
     delete(options) { deletes.push(options) },
@@ -513,38 +516,37 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
       })
     }
   }
-  const page = await loadPage({ send(options) { sent.push(options.data) } }, file, crypto)
+  const page = await loadPage({ send(options) { sent.push(options.data) } }, file)
   page.unlock()
 
-  page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody()) })
+  page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({ bytes: 4 })) })
   assert.equal(sent.length, 0, "begin must wait for access/delete preparation")
   access[0].success()
   assert.equal(sent.length, 0)
   deletes[0].success()
   assert.deepEqual(sent.at(-1), { v: 1, id: "begin-1", src: "band", type: "ack" })
-  page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody()) })
+  page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({ bytes: 4 })) })
   assert.equal(access.length, 1)
   assert.equal(deletes.length, 1)
   assert.equal(sent.filter(message => message.id === "begin-1").length, 2)
 
-  page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
+  page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAE=" }) })
   assert.equal(sent.length, 2, "chunk must wait for write success")
   assert.equal(writes[0].uri, URI)
   assert.equal(writes[0].position, 0)
   assert.ok(writes[0].buffer instanceof Uint8Array)
-  assert.deepEqual([...writes[0].buffer], [0, 1, 2, 3])
+  assert.deepEqual([...writes[0].buffer], [0, 1])
   writes[0].success()
   assert.deepEqual(sent.at(-1), { v: 1, id: "chunk-1", src: "band", type: "ack" })
 
-  page.receiveMessage({ data: envelope("chunk-2", "map.asset.chunk", { asset: ASSET, offset: 4, data: "+vv8/Q==" }) })
-  assert.equal(writes[1].position, 4)
-  assert.deepEqual([...writes[1].buffer], [250, 251, 252, 253])
+  page.receiveMessage({ data: envelope("chunk-2", "map.asset.chunk", { asset: ASSET, offset: 2, data: "AgM=" }) })
+  assert.equal(writes[1].position, 2)
+  assert.deepEqual([...writes[1].buffer], [2, 3])
   assert.equal(sent.length, 3)
   writes[1].success()
 
   page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
-  assert.deepEqual([...stored], [0, 1, 2, 3, 250, 251, 252, 253])
-  assert.deepEqual(crypto.hashCalls, [{ uri: URI, algo: "SHA256" }])
+  assert.deepEqual([...stored], [0, 1, 2, 3])
   assert.equal(page.mapReady, true)
   assert.equal(page.mapPath, URI)
   assert.equal(page.mapHashPrefix, "054edec1")
@@ -556,7 +558,7 @@ test("receives two ordered chunks, verifies SHA-256 synchronously and publishes 
     asset: ASSET,
     run: RUN,
     status: "ok",
-    bytes: 8,
+    bytes: 4,
     sha256Prefix: "054edec1"
   })
   assert.equal(sent.at(-1).topic, "map.asset.result")
@@ -571,7 +573,7 @@ test("deduplicates successful and in-flight asset messages without repeating sid
   const writes = []
   const file = memoryFile()
   file.writeArrayBuffer = options => writes.push(options)
-  const { page, sent, crypto } = await readyHarness(file)
+  const { page, sent } = await readyHarness(file)
   page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({ bytes: 4 })) })
   const chunk = envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" })
   page.receiveMessage({ data: chunk })
@@ -587,7 +589,6 @@ test("deduplicates successful and in-flight asset messages without repeating sid
   page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
   const resultCount = sent.filter(message => message.topic === "map.asset.result").length
   page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
-  assert.equal(crypto.hashCalls.length, 1)
   assert.equal(sent.filter(message => message.topic === "map.asset.result").length, resultCount)
   assert.equal(sent.filter(message => message.id === "end-1").length, 2)
   assert.equal(page.activeMapOperationID, "end-1")
@@ -597,7 +598,7 @@ test("deduplicates successful and in-flight asset messages without repeating sid
 })
 
 test("holds asset A ownership through rendering and blocks the full asset B sequence", async () => {
-  const { page, sent, file, crypto } = await pendingPublicationHarness()
+  const { page, sent, file } = await pendingPublicationHarness()
   const pathA = page.mapPath
   const pendingA = structuredClone(page.pendingPublication)
   assert.equal(page.activeMapOperationID, "end-1")
@@ -622,13 +623,11 @@ test("holds asset A ownership through rendering and blocks the full asset B sequ
   }
   assert.equal(file.accesses.length, 1)
   assert.equal(file.writes.length, 1)
-  assert.equal(crypto.hashCalls.length, 1)
   assert.equal(page.mapPath, pathA)
   assert.deepEqual(page.pendingPublication, pendingA)
 
   page.receiveMessage({ data: envelope("end-1", "map.asset.end", { asset: ASSET }) })
   assert.equal(sent.filter(message => message.type === "ack" && message.id === "end-1").length, 2)
-  assert.equal(crypto.hashCalls.length, 1)
   page.mapComplete(pendingA.token)
   const okResults = sent.filter(message => message.topic === "map.asset.result" && message.body.status === "ok")
   assert.equal(okResults.length, 1)
@@ -804,17 +803,16 @@ test("rejects chunk offset, Base64 and overflow with stable results and ACK", as
   }
 })
 
-test("rejects wrong final length, digest mismatch and thrown hash with stable results", async () => {
+test("rejects wrong final length and digest mismatch with stable results", async () => {
   for (const scenario of [
-    { name: "length", bytes: 8, digest: DIGEST, code: "ASSET_LENGTH_MISMATCH" },
-    { name: "digest", bytes: 4, digest: "f".repeat(64), code: "ASSET_DIGEST_MISMATCH" },
-    { name: "hash", bytes: 4, digest: null, code: "ASSET_HASH_FAILED" }
+    { name: "length", bytes: 8, sha256: DIGEST, code: "ASSET_LENGTH_MISMATCH" },
+    { name: "digest", bytes: 4, sha256: "f".repeat(64), code: "ASSET_DIGEST_MISMATCH" }
   ]) {
     const file = memoryFile()
-    const crypto = fakeCrypto(scenario.digest || DIGEST)
-    if (scenario.digest === null) crypto.hashDigest = options => { crypto.hashCalls.push(options); throw new Error("hash") }
-    const { page, sent } = await readyHarness(file, crypto)
-    page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({ bytes: scenario.bytes })) })
+    const { page, sent } = await readyHarness(file)
+    page.receiveMessage({ data: envelope("begin-1", "map.asset.begin", beginBody({
+      bytes: scenario.bytes, sha256: scenario.sha256
+    })) })
     page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
     page.receiveMessage({ data: envelope(`end-${scenario.name}`, "map.asset.end", { asset: ASSET }) })
     assert.equal(page.mapReady, false)
@@ -1181,21 +1179,6 @@ test("handled failures ACK once, deduplicate result side effects, and bound adve
   assertBoundedBandEnvelopes(page, sent)
 })
 
-test("hashes realistic memory-file bytes synchronously before render publication", async () => {
-  const file = memoryFile()
-  const crypto = memoryHashCrypto(file)
-  const bytes = new Uint8Array([0, 1, 2, 3])
-  const digest = createHash("sha256").update(bytes).digest("hex")
-  const { page, sent } = await readyHarness(file, crypto)
-  page.receiveMessage({ data: envelope("real-begin", "map.asset.begin", beginBody({ bytes: 4, sha256: digest })) })
-  page.receiveMessage({ data: envelope("real-chunk", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
-  page.receiveMessage({ data: envelope("real-end", "map.asset.end", { asset: ASSET }) })
-  assert.deepEqual(crypto.hashCalls, [{ uri: URI, algo: "SHA256" }])
-  assert.equal(sent.some(message => message.topic === "map.asset.result"), false)
-  page.mapComplete(pendingToken(page))
-  assert.equal(sent.at(-1).body.sha256Prefix, digest.slice(0, 8))
-})
-
 test("same-asset replacement keeps deletion ownership across lifecycle reset", async () => {
   const file = memoryFile()
   const harness = await pendingPublicationHarness(file)
@@ -1245,9 +1228,10 @@ test("delayed best-effort cleanup blocks same URI retry until callback completio
     const file = memoryFile()
     const heldDeletes = []
     file.delete = options => { heldDeletes.push(options) }
-    const crypto = fakeCrypto("f".repeat(64))
-    const { page, sent } = await readyHarness(file, crypto)
-    page.receiveMessage({ data: envelope(`${completion}-begin`, "map.asset.begin", beginBody({ bytes: 4 })) })
+    const { page, sent } = await readyHarness(file)
+    page.receiveMessage({ data: envelope(`${completion}-begin`, "map.asset.begin", beginBody({
+      bytes: 4, sha256: "f".repeat(64)
+    })) })
     page.receiveMessage({ data: envelope(`${completion}-chunk`, "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
     page.receiveMessage({ data: envelope(`${completion}-end`, "map.asset.end", { asset: ASSET }) })
     assert.equal(heldDeletes.length, 1)
@@ -1268,8 +1252,7 @@ test("delayed best-effort cleanup blocks same URI retry until callback completio
 test("delete registry clears on synchronous throw and never schedules duplicate URI cleanup", async () => {
   const file = memoryFile()
   file.delete = () => { throw new Error("delete") }
-  const crypto = fakeCrypto("f".repeat(64))
-  const { page } = await readyHarness(file, crypto)
+  const { page } = await readyHarness(file)
   page.receiveMessage({ data: envelope("throw-begin", "map.asset.begin", beginBody({ bytes: 4 })) })
   page.receiveMessage({ data: envelope("throw-chunk", "map.asset.chunk", { asset: ASSET, offset: 0, data: "AAECAw==" }) })
   page.receiveMessage({ data: envelope("throw-end", "map.asset.end", { asset: ASSET }) })
@@ -1286,7 +1269,7 @@ test("repeated readiness while connected preserves dedup side effects until a re
     send(options) { sent.push(options.data) },
     getReadyState({ success }) { success({ status: 1 }) }
   }
-  const page = await loadPage(connection, file, fakeCrypto())
+  const page = await loadPage(connection, file)
   page.unlock()
   const echo = envelope("stable-echo", "system.echo", { text: "PING" })
   const begin = envelope("stable-begin", "map.asset.begin", beginBody({ bytes: 4 }))
@@ -1325,7 +1308,7 @@ test("delayed readiness callbacks after lock or destroy are lifecycle-inert", as
         send(options) { sent.push(options.data) },
         getReadyState(options) { readyCallbacks.push(options) }
       }
-      const page = await loadPage(connection, memoryFile(), fakeCrypto())
+      const page = await loadPage(connection, memoryFile())
       page.unlock()
       page.checkConnection()
       assert.equal(readyCallbacks.length, 1)
@@ -1349,7 +1332,7 @@ test("queued asset and echo messages after lock or destroy have no side effects"
     const sent = []
     const file = memoryFile()
     const connection = { send(options) { sent.push(options.data) } }
-    const page = await loadPage(connection, file, fakeCrypto())
+    const page = await loadPage(connection, file)
     page.unlock()
     if (lifecycle === "lock") page.lock("IOS LINK CLOSED")
     else page.onDestroy()
@@ -1385,7 +1368,7 @@ test("stale interconnect handlers are inert and a new live page can unlock", asy
     send(options) { oldSent.push(options.data) },
     getReadyState({ success }) { success({ status: 1 }) }
   }
-  const oldPage = await loadPage(oldConnection, memoryFile(), fakeCrypto())
+  const oldPage = await loadPage(oldConnection, memoryFile())
   const staleHandlers = {
     open: oldConnection.onopen,
     close: oldConnection.onclose,
@@ -1408,7 +1391,7 @@ test("stale interconnect handlers are inert and a new live page can unlock", asy
     send(options) { sent.push(options.data) },
     getReadyState({ success }) { success({ status: 1 }) }
   }
-  const page = await loadPage(connection, memoryFile(), fakeCrypto())
+  const page = await loadPage(connection, memoryFile())
   page.receiveMessage({ data: envelope("before-unlock", "system.echo", { text: "EARLY" }) })
   assert.equal(sent.length, 0)
   assert.equal(page.acceptingMessages, false)
@@ -1421,7 +1404,7 @@ test("stale interconnect handlers are inert and a new live page can unlock", asy
 
 test("pre-lock interconnect handlers cannot mutate a reopened lifecycle", async () => {
   const connection = { send() {} }
-  const page = await loadPage(connection, memoryFile(), fakeCrypto())
+  const page = await loadPage(connection, memoryFile())
   const stale = {
     open: connection.onopen,
     close: connection.onclose,
@@ -1453,7 +1436,7 @@ test("pre-lock interconnect handlers cannot mutate a reopened lifecycle", async 
 test("send failure callbacks lock only the lifecycle that issued them", async () => {
   const sends = []
   const connection = { send(options) { sends.push(options) } }
-  const page = await loadPage(connection, memoryFile(), fakeCrypto())
+  const page = await loadPage(connection, memoryFile())
   page.unlock()
   page.receiveMessage({ data: envelope("old-send", "system.echo", { text: "OLD" }) })
   assert.equal(sends.length, 1)
@@ -1482,7 +1465,7 @@ test("current close and error invalidate pending pre-admission readiness", async
       send(options) { sent.push(options.data) },
       getReadyState(options) { readyCallbacks.push(options) }
     }
-    const page = await loadPage(connection, file, fakeCrypto())
+    const page = await loadPage(connection, file)
     assert.equal(page.connected, false)
     assert.equal(page.acceptingMessages, false)
     page.checkConnection()

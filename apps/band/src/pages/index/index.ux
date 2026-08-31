@@ -6,7 +6,7 @@
       <text class="status">{{ statusText }}</text>
       <text class="detail">{{ detailText }}</text>
       <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.2.5</text>
+      <text class="version">RPK 0.2.6</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,7 +24,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.2.5 • ENV V1</text>
+        <text class="version">RPK 0.2.6 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -33,7 +33,142 @@
 <script>
 import interconnect from "@system.interconnect"
 import file from "@system.file"
-import crypto from "@system.crypto"
+
+var base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+function decodeBase64Bytes(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return null
+  var padding = value.slice(-2) === "==" ? 2 : value.slice(-1) === "=" ? 1 : 0
+  var output = new Uint8Array(value.length * 3 / 4 - padding)
+  var accumulator = 0
+  var bits = 0
+  var outputIndex = 0
+  for (var index = 0; index < value.length && value.charAt(index) !== "="; index = index + 1) {
+    var sixBits = base64Alphabet.indexOf(value.charAt(index))
+    if (sixBits < 0) return null
+    accumulator = (accumulator << 6) | sixBits
+    bits = bits + 6
+    if (bits >= 8) {
+      bits = bits - 8
+      output[outputIndex] = (accumulator >>> bits) & 255
+      outputIndex = outputIndex + 1
+      accumulator = bits === 0 ? 0 : accumulator & ((1 << bits) - 1)
+    }
+  }
+  return outputIndex === output.length ? output : null
+}
+
+var sha256Constants = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]
+
+function sha256Rotate(value, count) {
+  return (value >>> count) | (value << (32 - count))
+}
+
+function sha256Block(context, block) {
+  var words = context.words
+  var index
+  for (index = 0; index < 16; index = index + 1) {
+    var offset = index * 4
+    words[index] = (block[offset] << 24) | (block[offset + 1] << 16) |
+      (block[offset + 2] << 8) | block[offset + 3]
+  }
+  for (index = 16; index < 64; index = index + 1) {
+    var previous = words[index - 15]
+    var prior = words[index - 2]
+    var sigma0 = sha256Rotate(previous, 7) ^ sha256Rotate(previous, 18) ^ (previous >>> 3)
+    var sigma1 = sha256Rotate(prior, 17) ^ sha256Rotate(prior, 19) ^ (prior >>> 10)
+    words[index] = (words[index - 16] + sigma0 + words[index - 7] + sigma1) | 0
+  }
+  var a = context.state[0]
+  var b = context.state[1]
+  var c = context.state[2]
+  var d = context.state[3]
+  var e = context.state[4]
+  var f = context.state[5]
+  var g = context.state[6]
+  var h = context.state[7]
+  for (index = 0; index < 64; index = index + 1) {
+    var sum1 = sha256Rotate(e, 6) ^ sha256Rotate(e, 11) ^ sha256Rotate(e, 25)
+    var choice = (e & f) ^ (~e & g)
+    var temporary1 = (h + sum1 + choice + sha256Constants[index] + words[index]) | 0
+    var sum0 = sha256Rotate(a, 2) ^ sha256Rotate(a, 13) ^ sha256Rotate(a, 22)
+    var majority = (a & b) ^ (a & c) ^ (b & c)
+    var temporary2 = (sum0 + majority) | 0
+    h = g
+    g = f
+    f = e
+    e = (d + temporary1) | 0
+    d = c
+    c = b
+    b = a
+    a = (temporary1 + temporary2) | 0
+  }
+  context.state[0] = (context.state[0] + a) | 0
+  context.state[1] = (context.state[1] + b) | 0
+  context.state[2] = (context.state[2] + c) | 0
+  context.state[3] = (context.state[3] + d) | 0
+  context.state[4] = (context.state[4] + e) | 0
+  context.state[5] = (context.state[5] + f) | 0
+  context.state[6] = (context.state[6] + g) | 0
+  context.state[7] = (context.state[7] + h) | 0
+}
+
+function sha256Create() {
+  return {
+    state: new Int32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]),
+    block: new Uint8Array(64),
+    words: new Int32Array(64),
+    blockLength: 0,
+    byteLength: 0
+  }
+}
+
+function sha256Update(context, bytes) {
+  context.byteLength = context.byteLength + bytes.length
+  for (var index = 0; index < bytes.length; index = index + 1) {
+    context.block[context.blockLength] = bytes[index]
+    context.blockLength = context.blockLength + 1
+    if (context.blockLength === 64) {
+      sha256Block(context, context.block)
+      context.blockLength = 0
+    }
+  }
+}
+
+function sha256Finish(context) {
+  var bitLengthLow = (context.byteLength * 8) >>> 0
+  var bitLengthHigh = Math.floor(context.byteLength / 0x20000000) >>> 0
+  context.block[context.blockLength] = 0x80
+  context.blockLength = context.blockLength + 1
+  if (context.blockLength > 56) {
+    while (context.blockLength < 64) context.block[context.blockLength++] = 0
+    sha256Block(context, context.block)
+    context.blockLength = 0
+  }
+  while (context.blockLength < 56) context.block[context.blockLength++] = 0
+  for (var index = 0; index < 4; index = index + 1) {
+    context.block[56 + index] = (bitLengthHigh >>> (24 - index * 8)) & 255
+    context.block[60 + index] = (bitLengthLow >>> (24 - index * 8)) & 255
+  }
+  sha256Block(context, context.block)
+  var digest = ""
+  for (index = 0; index < 8; index = index + 1) {
+    var word = (context.state[index] >>> 0).toString(16)
+    digest = digest + "00000000".slice(word.length) + word
+  }
+  return digest
+}
 
 // Keep the Band entry self-contained. The Vela page loader is the most fragile
 // part of this POC; importing pure helpers here creates a webpack module graph
@@ -686,6 +821,7 @@ export default {
       preparedAt: h1 && this.preparedRender ? this.preparedRender.preparedAt : 0,
       startedAt: Date.now(),
       uri: "internal://files/" + body.asset + (h1 && body.renderer === "vector" ? ".bbmv" : ".png"),
+      digest: sha256Create(),
       receivedBytes: 0,
       validatedAt: 0,
       renderStartedAt: 0
@@ -755,18 +891,7 @@ export default {
   },
 
   decodeBase64(value) {
-    if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return null
-    var binary
-    try { binary = crypto.atob(value) } catch (error) { return null }
-    if (typeof binary !== "string" || binary.length === 0) return null
-    var buffer = new Uint8Array(binary.length)
-    for (var index = 0; index < binary.length; index = index + 1) {
-      var code = binary.charCodeAt(index)
-      if (code < 0 || code > 255) return null
-      buffer[index] = code
-    }
-    return buffer
+    return decodeBase64Bytes(value)
   },
 
   writeAssetChunk(message) {
@@ -808,6 +933,7 @@ export default {
         position: body.offset,
         success: function () {
           if (!page.ownsMapOperation(message.id, epoch)) return
+          sha256Update(transfer.digest, buffer)
           transfer.receivedBytes = transfer.receivedBytes + buffer.length
           page.succeedAsset(message.id)
         },
@@ -841,7 +967,7 @@ export default {
     }
     var digest
     try {
-      digest = crypto.hashDigest({ uri: transfer.uri, algo: "SHA256" })
+      digest = sha256Finish(transfer.digest)
     } catch (error) {
       this.failAsset(message, "ASSET_HASH_FAILED")
       return

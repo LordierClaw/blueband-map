@@ -10,14 +10,13 @@ test("manifest pins BlueBandMap identity and a single Band 10 page", async () =>
   const manifest = JSON.parse(await readFile(new URL("src/manifest.json", root), "utf8"))
   assert.equal(manifest.package, "dev.lordierclaw.bluebandmap.band")
   assert.equal(manifest.name, "BlueBandMap")
-  assert.equal(manifest.versionName, "0.2.5")
-  assert.equal(manifest.versionCode, 7)
+  assert.equal(manifest.versionName, "0.2.6")
+  assert.equal(manifest.versionCode, 8)
   assert.equal(manifest.config.designWidth, 212)
   assert.deepEqual(Object.keys(manifest.router.pages), ["pages/index"])
   assert.deepEqual(manifest.features, [
     { name: "system.interconnect" },
-    { name: "system.file" },
-    { name: "system.crypto" }
+    { name: "system.file" }
   ])
 })
 
@@ -36,10 +35,8 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /MAP_HEIGHT:\s*360/)
   assert.match(page, /import interconnect from ["']@system\.interconnect["']/)
   assert.match(page, /import file from ["']@system\.file["']/)
-  assert.match(page, /import crypto from ["']@system\.crypto["']/)
-  assert.match(page, /hashDigest\s*\(\s*\{\s*uri:\s*transfer\.uri,\s*algo:\s*["']SHA256["']\s*\}\s*\)/)
-  assert.doesNotMatch(page, /hashDigest\s*\(\s*\{[^}]*success:/s)
-  assert.match(page, /RPK 0\.2\.5/)
+  assert.doesNotMatch(page, /@system\.crypto|crypto\.atob|crypto\.hashDigest/)
+  assert.match(page, /RPK 0\.2\.6/)
   assert.match(page, /<input[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ mapPath \}\}"[^>]+@complete="mapComplete\(mapToken\)"[^>]+@error="mapError\(mapToken\)"[^>]+\/>/)
   assert.doesNotMatch(page, /<image[^>]+for="\{\{ renderItems \}\}"/)
@@ -55,7 +52,7 @@ test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 },
   const diagnostics = result.stdout + result.stderr
   assert.equal(result.status, 0, diagnostics)
   assert.doesNotMatch(diagnostics, /unsupport(?:ed)? attribute|unsupported (?:attribute|property)/i)
-  assert.match(result.stdout, /verified .*\.0\.2\.5\.rpk/)
+  assert.match(result.stdout, /verified .*\.0\.2\.6\.rpk/)
 
   const compiledEntry = await readFile(new URL("build/pages/index/index.js", root), "utf8")
   assert.doesNotMatch(compiledEntry, /\.\/src\/common\/(?:render-protocol|vector-scene)\.js/, "page load must not start a custom module graph")
