@@ -16,7 +16,12 @@ final class RenderProtocolTests: XCTestCase {
             data: Data(repeating: 0xA5, count: 128),
             primitives: 0
         )
-        let prepare = try RenderPrepareBody(runID: runID, sceneID: sceneID, asset: asset)
+        let preview = try RenderNavigationPreview(
+            maneuver: .right,
+            distanceMeters: 88,
+            street: String(repeating: "Đ", count: 40)
+        )
+        let prepare = try RenderPrepareBody(runID: runID, sceneID: sceneID, asset: asset, preview: preview)
 
         XCTAssertEqual(prepare.runID, runID)
         XCTAssertEqual(prepare.sceneID, sceneID)
@@ -27,12 +32,19 @@ final class RenderProtocolTests: XCTestCase {
         XCTAssertEqual(prepare.height, 520)
         XCTAssertEqual(prepare.bytes, 128)
         XCTAssertEqual(prepare.primitives, 0)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(prepare.preview).street.utf8.count, 48)
         XCTAssertEqual(prepare.sha256.count, 64)
         XCTAssertTrue(prepare.sha256.allSatisfy { $0.isHexDigit && !$0.isUppercase })
         XCTAssertEqual(Set(prepare.jsonBody().keys), [
             "runId", "sceneId", "renderer", "format", "formatVersion",
-            "width", "height", "bytes", "sha256", "primitives",
+            "width", "height", "bytes", "sha256", "primitives", "preview",
         ])
+        XCTAssertEqual(prepare.jsonBody()["preview"], .object(preview.jsonBody()))
+        let envelope = ApplicationEnvelope.message(
+            id: "prepare-0123456789", source: .ios,
+            topic: RenderProtocol.prepareTopic, body: prepare.jsonBody()
+        )
+        XCTAssertLessThanOrEqual(try envelope.encoded().count, ApplicationEnvelope.maximumEncodedSize)
 
         let ready = RenderReadyBody(runID: runID, sceneID: sceneID, prepare: prepare)
         XCTAssertEqual(ready.jsonBody()["runId"], .string(runID))
@@ -67,6 +79,12 @@ final class RenderProtocolTests: XCTestCase {
             "validateMs": .number(2),
             "renderMs": .number(4),
         ])
+    }
+
+    func testNavigationPreviewRejectsNegativeDistance() {
+        XCTAssertThrowsError(try RenderNavigationPreview(
+            maneuver: .straight, distanceMeters: -1, street: "Road"
+        ))
     }
 
     func testRejectCodesAndProtocolTopicsAreStable() {

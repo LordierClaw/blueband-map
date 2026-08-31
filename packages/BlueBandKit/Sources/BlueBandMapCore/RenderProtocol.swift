@@ -93,6 +93,31 @@ public enum RenderProtocol {
     }
 }
 
+public struct RenderNavigationPreview: Equatable, Codable, Sendable {
+    public enum Error: Swift.Error, Equatable, Sendable { case invalidDistance }
+
+    public let maneuver: NavigationManeuver
+    public let distanceMeters: Int
+    public let street: String
+
+    public init(maneuver: NavigationManeuver, distanceMeters: Int, street: String) throws {
+        guard distanceMeters >= 0 else { throw Error.invalidDistance }
+        var boundedStreet = street
+        while boundedStreet.utf8.count > 48 { boundedStreet.removeLast() }
+        self.maneuver = maneuver
+        self.distanceMeters = distanceMeters
+        self.street = boundedStreet
+    }
+
+    public func jsonBody() -> [String: JSONValue] {
+        [
+            "maneuver": .string(maneuver.rawValue),
+            "distanceM": .number(Double(distanceMeters)),
+            "street": .string(street),
+        ]
+    }
+}
+
 public struct RenderPrepareBody: Equatable, Codable, Sendable {
     public let runID: String
     public let sceneID: String
@@ -104,8 +129,14 @@ public struct RenderPrepareBody: Equatable, Codable, Sendable {
     public let bytes: Int
     public let sha256: String
     public let primitives: Int
+    public let preview: RenderNavigationPreview?
 
-    public init(runID: String, sceneID: String, asset: RenderAsset) throws {
+    public init(
+        runID: String,
+        sceneID: String,
+        asset: RenderAsset,
+        preview: RenderNavigationPreview? = nil
+    ) throws {
         try RenderProtocol.validate(
             runID: runID,
             sceneID: sceneID,
@@ -128,10 +159,11 @@ public struct RenderPrepareBody: Equatable, Codable, Sendable {
         self.bytes = asset.byteCount
         self.sha256 = asset.sha256
         self.primitives = asset.primitives
+        self.preview = preview
     }
 
     public func jsonBody() -> [String: JSONValue] {
-        [
+        var body: [String: JSONValue] = [
             "runId": .string(runID),
             "sceneId": .string(sceneID),
             "renderer": .string(renderer.rawValue),
@@ -143,6 +175,8 @@ public struct RenderPrepareBody: Equatable, Codable, Sendable {
             "sha256": .string(sha256),
             "primitives": .number(Double(primitives)),
         ]
+        if let preview { body["preview"] = .object(preview.jsonBody()) }
+        return body
     }
 }
 

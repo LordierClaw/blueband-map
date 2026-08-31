@@ -6,13 +6,14 @@ final class NavigationUpdateTests: XCTestCase {
     func testBodyIsBoundedAndUsesStableFields() throws {
         let update = try NavigationUpdate(
             scene: "scene-0123456789", seq: 7, x: 106, y: 320,
-            maneuver: .right, distanceMeters: 180,
+            maneuver: .right, headingBucket: 7, distanceMeters: 180,
             street: String(repeating: "Đ", count: 40), status: .navigating
         )
         XCTAssertLessThanOrEqual(update.street.utf8.count, 48)
         XCTAssertEqual(Set(update.jsonBody().keys), [
-            "scene", "seq", "x", "y", "maneuver", "distanceM", "street", "status",
+            "scene", "seq", "x", "y", "heading", "maneuver", "distanceM", "street", "status",
         ])
+        XCTAssertEqual(update.jsonBody()["heading"], .number(7))
         let envelope = ApplicationEnvelope.message(
             id: "nav-0123456789", source: .ios, topic: NavigationUpdate.topic, body: update.jsonBody()
         )
@@ -22,19 +23,23 @@ final class NavigationUpdateTests: XCTestCase {
     func testRejectsInvalidSceneSequenceAndMarker() {
         XCTAssertNoThrow(try NavigationUpdate(
             scene: "scene", seq: 0, x: 211, y: 519, maneuver: .straight,
-            distanceMeters: 0, street: "", status: .navigating
+            headingBucket: 7, distanceMeters: 0, street: "", status: .navigating
         ))
         XCTAssertThrowsError(try NavigationUpdate(
             scene: "", seq: 0, x: 106, y: 320, maneuver: .straight,
-            distanceMeters: 0, street: "", status: .navigating
+            headingBucket: 0, distanceMeters: 0, street: "", status: .navigating
         ))
         XCTAssertThrowsError(try NavigationUpdate(
             scene: "scene", seq: -1, x: 212, y: 320, maneuver: .straight,
-            distanceMeters: 0, street: "", status: .navigating
+            headingBucket: 0, distanceMeters: 0, street: "", status: .navigating
         ))
         XCTAssertThrowsError(try NavigationUpdate(
             scene: "scene", seq: 0, x: 106, y: 520, maneuver: .straight,
-            distanceMeters: 0, street: "", status: .navigating
+            headingBucket: 0, distanceMeters: 0, street: "", status: .navigating
+        ))
+        XCTAssertThrowsError(try NavigationUpdate(
+            scene: "scene", seq: 0, x: 106, y: 320, maneuver: .straight,
+            headingBucket: 8, distanceMeters: 0, street: "", status: .navigating
         ))
     }
 
@@ -54,7 +59,7 @@ final class NavigationUpdateTests: XCTestCase {
     private func update(seq: Int) throws -> NavigationUpdate {
         try NavigationUpdate(
             scene: "scene", seq: seq, x: 106, y: 320, maneuver: .straight,
-            distanceMeters: 100, street: "Road", status: .navigating
+            headingBucket: 0, distanceMeters: 100, street: "Road", status: .navigating
         )
     }
 }

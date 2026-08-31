@@ -2,18 +2,22 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class SnapshotMapPolicyTests: XCTestCase {
-    func testPayloadAdmissionUsesTheFirstProfileWithinEightKiB() {
-        XCTAssertEqual(SnapshotPaletteProfile.allCases, [
-            .colors32Labels,
+    func testPayloadAdmissionPrefersFourKiBThenFallsBackToTheSmallestValidCandidate() {
+        XCTAssertEqual(SnapshotPaletteProfile.transferOptimizedOrder, [
             .colors16Labels,
             .colors16NoLowPriorityLabels,
             .colors16NoLowPriorityLandUse,
         ])
+        XCTAssertEqual(SnapshotPayloadAdmission.preferredMaximumBytes, 4_096)
         XCTAssertEqual(SnapshotPayloadAdmission.choose([
-            (.colors32Labels, 8_193),
-            (.colors16Labels, 7_900),
-            (.colors16NoLowPriorityLabels, 6_000),
-        ]), .colors16Labels)
+            (.colors16Labels, 5_000),
+            (.colors16NoLowPriorityLabels, 3_900),
+        ]), .colors16NoLowPriorityLabels)
+        XCTAssertEqual(SnapshotPayloadAdmission.choose([
+            (.colors16Labels, 6_000),
+            (.colors16NoLowPriorityLabels, 5_000),
+            (.colors16NoLowPriorityLandUse, 5_500),
+        ]), .colors16NoLowPriorityLabels)
         XCTAssertNil(SnapshotPayloadAdmission.choose([
             (.colors16NoLowPriorityLandUse, 8_193),
         ]))

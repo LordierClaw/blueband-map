@@ -9,13 +9,27 @@ public enum SnapshotPaletteProfile: String, CaseIterable, Codable, Sendable {
         self == .colors32Labels || self == .colors16Labels
     }
     public var keepsLowPriorityLandUse: Bool { self != .colors16NoLowPriorityLandUse }
+
+    public static let transferOptimizedOrder: [Self] = [
+        .colors16Labels,
+        .colors16NoLowPriorityLabels,
+        .colors16NoLowPriorityLandUse,
+    ]
 }
 
 public enum SnapshotPayloadAdmission {
+    public static let preferredMaximumBytes = 4_096
+
     public static func choose(
         _ candidates: [(profile: SnapshotPaletteProfile, byteCount: Int)]
     ) -> SnapshotPaletteProfile? {
-        candidates.first { (1...RenderProtocol.maximumPayloadBytes).contains($0.byteCount) }?.profile
+        if let preferred = candidates.first(where: { (1...preferredMaximumBytes).contains($0.byteCount) }) {
+            return preferred.profile
+        }
+        return candidates
+            .filter { (1...RenderProtocol.maximumPayloadBytes).contains($0.byteCount) }
+            .min { $0.byteCount < $1.byteCount }?
+            .profile
     }
 }
 
