@@ -187,7 +187,7 @@ final class RouteCardRenderCoordinator {
             )
         }
         operationTask = task
-        await withTaskCancellationHandler {
+        return await withTaskCancellationHandler {
             await task.value
         } onCancel: {
             task.cancel()
