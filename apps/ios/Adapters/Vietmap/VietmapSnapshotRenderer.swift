@@ -172,7 +172,11 @@ enum VietmapDarkStyle {
     }
 
     static func color(id: String, type: String) -> UIColor {
-        let hex = colorHex(id: id, type: type).dropFirst()
+        color(hex: colorHex(id: id, type: type))
+    }
+
+    static func color(hex: String) -> UIColor {
+        let hex = hex.dropFirst()
         let value = UInt32(hex, radix: 16) ?? 0
         return UIColor(
             red: CGFloat((value >> 16) & 0xff) / 255,
@@ -186,6 +190,8 @@ enum VietmapDarkStyle {
 struct VietmapRouteOverlay {
     enum Kind: Equatable { case traveled, upcoming, maneuver }
     struct Command: Equatable { let kind: Kind; let width: CGFloat }
+    static let traveledColorHex = "#41516b"
+    static let upcomingColorHex = "#2f6bff"
 
     static func commands(for request: VietmapSnapshotRequest) -> [Command] {
         [Command(kind: .traveled, width: 4), Command(kind: .upcoming, width: 5),
@@ -197,11 +203,11 @@ struct VietmapRouteOverlay {
         context.saveGState()
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        drawPath(Array(request.route.points.prefix(request.progressIndex + 1)), color: UIColor(white: 0.24, alpha: 1).cgColor, width: 4, overlay: overlay)
+        drawPath(Array(request.route.points.prefix(request.progressIndex + 1)), color: VietmapDarkStyle.color(hex: traveledColorHex).cgColor, width: 4, overlay: overlay)
         let upcoming = Array(request.route.points.dropFirst(request.progressIndex))
-        drawPath(upcoming, color: UIColor(red: 0, green: 0.9, blue: 1, alpha: 1).cgColor, width: 5, overlay: overlay)
+        drawPath(upcoming, color: VietmapDarkStyle.color(hex: upcomingColorHex).cgColor, width: 5, overlay: overlay)
         let point = overlay.point(for: coordinate(request.nextManeuver))
-        context.setStrokeColor(UIColor(red: 0, green: 0.9, blue: 1, alpha: 1).cgColor)
+        context.setStrokeColor(VietmapDarkStyle.color(hex: upcomingColorHex).cgColor)
         context.setLineWidth(3)
         context.strokeEllipse(in: CGRect(x: point.x - 4.5, y: point.y - 4.5, width: 9, height: 9))
         context.restoreGState()

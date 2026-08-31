@@ -87,5 +87,7 @@ final class VietmapSnapshotRendererTests: XCTestCase {
             .traveled, .upcoming, .maneuver,
         ])
         XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [4, 5, 9])
+        XCTAssertEqual(VietmapRouteOverlay.traveledColorHex, "#41516b")
+        XCTAssertEqual(VietmapRouteOverlay.upcomingColorHex, "#2f6bff")
     }
 }

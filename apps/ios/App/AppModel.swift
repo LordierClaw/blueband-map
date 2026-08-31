@@ -78,7 +78,8 @@ final class AppModel: ObservableObject {
     private var updateSequence = 0
     private var activeSceneID: String?
     private var activeSnapshotConfiguration: VietmapSnapshotConfiguration?
-    private var activeManeuverUpperBound: Int?
+    private var activeSnapshotAnchor: GeoPoint?
+    private var lastSnapshotRefreshStartedAt: Date?
     private var navigationStartedMilliseconds = 0
     private var navigationDebugSequence = 0
     private var navigationScreenIsActive = false
@@ -295,7 +296,8 @@ final class AppModel: ObservableObject {
         locationClient.stop()
         activeSceneID = nil
         activeSnapshotConfiguration = nil
-        activeManeuverUpperBound = nil
+        activeSnapshotAnchor = nil
+        lastSnapshotRefreshStartedAt = nil
         routePreviewPNG = nil
         navigationState = .idle
     }
@@ -387,13 +389,16 @@ final class AppModel: ObservableObject {
                 var status: NavigationStatus = progress.status == .gpsLow ? .gpsLow : (limitedMap ? .limitedMap : .navigating)
                 let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
                 let markerPoint = activeSnapshotConfiguration?.point(for: displayedLocation)
-                if !contextRefreshed && status != .gpsLow && SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
+                let nextManeuverVisible = instruction.flatMap {
+                    route.points.indices.contains($0.interval.upperBound)
+                        ? activeSnapshotConfiguration?.point(for: route.points[$0.interval.upperBound]) : nil
+                }.map { (0..<212).contains(Int($0.x)) && (0..<520).contains(Int($0.y)) } ?? false
+                if !contextRefreshed && snapshotRefreshTask == nil && status != .gpsLow && SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
                     marker: markerPoint.map { ScreenPoint(x: Int($0.x.rounded()), y: Int($0.y.rounded())) },
                     safeViewport: SnapshotRefreshPolicy.defaultSafeViewport,
-                    maneuverContextChanged: instruction?.interval.upperBound != activeManeuverUpperBound,
-                    rerouteSucceeded: false,
-                    zoomContextLost: !(instruction.flatMap { route.points.indices.contains($0.interval.upperBound) ? activeSnapshotConfiguration?.point(for: route.points[$0.interval.upperBound]) : nil }
-                        .map { (0..<212).contains(Int($0.x)) && (0..<520).contains(Int($0.y)) } ?? false)
+                    distanceFromAnchorMeters: activeSnapshotAnchor.map { Self.meters($0, displayedLocation) } ?? .infinity,
+                    secondsSinceLastRefresh: lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? .infinity,
+                    nextManeuverVisible: nextManeuverVisible
                 )) {
                     scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey)
                 }
@@ -456,6 +461,7 @@ final class AppModel: ObservableObject {
         refreshGeneration: Int? = nil
     ) async throws -> Bool {
         navigationState = .transferring
+        let snapshotStartedAt = Date()
         let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
         let maneuverIndex = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
         var prepared: (snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)?
@@ -534,7 +540,8 @@ final class AppModel: ObservableObject {
         }
         activeSceneID = sceneID
         activeSnapshotConfiguration = snapshot.configuration
-        activeManeuverUpperBound = instruction?.interval.upperBound
+        activeSnapshotAnchor = progress.matchedLocation ?? location.geoPoint
+        lastSnapshotRefreshStartedAt = snapshotStartedAt
         navigationManeuver = instruction?.maneuver ?? .straight
         navigationDistanceMeters = Self.remainingDistance(route: route, location: location.geoPoint, progressIndex: progress.pointIndex, instruction: instruction)
         navigationStreet = instruction?.streetName ?? ""

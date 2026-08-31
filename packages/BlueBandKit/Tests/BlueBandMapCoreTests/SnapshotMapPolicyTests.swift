@@ -36,22 +36,36 @@ final class SnapshotMapPolicyTests: XCTestCase {
         XCTAssertFalse(ReusableLocationPolicy.isReusable(horizontalAccuracyMeters: 5, ageSeconds: -0.1))
     }
 
-    func testRefreshOnlyForSpecifiedContextChanges() {
-        let safe = ScreenRect(x: 24, y: 136, width: 164, height: 344)
+    func testUrbanRefreshRequiresTwelveSecondsUnlessRerouteSucceeded() {
+        let safe = ScreenRect(x: 36, y: 144, width: 140, height: 320)
+        XCTAssertEqual(SnapshotRefreshPolicy.defaultSafeViewport, safe)
+        XCTAssertEqual(SnapshotRefreshPolicy.minimumRefreshSeconds, 12)
+        XCTAssertEqual(SnapshotRefreshPolicy.movementMeters, 175)
         XCTAssertFalse(SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
-            marker: ScreenPoint(x: 106, y: 374), safeViewport: safe
+            marker: ScreenPoint(x: 106, y: 374), safeViewport: safe,
+            distanceFromAnchorMeters: 174, secondsSinceLastRefresh: 30
+        )))
+        XCTAssertFalse(SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
+            marker: ScreenPoint(x: 10, y: 374), safeViewport: safe,
+            distanceFromAnchorMeters: 175, secondsSinceLastRefresh: 11
         )))
         XCTAssertTrue(SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
-            marker: ScreenPoint(x: 10, y: 374), safeViewport: safe
+            marker: ScreenPoint(x: 10, y: 374), safeViewport: safe,
+            distanceFromAnchorMeters: 10, secondsSinceLastRefresh: 12
         )))
         XCTAssertTrue(SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
-            marker: ScreenPoint(x: 106, y: 374), safeViewport: safe, maneuverContextChanged: true
+            marker: ScreenPoint(x: 106, y: 374), safeViewport: safe,
+            distanceFromAnchorMeters: 175, secondsSinceLastRefresh: 12
         )))
         XCTAssertTrue(SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
-            marker: ScreenPoint(x: 106, y: 374), safeViewport: safe, rerouteSucceeded: true
+            marker: ScreenPoint(x: 106, y: 374), safeViewport: safe,
+            distanceFromAnchorMeters: 10, secondsSinceLastRefresh: 12,
+            nextManeuverVisible: false
         )))
         XCTAssertTrue(SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
-            marker: ScreenPoint(x: 106, y: 374), safeViewport: safe, zoomContextLost: true
+            marker: ScreenPoint(x: 106, y: 374), safeViewport: safe,
+            distanceFromAnchorMeters: 0, secondsSinceLastRefresh: 0,
+            rerouteSucceeded: true
         )))
     }
 

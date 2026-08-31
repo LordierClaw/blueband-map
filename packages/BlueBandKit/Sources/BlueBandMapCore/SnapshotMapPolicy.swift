@@ -60,33 +60,39 @@ public struct ScreenRect: Equatable, Sendable {
 public struct SnapshotRefreshContext: Equatable, Sendable {
     public let marker: ScreenPoint?
     public let safeViewport: ScreenRect
-    public let maneuverContextChanged: Bool
+    public let distanceFromAnchorMeters: Double
+    public let secondsSinceLastRefresh: Double
+    public let nextManeuverVisible: Bool
     public let rerouteSucceeded: Bool
-    public let zoomContextLost: Bool
 
     public init(
         marker: ScreenPoint?,
         safeViewport: ScreenRect,
-        maneuverContextChanged: Bool = false,
-        rerouteSucceeded: Bool = false,
-        zoomContextLost: Bool = false
+        distanceFromAnchorMeters: Double,
+        secondsSinceLastRefresh: Double,
+        nextManeuverVisible: Bool = true,
+        rerouteSucceeded: Bool = false
     ) {
         self.marker = marker
         self.safeViewport = safeViewport
-        self.maneuverContextChanged = maneuverContextChanged
+        self.distanceFromAnchorMeters = distanceFromAnchorMeters
+        self.secondsSinceLastRefresh = secondsSinceLastRefresh
+        self.nextManeuverVisible = nextManeuverVisible
         self.rerouteSucceeded = rerouteSucceeded
-        self.zoomContextLost = zoomContextLost
     }
 }
 
 public enum SnapshotRefreshPolicy {
-    public static let defaultSafeViewport = ScreenRect(x: 24, y: 136, width: 164, height: 344)
+    public static let defaultSafeViewport = ScreenRect(x: 36, y: 144, width: 140, height: 320)
+    public static let minimumRefreshSeconds = 12.0
+    public static let movementMeters = 175.0
 
     public static func shouldRefresh(_ context: SnapshotRefreshContext) -> Bool {
-        context.marker.map { !context.safeViewport.contains($0) } ?? true
-            || context.maneuverContextChanged
-            || context.rerouteSucceeded
-            || context.zoomContextLost
+        if context.rerouteSucceeded { return true }
+        guard context.secondsSinceLastRefresh >= minimumRefreshSeconds else { return false }
+        return context.marker.map { !context.safeViewport.contains($0) } ?? true
+            || context.distanceFromAnchorMeters >= movementMeters
+            || !context.nextManeuverVisible
     }
 }
 
