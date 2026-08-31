@@ -187,7 +187,7 @@ final class RouteCardRenderCoordinator {
             )
         }
         operationTask = task
-        return await withTaskCancellationHandler {
+        await withTaskCancellationHandler {
             await task.value
         } onCancel: {
             task.cancel()
@@ -500,7 +500,7 @@ final class RouteCardRenderCoordinator {
 
     private func waitForPrepareResponse(token: UUID) async -> PrepareResponse? {
         schedulePrepareTimeout(token: token)
-        await withTaskCancellationHandler {
+        return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<PrepareResponse?, Never>) in
                 guard ownsLive(token), let pending, pending.token == token else {
                     continuation.resume(returning: nil)
