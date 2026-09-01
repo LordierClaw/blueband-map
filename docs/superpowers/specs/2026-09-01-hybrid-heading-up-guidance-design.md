@@ -8,6 +8,8 @@
 
 Make Band guidance behave more like a familiar navigation map without changing Vietmap Route v4, Xiaomi transport bytes, route progress monotonicity, or reroute policy. The visible route must begin at the road-snapped user marker, the HUD must show the nearest useful maneuver, and the snapshot must face the route while stationary and the direction of travel once movement becomes reliable.
 
+The map must also keep the destination understandable: show a destination marker when it fits inside the safe map area, otherwise show a bounded edge indicator in the destination direction.
+
 This release targets motorcycle navigation from 0 through 50 km/h. It remains a discrete snapshot experience rather than continuously animated phone-map navigation.
 
 ## Evidence and current failure
@@ -34,7 +36,7 @@ The existing `RouteProgressTracker` remains authoritative for route matching, pr
 
 `AppModel` supplies GPS accuracy, speed, course, route progress, and the previous confirmed snapshot context. `VietmapSnapshotRenderer` receives an exact matched segment/fraction, selected maneuver, and chosen bearing. The RPK continues to receive one raster snapshot plus bounded `nav.update` marker/HUD messages.
 
-No new service, background process, or protocol topic is introduced.
+No new service, background process, or protocol topic is introduced. The existing `nav.update` body gains bounded destination presentation fields so the destination indicator can move without retransmitting the raster.
 
 ## Road-snapped marker and continuous route
 
@@ -88,6 +90,39 @@ The post-turn continuation ends after the first route segment or 80 m beyond the
 
 The selected maneuver point keeps a small ring only when it improves turn recognition. The user marker remains the strongest map element.
 
+## Destination marker and off-screen indicator
+
+Destination presentation is a native RPK overlay driven by the confirmed snapshot configuration. It is not baked into the raster, because its edge position must remain current as the user marker moves between full-map refreshes.
+
+Each `nav.update` includes:
+
+- `destinationMode`: `visible`, `edge`, or `hidden`;
+- `destinationX` and `destinationY`: integer center coordinates inside the 212×520 viewport.
+
+The fields are validated together. Missing, partial, non-integer, or out-of-bounds destination data rejects the update. `hidden` uses stable zero coordinates. This extends the application JSON only; Xiaomi BLE/SPP/authentication bytes and envelope framing remain unchanged.
+
+Use an inset vertical capsule as the destination safe boundary:
+
+- outer safe capsule: `x: 24...188`, `y: 112...496`, radius 82;
+- effective center boundary for a 20 px indicator: `x: 34...178`, `y: 122...486`, radius 72.
+
+Project the destination using the confirmed snapshot configuration:
+
+1. If the projected destination center is inside the effective capsule, use `visible` at the projected coordinate.
+2. Otherwise, trace a ray from the current projected user marker toward the projected destination and intersect it with the effective capsule; use `edge` at that intersection.
+3. If no confirmed snapshot exists, navigation has arrived, or projection input is invalid, use `hidden`.
+
+The edge calculation uses the confirmed map and marker coordinates until a pending snapshot is atomically published. It must never mix pending-map projection with the confirmed raster.
+
+Visual resources:
+
+- visible destination: 20×24 warm amber pin/target with a light center and dark outline;
+- off-screen destination: 20×20 warm amber ring with a center dot;
+- no distance text is added at the edge, avoiding competition with the maneuver HUD;
+- destination amber must remain distinct from the dark-blue route and bright-green user marker after indexed palette reduction.
+
+The user marker remains above the destination marker when they overlap near arrival. The edge ring disappears once the destination becomes visible.
+
 ## Hybrid heading-up camera
 
 ### Stationary and unreliable motion
@@ -137,6 +172,8 @@ Exact offsets may move by at most 2 px during hardware visual tuning, but conten
 - Clamp marker center to `x: 38...174` and `y: 148...464` so the larger resource remains away from the curved edge and HUD.
 - The marker heading continues to update through `nav.update` without requiring a snapshot refresh.
 
+Destination pin and edge-ring overlays render below the user marker and above the raster. RPK packaging validates their exact dimensions, indexed PNG format, visible bounds, and transparent margins.
+
 ## Diagnostics
 
 Sanitized navigation debug entries add, for accepted fixes:
@@ -145,6 +182,7 @@ Sanitized navigation debug entries add, for accepted fixes:
 - distance from route, matched segment index, and fraction;
 - selected instruction index and remaining distance;
 - bearing source (`route` or `course`), confirmed bearing delta, and refresh reason.
+- destination presentation mode and bounded center coordinates.
 
 Exact coordinates, API keys, device identifiers, and raw captures remain excluded. Debug export must retain the latest events before the instruction list and must not truncate an event mid-line.
 
@@ -176,6 +214,9 @@ Exact coordinates, API keys, device identifiers, and raw captures remain exclude
 - Snapshot configuration uses the selected bearing and retains the user near the lower safe viewport.
 - Overlay commands use matched segment/fraction and the three route emphasis levels.
 - Marker projection and route split align under bearings 0, 90, 180, and 270 degrees.
+- Destination projection selects `visible` inside the safe capsule and `edge` at the capsule intersection outside it.
+- Destination edge projection remains correct across all four cardinal bearings and diagonal directions.
+- Pending snapshot coordinates are never published against the confirmed raster.
 - Failed refresh retains the confirmed map.
 
 ### RPK
@@ -184,6 +225,8 @@ Exact coordinates, API keys, device identifiers, and raw captures remain exclude
 - All eight marker headings remain valid.
 - Maneuver resources and CSS render at the new size and safe offsets.
 - Marker clamping uses the new center bounds.
+- Destination pin is an indexed 20×24 PNG and edge indicator is an indexed 20×20 PNG.
+- `nav.update` accepts only complete bounded destination fields and switches atomically between visible pin, edge ring, and hidden state.
 - Existing envelope, scene, digest, publication, and disconnect tests remain unchanged.
 
 Run the canonical gates through Make, then run iOS simulator/device build through GitHub Actions.
@@ -196,9 +239,10 @@ Use a safe outdoor route containing a straight section, a left turn, a right tur
 2. Confirm a sub-accuracy instruction such as 2 m is replaced by the next useful maneuver.
 3. Begin moving above 3.6 km/h. Confirm the next confirmed snapshot adopts travel course without oscillating on one poor fix.
 4. Pass at least three maneuvers. Confirm distance decreases, turn changes happen once, and the active leg begins at the marker.
-5. Stop and resume. Confirm the marker continues rotating through heading buckets while full-map refreshes remain bounded.
-6. Deviate from route safely. Confirm rerouting behavior remains unchanged and no false connector is drawn.
-7. Check HUD/marker visibility around every curved edge and export the final sanitized debug log.
+5. Choose a route whose destination begins outside the viewport. Confirm an amber edge ring appears in the correct direction, stays inside the pill safe area, and becomes a destination pin when the destination enters view.
+6. Stop and resume. Confirm the marker continues rotating through heading buckets while full-map refreshes remain bounded.
+7. Deviate from route safely. Confirm rerouting behavior remains unchanged and no false connector is drawn.
+8. Check HUD, user marker, destination pin, and edge-ring visibility around every curved edge and export the final sanitized debug log.
 
 Compilation, simulator tests, and deterministic fixtures do not establish Smart Band 10 hardware acceptance.
 
