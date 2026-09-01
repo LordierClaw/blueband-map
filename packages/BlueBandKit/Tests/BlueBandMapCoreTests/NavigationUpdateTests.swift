@@ -39,6 +39,16 @@ final class NavigationUpdateTests: XCTestCase {
             distanceMeters: 0, street: "", status: .navigating,
             destinationMode: .edge, destinationX: 212, destinationY: 120
         ))
+        XCTAssertNoThrow(try NavigationUpdate(
+            scene: "scene", seq: 0, x: 106, y: 320, maneuver: .straight,
+            distanceMeters: 0, street: "", status: .navigating,
+            destinationMode: .edge, destinationX: 190, destinationY: 260
+        ))
+        XCTAssertThrowsError(try NavigationUpdate(
+            scene: "scene", seq: 0, x: 106, y: 320, maneuver: .straight,
+            distanceMeters: 0, street: "", status: .navigating,
+            destinationMode: .visible, destinationX: 190, destinationY: 260
+        ))
     }
 
     func testRejectsInvalidSceneSequenceAndMarker() {

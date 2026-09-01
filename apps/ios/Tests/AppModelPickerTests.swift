@@ -8,6 +8,10 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testNavigationMarkerIsFixedAtTheLowerCenter() {
+        XCTAssertEqual(AppModel.fixedNavigationMarker, ScreenPoint(x: 106, y: 374))
+    }
+
     func testHeadingBucketRoundsCompassCourseIntoEightResources() {
         XCTAssertEqual(AppModel.headingBucket(-1), 0)
         XCTAssertEqual(AppModel.headingBucket(22), 0)

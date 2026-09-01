@@ -130,7 +130,10 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
             guard destinationX == 0, destinationY == 0 else { throw Error.invalidDestination }
         } else {
             let height = destinationMode == .visible ? 24 : 20
-            guard BandDisplaySafeMask.smartBand10PhotoEstimate.contains(
+            let mask = destinationMode == .edge
+                ? BandDisplaySafeMask.smartBand10PhotoEstimate.withoutVisualMargin
+                : BandDisplaySafeMask.smartBand10PhotoEstimate
+            guard mask.contains(
                 center: ScreenPoint(x: destinationX, y: destinationY),
                 resourceWidth: 20,
                 resourceHeight: height

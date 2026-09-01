@@ -116,6 +116,16 @@ final class RenderProtocolTests: XCTestCase {
             x: 106, y: 374, headingBucket: 0,
             destinationMode: .hidden, destinationX: 1, destinationY: 0
         ))
+        XCTAssertNoThrow(try RenderNavigationPreview(
+            maneuver: .straight, distanceMeters: 1, street: "Road",
+            x: 106, y: 374, headingBucket: 0,
+            destinationMode: .edge, destinationX: 190, destinationY: 260
+        ))
+        XCTAssertThrowsError(try RenderNavigationPreview(
+            maneuver: .straight, distanceMeters: 1, street: "Road",
+            x: 106, y: 374, headingBucket: 0,
+            destinationMode: .visible, destinationX: 190, destinationY: 260
+        ))
     }
 
     func testRejectCodesAndProtocolTopicsAreStable() {

@@ -57,8 +57,8 @@ function safePixel(x, y) {
   return true
 }
 
-function safeCenter(x, y, width, height) {
-  const halfWidth = width / 2 + 6, halfHeight = height / 2 + 6
+function safeCenter(x, y, width, height, margin = 6) {
+  const halfWidth = width / 2 + margin, halfHeight = height / 2 + margin
   return safePixel(x - halfWidth, y - halfHeight) && safePixel(x + halfWidth, y - halfHeight) &&
     safePixel(x - halfWidth, y + halfHeight) && safePixel(x + halfWidth, y + halfHeight)
 }
@@ -74,7 +74,7 @@ function validPreview(preview) {
     validInteger(preview.destinationX) && validInteger(preview.destinationY) &&
     (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
       safeCenter(preview.destinationX, preview.destinationY, 20,
-        preview.destinationMode === "visible" ? 24 : 20))
+        preview.destinationMode === "visible" ? 24 : 20, preview.destinationMode === "edge" ? 0 : 6))
 }
 
 function validatePrepare(body, options = {}) {

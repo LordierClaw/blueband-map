@@ -22,6 +22,7 @@ struct EchoEntry: Identifiable, Equatable, Sendable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    static let fixedNavigationMarker = ScreenPoint(x: 106, y: 374)
     private struct SnapshotRefreshRequest {
         let route: RoutePlan
         let progress: RouteProgress
@@ -629,38 +630,20 @@ final class AppModel: ObservableObject {
         )
         routePreviewPNG = asset.data
         let safeMask = BandDisplaySafeMask.smartBand10PhotoEstimate
-        let markerLocation = GuidancePresentationPolicy.markerLocation(
-            progress: progress,
-            rawLocation: location.geoPoint
-        )
-        let projectedMarker = snapshot.configuration.point(for: markerLocation)
-        let marker = safeMask.clampedCenter(
-            ScreenPoint(
-                x: max(0, min(RenderProtocol.viewportWidth - 1, Int(projectedMarker.x.rounded()))),
-                y: max(0, min(RenderProtocol.viewportHeight - 1, Int(projectedMarker.y.rounded())))
-            ),
-            resourceWidth: 46,
-            resourceHeight: 54
-        )
+        let marker = Self.fixedNavigationMarker
         let destination = destinationPresentation(
             status: .navigating,
             marker: marker,
             mask: safeMask,
             configuration: snapshot.configuration
         )
-        let markerHeading = location.course >= 0
-            ? location.course : GuidancePresentationPolicy.stationaryBearing(
-                route: route,
-                progress: progress,
-                selection: selection
-            )
         let preview = try RenderNavigationPreview(
             maneuver: instruction?.maneuver ?? .straight,
             distanceMeters: max(0, Int((selection?.distanceMeters ?? 0).rounded())),
             street: instruction?.streetName ?? "",
             x: marker.x,
             y: marker.y,
-            headingBucket: Self.headingBucket(markerHeading - snapshot.configuration.heading),
+            headingBucket: 0,
             destinationMode: destination.mode,
             destinationX: destination.point.x,
             destinationY: destination.point.y
@@ -752,8 +735,8 @@ final class AppModel: ObservableObject {
     private func sendNavigationUpdate(
         route: RoutePlan,
         progress: RouteProgress,
-        location: GeoPoint,
-        headingDegrees: Double,
+        location _: GeoPoint,
+        headingDegrees _: Double,
         horizontalAccuracyMeters: Double,
         status: NavigationStatus
     ) {
@@ -764,17 +747,9 @@ final class AppModel: ObservableObject {
             horizontalAccuracyMeters: horizontalAccuracyMeters
         )
         let instruction = selection?.instruction ?? route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
-        let markerLocation = GuidancePresentationPolicy.markerLocation(progress: progress, rawLocation: location)
-        let projected = activeSnapshotConfiguration?.point(for: markerLocation) ?? CGPoint(x: 106, y: 374)
-        let rawMarker = ScreenPoint(
-            x: max(0, min(RenderProtocol.viewportWidth - 1, Int(projected.x.rounded()))),
-            y: max(0, min(RenderProtocol.viewportHeight - 1, Int(projected.y.rounded())))
-        )
         let safeMask = BandDisplaySafeMask.smartBand10PhotoEstimate
-        let marker = safeMask.clampedCenter(rawMarker, resourceWidth: 46, resourceHeight: 54)
+        let marker = Self.fixedNavigationMarker
         let destination = destinationPresentation(status: status, marker: marker, mask: safeMask)
-        let mapHeading = activeSnapshotConfiguration?.heading ?? 0
-        let markerHeading = headingDegrees >= 0 ? headingDegrees : GuidancePresentationPolicy.routeBearing(route: route, progress: progress)
         updateSequence += 1
         guard let update = try? NavigationUpdate(
             scene: scene,
@@ -782,7 +757,7 @@ final class AppModel: ObservableObject {
             x: marker.x,
             y: marker.y,
             maneuver: status == .arrived ? .arrive : (instruction?.maneuver ?? .straight),
-            headingBucket: Self.headingBucket(markerHeading - mapHeading),
+            headingBucket: 0,
             distanceMeters: max(0, Int((selection?.distanceMeters ?? 0).rounded())),
             street: instruction?.streetName ?? "",
             status: status,
@@ -827,7 +802,9 @@ final class AppModel: ObservableObject {
             y: Int(max(-100_000, min(100_000, projected.y)).rounded())
         )
         if mask.contains(center: target, resourceWidth: 20, resourceHeight: 24) { return (.visible, target) }
-        return (.edge, mask.edgePoint(from: marker, toward: target, resourceWidth: 20, resourceHeight: 20))
+        return (.edge, mask.withoutVisualMargin.edgePoint(
+            from: marker, toward: target, resourceWidth: 20, resourceHeight: 20
+        ))
     }
 
     static func initialRouteHeading(courseDegrees: Double, speedMetersPerSecond: Double) -> Int? {

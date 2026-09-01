@@ -42,6 +42,19 @@ public struct BandDisplaySafeMask: Equatable, Sendable {
         self.visualMargin = visualMargin
     }
 
+    public var withoutVisualMargin: Self {
+        Self(
+            width: width,
+            height: height,
+            inset: inset,
+            topCenterY: topCenterY,
+            bottomCenterY: bottomCenterY,
+            topRadius: topRadius,
+            bottomRadius: bottomRadius,
+            visualMargin: 0
+        )
+    }
+
     public func contains(
         center: ScreenPoint,
         resourceWidth: Int,

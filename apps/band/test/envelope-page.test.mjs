@@ -206,8 +206,8 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
 
   assert.equal(page.navStatus, "ARRIVED")
   assert.equal(page.navArrowPath, "/common/maneuver-arrive.png")
-  assert.equal(page.navMarkerPath, "/common/marker-4.png")
-  assert.equal(page.navMarkerStyle, "left:81px;top:269px;")
+  assert.equal(page.navMarkerPath, "/common/marker-0.png")
+  assert.equal(page.navMarkerStyle, "left:83px;top:347px;")
   assert.equal(page.navStatusVisible, true)
   page.receiveMessage({ data: envelope("nav-5", "nav.update", {
     ...navigation({ seq: 5, x: 104, y: 296, heading: 3, distanceM: 120, street: "Next Road" })
@@ -224,6 +224,28 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
   assert.equal(sent.filter(message => message.type === "ack" && /^nav-|stale|wrong/.test(message.id)).length, 8)
 })
 
+test("preview and live guidance share compact metre and kilometre labels", async () => {
+  const { page } = await harness()
+  const cases = [[0, "0 m"], [999, "999 m"], [1000, "1 km"], [1354, "1.4 km"], [2000, "2 km"], [12345, "12.3 km"]]
+  for (const [distanceM, label] of cases) {
+    page.receiveMessage({ data: envelope(`prepare-${distanceM}`, "render.prepare", prepare({
+      sceneId: `${SCENE}-${distanceM}`, preview: preview({ distanceM })
+    })) })
+    assert.equal(page.navDistance, label)
+    page.receiveMessage({ data: envelope(`cancel-${distanceM}`, "render.cancel", {
+      runId: RUN, sceneId: `${SCENE}-${distanceM}`
+    }) })
+  }
+
+  publish(page)
+  cases.forEach(([distanceM, label], seq) => {
+    page.receiveMessage({ data: envelope(`nav-distance-${seq}`, "nav.update", navigation({ seq, distanceM })) })
+    assert.equal(page.navDistance, label)
+    assert.equal(page.navMarkerPath, "/common/marker-0.png")
+    assert.equal(page.navMarkerStyle, "left:83px;top:347px;")
+  })
+})
+
 test("destination overlay switches atomically and stays inside the curved safe mask", async () => {
   const { page } = await harness()
   publish(page)
@@ -235,13 +257,18 @@ test("destination overlay switches atomically and stays inside the curved safe m
   assert.equal(page.navDestinationStyle, "left:96px;top:108px;")
 
   page.receiveMessage({ data: envelope("edge", "nav.update", navigation({
-    seq: 2, destinationMode: "edge", destinationX: 25, destinationY: 80
+    seq: 2, destinationMode: "edge", destinationX: 190, destinationY: 260
   })) })
   assert.equal(page.navDestinationPath, "/common/destination-edge.png")
-  assert.match(page.navDestinationStyle, /^left:\d+px;top:\d+px;$/)
+  assert.equal(page.navDestinationStyle, "left:180px;top:250px;")
+
+  page.receiveMessage({ data: envelope("visible-too-close", "nav.update", navigation({
+    seq: 3, destinationMode: "visible", destinationX: 190, destinationY: 260
+  })) })
+  assert.equal(page.navSequence, 2)
 
   page.receiveMessage({ data: envelope("partial", "nav.update", navigation({
-    seq: 3, destinationMode: "visible", destinationX: 106, destinationY: undefined
+    seq: 4, destinationMode: "visible", destinationX: 106, destinationY: undefined
   })) })
   assert.equal(page.navSequence, 2)
 
@@ -286,7 +313,7 @@ test("first raster promotes its staged marker and destination atomically", async
   assert.equal(page.navDestinationVisible, false)
   page.mapComplete(page.pendingPublication.token)
   assert.equal(page.navMarkerVisible, true)
-  assert.equal(page.navMarkerPath, "/common/marker-2.png")
+  assert.equal(page.navMarkerPath, "/common/marker-0.png")
   assert.equal(page.navMarkerStyle, "left:83px;top:347px;")
   assert.equal(page.navDestinationVisible, true)
   assert.equal(page.navDestinationPath, "/common/destination-pin.png")
@@ -384,7 +411,7 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   })) })
   assert.equal(page.mapPath, oldURI)
   assert.equal(page.confirmedMap.uri, oldURI)
-  assert.equal(page.navMarkerPath, "/common/marker-1.png")
+  assert.equal(page.navMarkerPath, "/common/marker-0.png")
 
   page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", {
     asset: nextAsset, run: RUN, scene: nextScene, offset: 0,
@@ -407,7 +434,7 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   page.mapComplete(page.pendingPublication.token)
   assert.equal(page.confirmedMap.scene, nextScene)
   assert.equal(page.mapPath, `internal://files/${nextAsset}.png`)
-  assert.equal(page.navMarkerPath, "/common/marker-6.png")
+  assert.equal(page.navMarkerPath, "/common/marker-0.png")
   assert.equal(page.navDestinationPath, "/common/destination-edge.png")
 })
 

@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.1</text>
+      <text class="version">RPK 0.6.2</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -27,7 +27,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.6.1 • ENV V1</text>
+        <text class="version">RPK 0.6.2 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -69,29 +69,31 @@ function safeMaskPixel(x, y) {
   return true
 }
 
-function safeMaskContains(centerX, centerY, resourceWidth, resourceHeight) {
-  var halfWidth = resourceWidth / 2 + 6
-  var halfHeight = resourceHeight / 2 + 6
+function safeMaskContains(centerX, centerY, resourceWidth, resourceHeight, margin) {
+  if (margin === undefined) margin = 6
+  var halfWidth = resourceWidth / 2 + margin
+  var halfHeight = resourceHeight / 2 + margin
   return safeMaskPixel(centerX - halfWidth, centerY - halfHeight) &&
     safeMaskPixel(centerX + halfWidth, centerY - halfHeight) &&
     safeMaskPixel(centerX - halfWidth, centerY + halfHeight) &&
     safeMaskPixel(centerX + halfWidth, centerY + halfHeight)
 }
 
-function safeMaskClamp(desiredX, desiredY, resourceWidth, resourceHeight) {
-  if (safeMaskContains(desiredX, desiredY, resourceWidth, resourceHeight)) return { x: desiredX, y: desiredY }
+function safeMaskClamp(desiredX, desiredY, resourceWidth, resourceHeight, margin) {
+  if (margin === undefined) margin = 6
+  if (safeMaskContains(desiredX, desiredY, resourceWidth, resourceHeight, margin)) return { x: desiredX, y: desiredY }
   var low = 0
   var high = 1
   for (var index = 0; index < 32; index = index + 1) {
     var ratio = (low + high) / 2
     var x = Math.round(106 + (desiredX - 106) * ratio)
     var y = Math.round(260 + (desiredY - 260) * ratio)
-    if (safeMaskContains(x, y, resourceWidth, resourceHeight)) low = ratio
+    if (safeMaskContains(x, y, resourceWidth, resourceHeight, margin)) low = ratio
     else high = ratio
   }
   var resultX = Math.round(106 + (desiredX - 106) * low)
   var resultY = Math.round(260 + (desiredY - 260) * low)
-  while (!safeMaskContains(resultX, resultY, resourceWidth, resourceHeight) && (resultX !== 106 || resultY !== 260)) {
+  while (!safeMaskContains(resultX, resultY, resourceWidth, resourceHeight, margin) && (resultX !== 106 || resultY !== 260)) {
     if (resultX !== 106) resultX = resultX + (resultX < 106 ? 1 : -1)
     if (resultY !== 260) resultY = resultY + (resultY < 260 ? 1 : -1)
   }
@@ -269,7 +271,7 @@ function renderProtocolValidPreview(preview) {
     renderProtocolValidInteger(preview.destinationX) && renderProtocolValidInteger(preview.destinationY) &&
     (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
       safeMaskContains(preview.destinationX, preview.destinationY, 20,
-        preview.destinationMode === "visible" ? 24 : 20))
+        preview.destinationMode === "visible" ? 24 : 20, preview.destinationMode === "edge" ? 0 : 6))
 }
 
 function renderProtocolValidatePrepare(body, options) {
@@ -699,17 +701,18 @@ export default {
       destinationModes.indexOf(body.destinationMode) >= 0 &&
       this.validInteger(body.destinationX) && this.validInteger(body.destinationY) &&
       ((body.destinationMode === "hidden" && body.destinationX === 0 && body.destinationY === 0) ||
-        (body.destinationMode !== "hidden" && body.destinationX >= 0 && body.destinationX < this.MAP_WIDTH &&
-          body.destinationY >= 0 && body.destinationY < this.MAP_HEIGHT))
+        (body.destinationMode !== "hidden" && safeMaskContains(
+          body.destinationX, body.destinationY, 20, body.destinationMode === "visible" ? 24 : 20,
+          body.destinationMode === "edge" ? 0 : 6)))
     if (valid) {
       var labels = { navigating: "NAVIGATING", gpsLow: "GPS LOW", limitedMap: "LIMITED MAP", rerouting: "REROUTING", arrived: "ARRIVED" }
       this.navScene = body.scene
       this.navSequence = body.seq
       this.navMarkerVisible = true
-      this.navMarkerPath = "/common/marker-" + body.heading + ".png"
+      this.navMarkerPath = "/common/marker-0.png"
       var navigation = {
         arrowPath: "/common/maneuver-" + body.maneuver + ".png",
-        distance: body.status === "arrived" ? "ARRIVED" : body.distanceM + " m",
+        distance: body.status === "arrived" ? "ARRIVED" : this.formatDistance(body.distanceM),
         street: body.street,
         status: labels[body.status],
         statusVisible: body.status !== "navigating"
@@ -723,13 +726,15 @@ export default {
         this.navStatus = navigation.status
         this.navStatusVisible = navigation.statusVisible
       }
-      var marker = safeMaskClamp(body.x, body.y, 46, 54)
-      this.navMarkerStyle = "left:" + (marker.x - 23) + "px;top:" + (marker.y - 27) + "px;"
+      this.navMarkerStyle = "left:83px;top:347px;"
       this.navDestinationVisible = body.destinationMode !== "hidden"
       if (this.navDestinationVisible) {
         var destinationWidth = 20
         var destinationHeight = body.destinationMode === "visible" ? 24 : 20
-        var destination = safeMaskClamp(body.destinationX, body.destinationY, destinationWidth, destinationHeight)
+        var destination = safeMaskClamp(
+          body.destinationX, body.destinationY, destinationWidth, destinationHeight,
+          body.destinationMode === "edge" ? 0 : 6
+        )
         this.navDestinationPath = body.destinationMode === "visible" ?
           "/common/destination-pin.png" : "/common/destination-edge.png"
         this.navDestinationStyle = "left:" + (destination.x - 10) + "px;top:" +
@@ -762,7 +767,7 @@ export default {
     this.preparedRender.preparedAt = Date.now()
     if (result.prepared.preview) {
       this.navArrowPath = "/common/maneuver-" + result.prepared.preview.maneuver + ".png"
-      this.navDistance = result.prepared.preview.distanceM + " m"
+      this.navDistance = this.formatDistance(result.prepared.preview.distanceM)
       this.navStreet = result.prepared.preview.street
     }
     this.navStatus = "LOADING MAP"
@@ -817,6 +822,11 @@ export default {
 
   validInteger(value) {
     return typeof value === "number" && isFinite(value) && Math.floor(value) === value
+  },
+
+  formatDistance(distanceM) {
+    if (distanceM < 1000) return distanceM + " m"
+    return Math.round(distanceM / 100) / 10 + " km"
   },
 
   validRun(run) {
@@ -1372,8 +1382,8 @@ export default {
       return
     }
     this.navMarkerVisible = true
-    this.navMarkerPath = "/common/marker-" + preview.heading + ".png"
-    this.navMarkerStyle = "left:" + (preview.x - 23) + "px;top:" + (preview.y - 27) + "px;"
+    this.navMarkerPath = "/common/marker-0.png"
+    this.navMarkerStyle = "left:83px;top:347px;"
     this.navDestinationVisible = preview.destinationMode !== "hidden"
     if (this.navDestinationVisible) {
       var height = preview.destinationMode === "visible" ? 24 : 20
