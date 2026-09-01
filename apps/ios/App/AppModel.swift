@@ -348,7 +348,15 @@ final class AppModel: ObservableObject {
                 "start=\(NavigationDebugFormatter.coordinateSummary(first.geoPoint)) " +
                 "accuracyM=\(Int(first.horizontalAccuracy.rounded()))"
             )
-            var route = try await makeRoute(from: first, to: destination, serviceKey: serviceKey)
+            var route = try await makeRoute(
+                from: first,
+                to: destination,
+                serviceKey: serviceKey,
+                heading: Self.initialRouteHeading(
+                    courseDegrees: first.course,
+                    speedMetersPerSecond: first.speed
+                )
+            )
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
             let limitedMap = try await publish(route: route, progress: progress, location: first, tileMapKey: tileMapKey)
@@ -377,7 +385,12 @@ final class AppModel: ObservableObject {
                 if progress.shouldReroute, Date().timeIntervalSince(lastReroute) >= 15 {
                     navigationState = .rerouting
                     sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, status: .rerouting)
-                    route = try await makeRoute(from: location, to: destination, serviceKey: serviceKey)
+                    route = try await makeRoute(
+                        from: location,
+                        to: destination,
+                        serviceKey: serviceKey,
+                        heading: Self.routeHeading(courseDegrees: location.course)
+                    )
                     tracker = RouteProgressTracker()
                     progress = tracker.update(route: route, location: location.geoPoint, horizontalAccuracyMeters: location.horizontalAccuracy)
                     scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey)
@@ -423,13 +436,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func makeRoute(from location: CLLocation, to destination: GeoPoint, serviceKey: String) async throws -> RoutePlan {
+    private func makeRoute(
+        from location: CLLocation,
+        to destination: GeoPoint,
+        serviceKey: String,
+        heading: Int?
+    ) async throws -> RoutePlan {
         navigationState = .routing
         let started = Self.nowMilliseconds()
-        let heading = Self.routeHeading(
-            courseDegrees: location.course,
-            speedMetersPerSecond: location.speed
-        )
         logNavigation(
             "route.request",
             "origin=\(NavigationDebugFormatter.coordinateSummary(location.geoPoint)) " +
@@ -640,9 +654,13 @@ final class AppModel: ObservableObject {
         return Int((positive + 22.5) / 45) % 8
     }
 
-    static func routeHeading(courseDegrees: Double, speedMetersPerSecond: Double) -> Int? {
-        guard courseDegrees.isFinite, courseDegrees >= 0,
-              speedMetersPerSecond.isFinite, speedMetersPerSecond >= 1 else { return nil }
+    static func initialRouteHeading(courseDegrees: Double, speedMetersPerSecond: Double) -> Int? {
+        guard speedMetersPerSecond.isFinite, speedMetersPerSecond >= 1 else { return nil }
+        return routeHeading(courseDegrees: courseDegrees)
+    }
+
+    static func routeHeading(courseDegrees: Double) -> Int? {
+        guard courseDegrees.isFinite, (0...360).contains(courseDegrees) else { return nil }
         return Int(courseDegrees.rounded())
     }
 

@@ -17,10 +17,12 @@ final class AppModelPickerTests: XCTestCase {
     }
 
     func testRouteHeadingRequiresReliableMovement() {
-        XCTAssertNil(AppModel.routeHeading(courseDegrees: 214, speedMetersPerSecond: -1))
-        XCTAssertNil(AppModel.routeHeading(courseDegrees: 214, speedMetersPerSecond: 0))
-        XCTAssertNil(AppModel.routeHeading(courseDegrees: -1, speedMetersPerSecond: 5))
-        XCTAssertEqual(AppModel.routeHeading(courseDegrees: 214.4, speedMetersPerSecond: 1), 214)
+        XCTAssertNil(AppModel.initialRouteHeading(courseDegrees: 214, speedMetersPerSecond: -1))
+        XCTAssertNil(AppModel.initialRouteHeading(courseDegrees: 214, speedMetersPerSecond: 0))
+        XCTAssertNil(AppModel.initialRouteHeading(courseDegrees: -1, speedMetersPerSecond: 5))
+        XCTAssertNil(AppModel.initialRouteHeading(courseDegrees: 361, speedMetersPerSecond: 5))
+        XCTAssertEqual(AppModel.initialRouteHeading(courseDegrees: 214.4, speedMetersPerSecond: 1), 214)
+        XCTAssertEqual(AppModel.routeHeading(courseDegrees: 214.4), 214)
     }
 
     func testSelectingWithoutAuthKeyKeepsOwnedScanActive() async {
