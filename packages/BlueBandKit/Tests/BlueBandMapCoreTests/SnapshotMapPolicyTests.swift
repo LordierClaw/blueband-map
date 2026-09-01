@@ -13,6 +13,18 @@ final class SnapshotMapPolicyTests: XCTestCase {
         )
     }
 
+    func testReducesSpatialEntropyInBoundedBlocksWithoutChangingDimensions() {
+        XCTAssertEqual(
+            IndexedPixelPacking.blocked(
+                [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                width: 4,
+                height: 3,
+                blockSize: 2
+            ),
+            [1, 1, 3, 3, 1, 1, 3, 3, 9, 9, 11, 11]
+        )
+    }
+
     func testPayloadAdmissionPrefersFiveKiBThenFallsBackToTheSmallestValidCandidate() {
         XCTAssertEqual(SnapshotPaletteProfile.transferOptimizedOrder, [
             .colors16Labels,

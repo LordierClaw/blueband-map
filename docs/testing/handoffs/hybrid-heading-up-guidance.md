@@ -25,4 +25,6 @@ Use a passenger or stop safely before observing or operating either device. Firs
 7. Stop and resume, then safely deviate from the route. Confirm GPS-low and rerouting states remain correct, no false bright connector is drawn, and the previous confirmed map remains visible if a refresh fails.
 8. Export the sanitized debug log. Confirm it contains GPS quality, speed/course, matched segment/fraction, selected guidance, bearing source/delta, refresh decision, and destination mode without keys, exact raw captures, or device identifiers.
 
+For payload regression, repeat the 9.36 km route from the `MAP_PAYLOAD_TOO_LARGE encodedBytes=11510` log. Confirm `map.rendered` is present, `bytes` is at most 8192, and record `pixelBlock` (`1` is full detail; `2`, `4`, or `8` means the bounded fallback was required).
+
 Compilation, simulator tests, and photographs do not establish full moving hardware acceptance. Record Pass/Fail and attach the straight-on calibration photo plus sanitized debug export.

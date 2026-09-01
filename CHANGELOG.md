@@ -2,7 +2,8 @@
 
 ## iOS 0.5.1 / RPK 0.6.0 - 2026-09-01
 
-- Encode the existing 16-color snapshot palette at its native 4-bit indexed PNG depth instead of wasting 8 bits per pixel, fixing real 11,510-byte snapshots that exceeded the 8 KiB Band budget without removing map detail.
+- Encode the existing 16-color snapshot palette at its native 4-bit indexed PNG depth instead of wasting 8 bits per pixel.
+- If every full-detail style still exceeds 8 KiB, retry the already-rendered snapshots with bounded 2×, 4×, then 8× spatial blocks so navigation starts instead of failing with `MAP_PAYLOAD_TOO_LARGE`.
 - Bump only iOS to `0.5.1 (17)` because snapshot encoding changes the IPA. RPK remains `0.6.0 (15)`.
 
 ## iOS 0.5.0 / RPK 0.6.0 - 2026-09-01

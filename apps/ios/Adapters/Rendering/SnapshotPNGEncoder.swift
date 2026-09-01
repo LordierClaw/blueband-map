@@ -7,6 +7,7 @@ struct SnapshotPNGOutput: Sendable {
     let data: Data
     let profile: SnapshotPaletteProfile
     let colorCount: Int
+    let pixelBlockSize: Int
     let durationMilliseconds: Int
 }
 
@@ -21,26 +22,34 @@ enum SnapshotPNGEncoder {
 
     static func encode(
         _ image: CGImage,
-        profiles: [SnapshotPaletteProfile] = SnapshotPaletteProfile.allCases
+        profiles: [SnapshotPaletteProfile] = SnapshotPaletteProfile.allCases,
+        blockSizes: [Int] = [1]
     ) throws -> SnapshotPNGOutput {
         guard image.width == RenderProtocol.viewportWidth,
               image.height == RenderProtocol.viewportHeight,
-              !profiles.isEmpty else { throw Error.unsupportedImage }
+              !profiles.isEmpty, !blockSizes.isEmpty,
+              blockSizes.allSatisfy({ $0 > 0 }) else { throw Error.unsupportedImage }
         let started = nowMilliseconds()
         let pixels = try rgbaPixels(image)
         var lastSize = 0
         for profile in profiles {
             let palette = palette(for: profile)
             let indices = quantize(pixels, palette: palette)
-            let data = try encodeIndexed(indices, width: image.width, height: image.height, palette: palette)
-            lastSize = data.count
-            if data.count <= RenderProtocol.maximumPayloadBytes {
-                return SnapshotPNGOutput(
-                    data: data,
-                    profile: profile,
-                    colorCount: palette.count,
-                    durationMilliseconds: max(0, nowMilliseconds() - started)
+            for blockSize in blockSizes {
+                let reduced = blockSize == 1 ? indices : IndexedPixelPacking.blocked(
+                    indices, width: image.width, height: image.height, blockSize: blockSize
                 )
+                let data = try encodeIndexed(reduced, width: image.width, height: image.height, palette: palette)
+                lastSize = data.count
+                if data.count <= RenderProtocol.maximumPayloadBytes {
+                    return SnapshotPNGOutput(
+                        data: data,
+                        profile: profile,
+                        colorCount: palette.count,
+                        pixelBlockSize: blockSize,
+                        durationMilliseconds: max(0, nowMilliseconds() - started)
+                    )
+                }
             }
         }
         throw Error.payloadTooLarge(lastSize)

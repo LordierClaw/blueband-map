@@ -533,6 +533,7 @@ final class AppModel: ObservableObject {
         let maneuverIndex = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
         var prepared: (snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)?
         var candidates: [(snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)] = []
+        var rejectedSnapshots: [(snapshot: VietmapSnapshotOutput, profile: SnapshotPaletteProfile)] = []
         var rejectedBytes = 0
         for profile in SnapshotPaletteProfile.transferOptimizedOrder {
             let snapshot = try await snapshotRenderer.render(VietmapSnapshotRequest(
@@ -560,11 +561,26 @@ final class AppModel: ObservableObject {
                 }
             } catch let SnapshotPNGEncoder.Error.payloadTooLarge(bytes) {
                 rejectedBytes = bytes
+                rejectedSnapshots.append((snapshot, profile))
             }
         }
         if prepared == nil,
            let selected = SnapshotPayloadAdmission.choose(candidates.map { ($0.encoded.profile, $0.encoded.data.count) }) {
             prepared = candidates.first { $0.encoded.profile == selected }
+        }
+        if prepared == nil {
+            for rejected in rejectedSnapshots {
+                do {
+                    prepared = (rejected.snapshot, try SnapshotPNGEncoder.encode(
+                        rejected.snapshot.image,
+                        profiles: [rejected.profile],
+                        blockSizes: [2, 4, 8]
+                    ))
+                    break
+                } catch let SnapshotPNGEncoder.Error.payloadTooLarge(bytes) {
+                    rejectedBytes = bytes
+                }
+            }
         }
         guard let prepared else { throw SnapshotPNGEncoder.Error.payloadTooLarge(rejectedBytes) }
         let snapshot = prepared.snapshot, encoded = prepared.encoded
@@ -578,7 +594,7 @@ final class AppModel: ObservableObject {
         )
         logNavigation(
             "map.rendered",
-            "bytes=\(asset.byteCount) palette=\(encoded.colorCount) zoom=\(Int(snapshot.zoom)) " +
+            "bytes=\(asset.byteCount) palette=\(encoded.colorCount) pixelBlock=\(encoded.pixelBlockSize) zoom=\(Int(snapshot.zoom)) " +
             "layers=\(snapshot.retainedFillLayers)/\(snapshot.retainedLineLayers)/\(snapshot.retainedSymbolLayers) " +
             "styleMs=\(snapshot.styleLoadMilliseconds) snapshotMs=\(snapshot.snapshotMilliseconds) encodeMs=\(encoded.durationMilliseconds)"
         )

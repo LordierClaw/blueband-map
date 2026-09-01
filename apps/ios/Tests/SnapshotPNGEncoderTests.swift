@@ -14,6 +14,7 @@ final class SnapshotPNGEncoderTests: XCTestCase {
 
         XCTAssertEqual(output.profile, .colors16Labels)
         XCTAssertEqual(output.colorCount, 16)
+        XCTAssertEqual(output.pixelBlockSize, 1)
         XCTAssertLessThanOrEqual(output.data.count, RenderProtocol.maximumPayloadBytes)
         XCTAssertEqual(output.data[24], 4)
         XCTAssertEqual(output.data[25], 3)
@@ -30,6 +31,21 @@ final class SnapshotPNGEncoderTests: XCTestCase {
                 return XCTFail("unexpected error: \(error)")
             }
         }
+    }
+
+    func testBoundedSpatialFallbackFitsHighEntropySnapshotWithoutChangingDimensions() throws {
+        let output = try SnapshotPNGEncoder.encode(
+            noisyImage(width: 212, height: 520),
+            profiles: [.colors16Labels],
+            blockSizes: [8]
+        )
+
+        XCTAssertEqual(output.pixelBlockSize, 8)
+        XCTAssertLessThanOrEqual(output.data.count, RenderProtocol.maximumPayloadBytes)
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(output.data as CFData, nil))
+        let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(decoded.width, 212)
+        XCTAssertEqual(decoded.height, 520)
     }
 
     private func solidImage(width: Int, height: Int) throws -> CGImage {

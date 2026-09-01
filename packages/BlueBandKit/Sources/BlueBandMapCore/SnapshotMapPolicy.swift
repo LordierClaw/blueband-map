@@ -34,6 +34,17 @@ public enum SnapshotPayloadAdmission {
 }
 
 public enum IndexedPixelPacking {
+    public static func blocked(_ indices: [UInt8], width: Int, height: Int, blockSize: Int) -> [UInt8] {
+        guard width > 0, height > 0, blockSize > 0, indices.count == width * height else { return [] }
+        var output = indices
+        for y in 0..<height {
+            for x in 0..<width {
+                output[y * width + x] = indices[(y / blockSize * blockSize) * width + x / blockSize * blockSize]
+            }
+        }
+        return output
+    }
+
     public static func fourBit(_ indices: [UInt8], width: Int, height: Int) -> [UInt8] {
         guard width > 0, height > 0, indices.count == width * height,
               indices.allSatisfy({ $0 < 16 }) else { return [] }
