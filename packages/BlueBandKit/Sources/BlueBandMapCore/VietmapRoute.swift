@@ -232,6 +232,8 @@ public struct VietmapRouteClient: Sendable {
 
 public struct RouteProgress: Equatable, Sendable {
     public let pointIndex: Int
+    public let matchedSegmentIndex: Int
+    public let matchedFraction: Double
     public let distanceFromRouteMeters: Double
     public let matchedLocation: GeoPoint?
     public let shouldReroute: Bool
@@ -240,6 +242,8 @@ public struct RouteProgress: Equatable, Sendable {
 
 public struct RouteProgressTracker: Sendable {
     private var lastPointIndex = 0
+    private var lastMatchedSegmentIndex = 0
+    private var lastMatchedFraction = 0.0
     private var consecutiveOffRouteFixes = 0
 
     public init() {}
@@ -251,7 +255,15 @@ public struct RouteProgressTracker: Sendable {
     ) -> RouteProgress {
         guard horizontalAccuracyMeters.isFinite, horizontalAccuracyMeters >= 0, horizontalAccuracyMeters <= 25,
               route.points.count >= 2, location.isValid else {
-            return RouteProgress(pointIndex: lastPointIndex, distanceFromRouteMeters: .infinity, matchedLocation: nil, shouldReroute: false, status: .gpsLow)
+            return RouteProgress(
+                pointIndex: lastPointIndex,
+                matchedSegmentIndex: lastMatchedSegmentIndex,
+                matchedFraction: lastMatchedFraction,
+                distanceFromRouteMeters: .infinity,
+                matchedLocation: nil,
+                shouldReroute: false,
+                status: .gpsLow
+            )
         }
         let start = min(lastPointIndex, route.points.count - 2)
         var bestIndex = start
@@ -268,6 +280,8 @@ public struct RouteProgressTracker: Sendable {
             }
         }
         lastPointIndex = max(lastPointIndex, bestIndex)
+        lastMatchedSegmentIndex = bestSegmentIndex
+        lastMatchedFraction = bestFraction
         consecutiveOffRouteFixes = bestDistance > 40 ? consecutiveOffRouteFixes + 1 : 0
         let segmentIndex = min(bestSegmentIndex, route.points.count - 2)
         let startPoint = route.points[segmentIndex]
@@ -278,6 +292,8 @@ public struct RouteProgressTracker: Sendable {
         )
         return RouteProgress(
             pointIndex: lastPointIndex,
+            matchedSegmentIndex: bestSegmentIndex,
+            matchedFraction: bestFraction,
             distanceFromRouteMeters: bestDistance,
             matchedLocation: matchedLocation,
             shouldReroute: consecutiveOffRouteFixes >= 3,

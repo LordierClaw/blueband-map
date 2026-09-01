@@ -68,6 +68,8 @@ final class VietmapRouteTests: XCTestCase {
         var tracker = RouteProgressTracker()
         let onRoute = tracker.update(route: route, location: GeoPoint(latitude: 10.0015, longitude: 106), horizontalAccuracyMeters: 5)
         XCTAssertGreaterThanOrEqual(onRoute.pointIndex, 1)
+        XCTAssertEqual(onRoute.matchedSegmentIndex, 1)
+        XCTAssertEqual(onRoute.matchedFraction, 0.5, accuracy: 0.01)
         XCTAssertEqual(try XCTUnwrap(onRoute.matchedLocation).longitude, 106, accuracy: 0.000001)
 
         for _ in 0..<2 {
