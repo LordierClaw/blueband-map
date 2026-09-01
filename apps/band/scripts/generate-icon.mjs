@@ -86,13 +86,18 @@ async function writeIndexed(name, imageWidth, imageHeight, palette, alpha, indic
   ))
 }
 
-const hudPalette = [[4, 12, 20], [4, 12, 20], [4, 12, 20], [4, 12, 20]]
+const hudPalette = [[0, 0, 0], [4, 12, 20]]
 const shade = new Uint8Array(212 * 96)
 for (let y = 0; y < 96; y += 1) {
-  const shadeIndex = y < 42 ? 3 : y < 64 ? 2 : y < 82 ? 1 : 0
-  shade.fill(shadeIndex, y * 212, (y + 1) * 212)
+  for (let x = 0; x < 212; x += 1) {
+    const visible = y < 56 ||
+      (y < 66 && x % 4 !== y % 4) ||
+      (y < 76 && x % 2 === y % 2) ||
+      (y < 88 && x % 4 === y % 4)
+    if (visible) shade[y * 212 + x] = 1
+  }
 }
-await writeIndexed("nav-shade.png", 212, 96, hudPalette, [0, 72, 150, 225], shade)
+await writeIndexed("nav-shade.png", 212, 96, hudPalette, [0, 255], shade)
 
 function paintCircle(bitmap, imageWidth, imageHeight, centerX, centerY, radius, color) {
   for (let y = Math.floor(centerY - radius); y <= Math.ceil(centerY + radius); y += 1) {
@@ -180,43 +185,53 @@ function fillPolygon(bitmap, imageWidth, imageHeight, points, color) {
   }
 }
 
+function paintCenteredTriangle(bitmap, imageWidth, centerX, top, bottom, radius, color) {
+  for (let y = top; y <= bottom; y += 1) {
+    const halfWidth = Math.floor((y - top) * radius / (bottom - top))
+    for (let x = centerX - halfWidth; x <= centerX + halfWidth; x += 1) {
+      if (x >= 0 && x < imageWidth) bitmap[y * imageWidth + x] = color
+    }
+  }
+}
+
 for (let bucket = 0; bucket < 8; bucket += 1) {
   const marker = new Uint8Array(46 * 54)
-  fillPolygon(marker, 46, 54, [[23, 3], [43, 48], [3, 48]], 1)
-  fillPolygon(marker, 46, 54, [[23, 7], [39, 45], [7, 45]], 2)
+  paintCenteredTriangle(marker, 46, 23, 3, 50, 21, 1)
+  paintCenteredTriangle(marker, 46, 23, 7, 47, 18, 2)
+  paintCenteredTriangle(marker, 46, 23, 11, 44, 15, 3)
   await writeIndexed(`marker-${bucket}.png`, 46, 54,
-    [[0, 0, 0], [4, 19, 10], [102, 255, 122]], [0, 255, 255], marker)
+    [[0, 0, 0], [4, 19, 10], [238, 255, 242], [74, 255, 112]], [0, 255, 255, 255], marker)
 }
 
 const destinationPalette = [[0, 0, 0], [55, 32, 3], [255, 178, 24], [255, 244, 194]]
-const destinationPin = new Uint8Array(20 * 24)
-paintCircle(destinationPin, 20, 24, 10, 9, 8, 1)
-paintCircle(destinationPin, 20, 24, 10, 9, 6, 2)
-paintCircle(destinationPin, 20, 24, 10, 9, 2, 3)
-fillPolygon(destinationPin, 20, 24, [[6, 14], [14, 14], [10, 22]], 1)
-fillPolygon(destinationPin, 20, 24, [[8, 14], [12, 14], [10, 19]], 2)
-await writeIndexed("destination-pin.png", 20, 24, destinationPalette, [0, 255, 255, 255], destinationPin)
+const destinationPin = new Uint8Array(28 * 34)
+paintCircle(destinationPin, 28, 34, 14, 12, 11, 1)
+paintCircle(destinationPin, 28, 34, 14, 12, 9, 2)
+paintCircle(destinationPin, 28, 34, 14, 12, 3, 3)
+fillPolygon(destinationPin, 28, 34, [[8, 20], [20, 20], [14, 32]], 1)
+fillPolygon(destinationPin, 28, 34, [[11, 20], [17, 20], [14, 27]], 2)
+await writeIndexed("destination-pin.png", 28, 34, destinationPalette, [0, 255, 255, 255], destinationPin)
 
-const destinationEdge = new Uint8Array(20 * 20)
-paintCircle(destinationEdge, 20, 20, 10, 10, 9, 1)
-paintCircle(destinationEdge, 20, 20, 10, 10, 7, 2)
-paintCircle(destinationEdge, 20, 20, 10, 10, 4, 0)
-paintCircle(destinationEdge, 20, 20, 10, 10, 1.5, 3)
-await writeIndexed("destination-edge.png", 20, 20, destinationPalette, [0, 255, 255, 255], destinationEdge)
+const destinationEdge = new Uint8Array(28 * 28)
+paintCircle(destinationEdge, 28, 28, 14, 14, 13, 1)
+paintCircle(destinationEdge, 28, 28, 14, 14, 10, 2)
+paintCircle(destinationEdge, 28, 28, 14, 14, 6, 0)
+paintCircle(destinationEdge, 28, 28, 14, 14, 2, 3)
+await writeIndexed("destination-edge.png", 28, 28, destinationPalette, [0, 255, 255, 255], destinationEdge)
 
-const destinationTips = [[10, 1], [16, 4], [19, 10], [16, 16], [10, 19], [4, 16], [1, 10], [4, 4]]
+const destinationTips = [[14, 0], [24, 4], [27, 14], [24, 24], [14, 27], [4, 24], [0, 14], [4, 4]]
 function rotate(points, bucket) {
   const angle = bucket * Math.PI / 4
   return points.map(([x, y]) => [
-    10 + (x - 10) * Math.cos(angle) - (y - 10) * Math.sin(angle),
-    10 + (x - 10) * Math.sin(angle) + (y - 10) * Math.cos(angle)
+    14 + (x - 14) * Math.cos(angle) - (y - 14) * Math.sin(angle),
+    14 + (x - 14) * Math.sin(angle) + (y - 14) * Math.cos(angle)
   ])
 }
 for (let direction = 0; direction < 8; direction += 1) {
-  const chevron = new Uint8Array(20 * 20)
-  fillPolygon(chevron, 20, 20, rotate([[10, 1], [19, 13], [14, 13], [10, 9], [6, 13], [1, 13]], direction), 1)
-  fillPolygon(chevron, 20, 20, rotate([[10, 4], [16, 11], [13, 11], [10, 8], [7, 11], [4, 11]], direction), 2)
-  paintCircle(chevron, 20, 20, destinationTips[direction][0], destinationTips[direction][1], 1, 3)
-  await writeIndexed(`destination-edge-${direction}.png`, 20, 20,
+  const chevron = new Uint8Array(28 * 28)
+  fillPolygon(chevron, 28, 28, rotate([[14, 0], [27, 18], [20, 18], [14, 12], [8, 18], [1, 18]], direction), 1)
+  fillPolygon(chevron, 28, 28, rotate([[14, 4], [23, 16], [19, 16], [14, 11], [9, 16], [5, 16]], direction), 2)
+  paintCircle(chevron, 28, 28, destinationTips[direction][0], destinationTips[direction][1], 1.5, 3)
+  await writeIndexed(`destination-edge-${direction}.png`, 28, 28,
     destinationPalette, [0, 255, 255, 255], chevron)
 }

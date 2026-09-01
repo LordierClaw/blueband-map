@@ -23,6 +23,8 @@ struct VietmapSnapshotRequest: Sendable {
 }
 
 struct VietmapSnapshotConfiguration: Equatable, Sendable {
+    private static let sdkTileSize = 512.0
+
     let size: CGSize
     let scale: CGFloat
     let pitch: CGFloat
@@ -112,7 +114,7 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
     private func world(_ point: GeoPoint) -> CGPoint { Self.world(point, zoom: zoom) }
 
     private static func world(_ point: GeoPoint, zoom: Double) -> CGPoint {
-        let scale = 256 * pow(2, zoom)
+        let scale = sdkTileSize * pow(2, zoom)
         let latitude = min(85.051_128_78, max(-85.051_128_78, point.latitude)) * .pi / 180
         return CGPoint(
             x: (point.longitude + 180) / 360 * scale,
@@ -121,7 +123,7 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
     }
 
     private static func coordinate(_ point: CGPoint, zoom: Double) -> GeoPoint {
-        let scale = 256 * pow(2, zoom)
+        let scale = sdkTileSize * pow(2, zoom)
         let longitude = point.x / scale * 360 - 180
         let n = .pi - 2 * .pi * point.y / scale
         return GeoPoint(latitude: atan(sinh(n)) * 180 / .pi, longitude: longitude)
@@ -209,16 +211,18 @@ enum VietmapDarkStyle {
 }
 
 struct VietmapRouteOverlay {
-    enum Kind: Equatable { case subdued, traveled, context, active, maneuver }
+    enum Kind: Equatable { case subdued, traveled, context, activeCasing, active, maneuver }
     struct Command: Equatable { let kind: Kind; let width: CGFloat }
     static let subduedColorHex = "#243852"
     static let traveledColorHex = "#41516b"
     static let contextColorHex = "#31577f"
-    static let activeColorHex = "#1f5fd1"
+    static let activeCasingColorHex = "#071622"
+    static let activeColorHex = "#168cff"
 
     static func commands(for request: VietmapSnapshotRequest) -> [Command] {
         [Command(kind: .subdued, width: 3), Command(kind: .traveled, width: 4),
-         Command(kind: .context, width: 4), Command(kind: .active, width: 5),
+         Command(kind: .context, width: 4), Command(kind: .activeCasing, width: 10),
+         Command(kind: .active, width: 6),
          Command(kind: .maneuver, width: 9)]
     }
 
@@ -230,7 +234,8 @@ struct VietmapRouteOverlay {
         drawPath(request.overlayGeometry.subdued, color: VietmapDarkStyle.color(hex: subduedColorHex).cgColor, width: 3, overlay: overlay)
         drawPath(request.overlayGeometry.traveled, color: VietmapDarkStyle.color(hex: traveledColorHex).cgColor, width: 4, overlay: overlay)
         drawPath(request.overlayGeometry.context, color: VietmapDarkStyle.color(hex: contextColorHex).cgColor, width: 4, overlay: overlay)
-        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeColorHex).cgColor, width: 5, overlay: overlay)
+        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeCasingColorHex).cgColor, width: 10, overlay: overlay)
+        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeColorHex).cgColor, width: 6, overlay: overlay)
         let point = overlay.point(for: coordinate(request.nextManeuver))
         context.setStrokeColor(VietmapDarkStyle.color(hex: activeColorHex).cgColor)
         context.setLineWidth(3)

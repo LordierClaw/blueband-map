@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.4</text>
+      <text class="version">RPK 0.6.5</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -27,7 +27,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.6.4 • ENV V1</text>
+        <text class="version">RPK 0.6.5 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -271,8 +271,8 @@ function renderProtocolValidPreview(preview) {
     renderProtocolValidInteger(preview.destinationX) && renderProtocolValidInteger(preview.destinationY) &&
     (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
       safeMaskContains(preview.destinationX, preview.destinationY,
-        preview.destinationMode === "visible" ? 20 : 1,
-        preview.destinationMode === "visible" ? 24 : 1, preview.destinationMode === "edge" ? 0 : 6))
+        preview.destinationMode === "visible" ? 28 : 1,
+        preview.destinationMode === "visible" ? 34 : 1, preview.destinationMode === "edge" ? 0 : 6))
 }
 
 function renderProtocolValidatePrepare(body, options) {
@@ -703,8 +703,8 @@ export default {
       this.validInteger(body.destinationX) && this.validInteger(body.destinationY) &&
       ((body.destinationMode === "hidden" && body.destinationX === 0 && body.destinationY === 0) ||
         (body.destinationMode !== "hidden" && safeMaskContains(
-          body.destinationX, body.destinationY, body.destinationMode === "visible" ? 20 : 1,
-          body.destinationMode === "visible" ? 24 : 1,
+          body.destinationX, body.destinationY, body.destinationMode === "visible" ? 28 : 1,
+          body.destinationMode === "visible" ? 34 : 1,
           body.destinationMode === "edge" ? 0 : 6)))
     if (valid) {
       var labels = { navigating: "NAVIGATING", gpsLow: "GPS LOW", limitedMap: "LIMITED MAP", rerouting: "REROUTING", arrived: "ARRIVED" }
@@ -1379,14 +1379,13 @@ export default {
 
   destinationOverlay(mode, x, y) {
     if (mode === "visible") {
-      var point = safeMaskClamp(x, y, 20, 24, 6)
-      return { path: "/common/destination-pin.png", style: "left:" + (point.x - 10) + "px;top:" + (point.y - 12) + "px;" }
+      var point = safeMaskClamp(x, y, 28, 34, 6)
+      return { path: "/common/destination-pin.png", style: "left:" + (point.x - 14) + "px;top:" + (point.y - 17) + "px;" }
     }
     var direction = this.destinationDirection(106, 374, x, y)
-    var tips = [[10, 1], [16, 4], [19, 10], [16, 16], [10, 19], [4, 16], [1, 10], [4, 4]]
     return {
       path: "/common/destination-edge-" + direction + ".png",
-      style: "left:" + (x - tips[direction][0]) + "px;top:" + (y - tips[direction][1]) + "px;"
+      style: "left:" + (x - 14) + "px;top:" + (y - 14) + "px;"
     }
   },
 
@@ -1518,7 +1517,7 @@ export default {
 .nav-status { position: absolute; left: 82px; top: 76px; width: 94px; font-size: 10px; font-weight: bold; text-align: right; color: #5dffb0; }
 .map-frame { width: 212px; height: 520px; position: relative; background-color: #050e16; }
 .map { position: absolute; left: 0; top: 0; width: 212px; height: 520px; object-fit: contain; }
-.nav-destination { position: absolute; width: 20px; }
+.nav-destination { position: absolute; width: 28px; }
 .nav-marker { position: absolute; width: 46px; height: 54px; }
 .diagnostics { width: 212px; flex-direction: column; align-items: center; }
 .log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }

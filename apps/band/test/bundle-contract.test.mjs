@@ -19,12 +19,21 @@ function indexedPixels(png) {
   return { width, height, pixel: (x, y) => rows[y * (width + 1) + x + 1] }
 }
 
+function chunkData(png, type) {
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset)
+    if (png.toString("ascii", offset + 4, offset + 8) === type) return png.subarray(offset + 8, offset + 8 + length)
+    offset += length + 12
+  }
+  return Buffer.alloc(0)
+}
+
 test("manifest pins BlueBandMap identity and a single Band 10 page", async () => {
   const manifest = JSON.parse(await readFile(new URL("src/manifest.json", root), "utf8"))
   assert.equal(manifest.package, "dev.lordierclaw.bluebandmap.band")
   assert.equal(manifest.name, "BlueBandMap")
-  assert.equal(manifest.versionName, "0.6.4")
-  assert.equal(manifest.versionCode, 19)
+  assert.equal(manifest.versionName, "0.6.5")
+  assert.equal(manifest.versionCode, 20)
   assert.equal(manifest.config.designWidth, 212)
   assert.deepEqual(Object.keys(manifest.router.pages), ["pages/index"])
   assert.deepEqual(manifest.features, [
@@ -53,7 +62,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /@system\.crypto|crypto\.atob|crypto\.hashDigest/)
   assert.doesNotMatch(page, /transform:rotate\(|transform-origin:/)
   assert.doesNotMatch(page, /transform:\s*JSON\.stringify\(\{\s*rotate:/)
-  assert.match(page, /RPK 0\.6\.4/)
+  assert.match(page, /RPK 0\.6\.5/)
   assert.match(page, /<input[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ mapPath \}\}"[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ pendingMapPath \}\}"[^>]+@complete="mapComplete\(pendingMapToken\)"[^>]+@error="mapError\(pendingMapToken\)"[^>]+\/>/)
@@ -84,9 +93,9 @@ test("generated HUD resources are indexed PNGs at their display size", async () 
     "maneuver-right.png": [44, 56],
     "marker-0.png": [46, 54],
     "marker-7.png": [46, 54],
-    "destination-pin.png": [20, 24],
-    "destination-edge.png": [20, 20],
-    ...Object.fromEntries(Array.from({ length: 8 }, (_, direction) => [`destination-edge-${direction}.png`, [20, 20]]))
+    "destination-pin.png": [28, 34],
+    "destination-edge.png": [28, 28],
+    ...Object.fromEntries(Array.from({ length: 8 }, (_, direction) => [`destination-edge-${direction}.png`, [28, 28]]))
   }
   for (const [name, dimensions] of Object.entries(expected)) {
     const png = await readFile(new URL(`src/common/${name}`, root))
@@ -96,7 +105,7 @@ test("generated HUD resources are indexed PNGs at their display size", async () 
   }
 })
 
-test("all compatibility marker files contain the same upright triangle", async () => {
+test("all compatibility marker files contain the same symmetric high-contrast upright triangle", async () => {
   const markers = []
   for (let heading = 0; heading < 8; heading += 1) {
     const png = await readFile(new URL(`src/common/marker-${heading}.png`, root))
@@ -105,20 +114,40 @@ test("all compatibility marker files contain the same upright triangle", async (
     assert.ok(Array.from({ length: width }, (_, x) => pixel(x, 0) + pixel(x, height - 1)).every(value => value === 0))
     assert.ok(Array.from({ length: height }, (_, y) => pixel(0, y) + pixel(width - 1, y)).every(value => value === 0))
     const greenX = []
-    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) if (pixel(x, y) === 2) greenX.push(x)
+    for (let y = 0; y < height; y += 1) {
+      const row = []
+      for (let x = 0; x < width; x += 1) {
+        if (pixel(x, y) !== 0) row.push(x)
+        if (pixel(x, y) === 3) greenX.push(x)
+      }
+      if (row.length) assert.equal(Math.min(...row) + Math.max(...row), 46, `row ${y} must stay centered`)
+    }
+    assert.ok(chunkData(png, "PLTE").includes(Buffer.from([238, 255, 242])), "marker needs a visible light outline")
     assert.ok(Math.max(...greenX) - Math.min(...greenX) + 1 >= 28)
     assert.equal(Math.min(...greenX) + Math.max(...greenX), 46)
   }
   for (const marker of markers.slice(1)) assert.deepEqual(marker, markers[0])
 })
 
-test("destination chevrons put their outward tip on all eight bitmap edges", async () => {
-  const tips = [[10, 1], [16, 4], [19, 10], [16, 16], [10, 19], [4, 16], [1, 10], [4, 4]]
+test("destination chevrons are large and put their outward tip on all eight bitmap edges", async () => {
+  const tips = [[14, 0], [24, 4], [27, 14], [24, 24], [14, 27], [4, 24], [0, 14], [4, 4]]
   for (let direction = 0; direction < 8; direction += 1) {
     const png = await readFile(new URL(`src/common/destination-edge-${direction}.png`, root))
     const { pixel } = indexedPixels(png)
     assert.notEqual(pixel(...tips[direction]), 0)
   }
+})
+
+test("navigation shade uses decoder-safe binary alpha with a fading lower edge", async () => {
+  const png = await readFile(new URL("src/common/nav-shade.png", root))
+  assert.deepEqual([...new Set(chunkData(png, "tRNS"))].sort((a, b) => a - b), [0, 255])
+  const { width, height, pixel } = indexedPixels(png)
+  const coverage = Array.from({ length: height }, (_, y) =>
+    Array.from({ length: width }, (_, x) => pixel(x, y) === 0 ? 0 : 1).reduce((sum, value) => sum + value, 0)
+  )
+  assert.equal(coverage[0], width)
+  assert.equal(coverage.at(-1), 0)
+  for (let y = 1; y < height; y += 1) assert.ok(coverage[y] <= coverage[y - 1], `shade coverage grew at row ${y}`)
 })
 
 test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 }, async () => {
@@ -129,7 +158,7 @@ test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 },
   const diagnostics = result.stdout + result.stderr
   assert.equal(result.status, 0, diagnostics)
   assert.doesNotMatch(diagnostics, /unsupport(?:ed)? attribute|unsupported (?:attribute|property)/i)
-  assert.match(result.stdout, /verified .*\.0\.6\.4\.rpk/)
+  assert.match(result.stdout, /verified .*\.0\.6\.5\.rpk/)
 
   const compiledEntry = await readFile(new URL("build/pages/index/index.js", root), "utf8")
   assert.doesNotMatch(compiledEntry, /\.\/src\/common\/(?:render-protocol|vector-scene)\.js/, "page load must not start a custom module graph")

@@ -79,6 +79,33 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         XCTAssertEqual(configuration.point(for: request.matchedPosition).y, 520 * 0.72, accuracy: 0.5)
     }
 
+    func testCameraCenterMatchesPinnedVietmapSDKWorldScale() throws {
+        let origin = GeoPoint(latitude: 21.039341, longitude: 106.092286)
+        let forward = GeoPoint(latitude: 21.040341, longitude: 106.092286)
+        let route = RoutePlan(
+            points: [origin, forward],
+            instructions: [RouteInstruction(
+                distanceMeters: 111, headingDegrees: 0, sign: 0,
+                interval: 0...1, streetName: "Road"
+            )],
+            distanceMeters: 111
+        )
+        let request = VietmapSnapshotRequest(
+            route: route, matchedPosition: origin,
+            overlayGeometry: RouteOverlayGeometry(
+                subdued: route.points, traveled: [origin], active: route.points, context: []
+            ),
+            headingDegrees: 0, nextManeuver: forward, tileMapKey: "fixture-key"
+        )
+
+        let configuration = try VietmapSnapshotConfiguration.make(request)
+        let sdkWorldSize = 512 * pow(2, configuration.zoom)
+        let sdkCenter = mercator(configuration.center, worldSize: sdkWorldSize)
+        let sdkOrigin = mercator(origin, worldSize: sdkWorldSize)
+
+        XCTAssertEqual(configuration.size.height / 2 + sdkOrigin.y - sdkCenter.y, 520 * 0.72, accuracy: 0.5)
+    }
+
     func testCardinalAndStationaryRouteShapesAlwaysProjectForwardAboveUser() throws {
         let origin = GeoPoint(latitude: 10, longitude: 106)
         let forwardPoints = [
@@ -149,10 +176,18 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         )
 
         XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.kind), [
-            .subdued, .traveled, .context, .active, .maneuver,
+            .subdued, .traveled, .context, .activeCasing, .active, .maneuver,
         ])
-        XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [3, 4, 4, 5, 9])
+        XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [3, 4, 4, 10, 6, 9])
         XCTAssertEqual(VietmapRouteOverlay.traveledColorHex, "#41516b")
-        XCTAssertEqual(VietmapRouteOverlay.activeColorHex, "#1f5fd1")
+        XCTAssertEqual(VietmapRouteOverlay.activeColorHex, "#168cff")
+    }
+
+    private func mercator(_ point: GeoPoint, worldSize: Double) -> CGPoint {
+        let latitude = min(85.051_128_78, max(-85.051_128_78, point.latitude)) * .pi / 180
+        return CGPoint(
+            x: (point.longitude + 180) / 360 * worldSize,
+            y: (1 - log(tan(latitude) + 1 / cos(latitude)) / .pi) / 2 * worldSize
+        )
     }
 }

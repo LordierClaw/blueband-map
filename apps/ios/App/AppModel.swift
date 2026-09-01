@@ -801,7 +801,7 @@ final class AppModel: ObservableObject {
             x: Int(max(-100_000, min(100_000, projected.x)).rounded()),
             y: Int(max(-100_000, min(100_000, projected.y)).rounded())
         )
-        if mask.contains(center: target, resourceWidth: 20, resourceHeight: 24) { return (.visible, target) }
+        if mask.contains(center: target, resourceWidth: 28, resourceHeight: 34) { return (.visible, target) }
         return (.edge, mask.withoutVisualMargin.edgePoint(
             from: marker, toward: target, resourceWidth: 1, resourceHeight: 1
         ))
