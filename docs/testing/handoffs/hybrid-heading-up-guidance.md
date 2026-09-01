@@ -3,8 +3,9 @@
 ## Artifact versions
 
 - IPA: `0.5.4 (20)`; build and package only through `.github/workflows/ios-checks.yml`.
-- RPK: `0.6.3 (18)`; build through `make test-rpk`.
+- RPK: `0.6.4 (19)`; build through `make test-rpk`.
 - `render.prepare.preview` adds bounded user and destination overlay fields for atomic first-scene publication. Xiaomi BLE/SPP/authentication bytes and Route v4 request behavior are unchanged.
+- RPK `0.6.4` fixes the production inline `render.prepare` validator so a contour-attached edge-chevron tip is accepted with the same 1×1 rule as live updates; `0.6.3` could reject it as `UNSUPPORTEDFORMATVERSION` before transfer.
 
 ## Fixed curved-display mask
 

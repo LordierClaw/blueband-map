@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.3</text>
+      <text class="version">RPK 0.6.4</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -27,7 +27,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.6.3 • ENV V1</text>
+        <text class="version">RPK 0.6.4 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -270,8 +270,9 @@ function renderProtocolValidPreview(preview) {
     destinationModes.indexOf(preview.destinationMode) >= 0 &&
     renderProtocolValidInteger(preview.destinationX) && renderProtocolValidInteger(preview.destinationY) &&
     (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
-      safeMaskContains(preview.destinationX, preview.destinationY, 20,
-        preview.destinationMode === "visible" ? 24 : 20, preview.destinationMode === "edge" ? 0 : 6))
+      safeMaskContains(preview.destinationX, preview.destinationY,
+        preview.destinationMode === "visible" ? 20 : 1,
+        preview.destinationMode === "visible" ? 24 : 1, preview.destinationMode === "edge" ? 0 : 6))
 }
 
 function renderProtocolValidatePrepare(body, options) {

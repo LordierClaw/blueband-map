@@ -304,6 +304,16 @@ test("render.prepare shows compact guidance before the map arrives", async () =>
   assert.equal(page.navDestinationVisible, false)
 })
 
+test("render.prepare accepts an edge destination whose chevron tip reaches the contour", async () => {
+  const { page, sent } = await harness()
+  page.receiveMessage({ data: envelope("prepare-edge", "render.prepare", prepare({
+    preview: preview({ destinationMode: "edge", destinationX: 199, destinationY: 260 })
+  })) })
+
+  assert.equal(sent.find(message => message.topic === "render.reject"), undefined)
+  assert.equal(sent.find(message => message.topic === "render.ready").body.sceneId, SCENE)
+})
+
 test("first raster promotes its staged marker and destination atomically", async () => {
   const { page } = await harness()
   page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare({ preview: preview() })) })
