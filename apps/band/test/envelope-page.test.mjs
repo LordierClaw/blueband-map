@@ -21,7 +21,6 @@ async function loadPage(connection, file = memoryFile()) {
   const page = structuredClone(component.private)
   for (const [name, value] of Object.entries(component)) if (name !== "private") page[name] = value
   page.onReady()
-  page.unlock()
   return page
 }
 
@@ -34,6 +33,15 @@ function prepare(overrides = {}) {
     runId: RUN, sceneId: SCENE, renderer: "raster", format: "image/png",
     formatVersion: 1, width: 212, height: 520, bytes: BYTES.length,
     sha256: DIGEST, primitives: 0, ...overrides
+  }
+}
+
+function preview(overrides = {}) {
+  return {
+    maneuver: "right", distanceM: 88, street: "Chu Huy Man",
+    x: 106, y: 374, heading: 2,
+    destinationMode: "visible", destinationX: 106, destinationY: 120,
+    ...overrides
   }
 }
 
@@ -77,9 +85,57 @@ function memoryFile() {
 async function harness() {
   const sent = []
   const file = memoryFile()
-  const connection = { send({ data, success }) { sent.push(data); if (success) success() } }
+  const connection = {
+    getReadyState({ success }) { success({ status: 1 }) },
+    send({ data, success }) { sent.push(data); if (success) success() }
+  }
   return { page: await loadPage(connection, file), sent, file, connection }
 }
+
+test("waiting page probes immediately with one in flight and owns one retry timer", async () => {
+  const timers = new Map()
+  let nextTimer = 1
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  globalThis.setTimeout = (callback, delay) => {
+    const id = nextTimer++
+    timers.set(id, { callback, delay })
+    return id
+  }
+  globalThis.clearTimeout = id => timers.delete(id)
+  try {
+    const probes = []
+    const connection = {
+      getReadyState(callbacks) { probes.push(callbacks) },
+      send() {}
+    }
+    const page = await loadPage(connection)
+    assert.equal(probes.length, 1)
+    page.probeConnection()
+    assert.equal(probes.length, 1)
+
+    probes[0].fail({}, 7)
+    assert.equal(timers.size, 1)
+    assert.equal([...timers.values()][0].delay, 2000)
+    const retry = [...timers.values()][0]
+    timers.clear()
+    retry.callback()
+    assert.equal(probes.length, 2)
+    probes[1].success({ status: 1 })
+    assert.equal(page.connected, true)
+    assert.equal(timers.size, 0)
+
+    connection.onclose()
+    assert.equal(page.connected, false)
+    assert.equal(timers.size, 1)
+    page.onDestroy()
+    assert.equal(timers.size, 0)
+    assert.equal(connection.onmessage, null)
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
+  }
+})
 
 function publish(page, scene = SCENE, suffix = "") {
   page.receiveMessage({ data: envelope(`prepare${suffix}`, "render.prepare", prepare({ sceneId: scene })) })
@@ -205,7 +261,7 @@ test("destination overlay switches atomically and stays inside the curved safe m
 test("render.prepare shows compact guidance before the map arrives", async () => {
   const { page } = await harness()
   page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare({
-    preview: { maneuver: "right", distanceM: 88, street: "Chu Huy Man" }
+    preview: preview()
   })) })
 
   assert.equal(page.navArrowPath, "/common/maneuver-right.png")
@@ -213,6 +269,28 @@ test("render.prepare shows compact guidance before the map arrives", async () =>
   assert.equal(page.navStreet, "Chu Huy Man")
   assert.equal(page.navStatus, "LOADING MAP")
   assert.equal(page.navStatusVisible, true)
+  assert.equal(page.navMarkerVisible, false)
+  assert.equal(page.navDestinationVisible, false)
+})
+
+test("first raster promotes its staged marker and destination atomically", async () => {
+  const { page } = await harness()
+  page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare({ preview: preview() })) })
+  page.receiveMessage({ data: envelope("begin", "map.asset.begin", begin()) })
+  page.receiveMessage({ data: envelope("chunk", "map.asset.chunk", {
+    asset: ASSET, run: RUN, scene: SCENE, offset: 0, data: Buffer.from(BYTES).toString("base64")
+  }) })
+  page.receiveMessage({ data: envelope("end", "map.asset.end", { asset: ASSET, run: RUN, scene: SCENE }) })
+
+  assert.equal(page.navMarkerVisible, false)
+  assert.equal(page.navDestinationVisible, false)
+  page.mapComplete(page.pendingPublication.token)
+  assert.equal(page.navMarkerVisible, true)
+  assert.equal(page.navMarkerPath, "/common/marker-2.png")
+  assert.equal(page.navMarkerStyle, "left:83px;top:347px;")
+  assert.equal(page.navDestinationVisible, true)
+  assert.equal(page.navDestinationPath, "/common/destination-pin.png")
+  assert.equal(page.navDestinationStyle, "left:96px;top:108px;")
 })
 
 test("startup navigation status is visible before the first map", async () => {
@@ -241,7 +319,7 @@ test("cancelled refresh restores the confirmed scene guidance", async () => {
   }) })
   page.receiveMessage({ data: envelope("prepare-new", "render.prepare", prepare({
     sceneId: "scene-refresh-01",
-    preview: { maneuver: "right", distanceM: 88, street: "New Road" }
+    preview: preview({ street: "New Road" })
   })) })
   page.receiveMessage({ data: envelope("nav-latest", "nav.update", {
     scene: SCENE, seq: 2, x: 108, y: 318, heading: 3,
@@ -290,6 +368,7 @@ test("disconnect clears transfer ownership and nav sequence without accepting qu
 test("accepts windowed unique chunk IDs in offset order and publishes a refresh atomically", async () => {
   const { page, sent, file } = await harness()
   publish(page)
+  page.receiveMessage({ data: envelope("nav-old", "nav.update", navigation({ heading: 1 })) })
   const oldURI = page.confirmedMap.uri
   const nextBytes = Uint8Array.from([4, 5, 6, 7])
   const nextDigest = createHash("sha256").update(nextBytes).digest("hex")
@@ -297,13 +376,15 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   const nextScene = "scene-refresh-01"
 
   page.receiveMessage({ data: envelope("prepare-2", "render.prepare", prepare({
-    sceneId: nextScene, sha256: nextDigest
+    sceneId: nextScene, sha256: nextDigest,
+    preview: preview({ heading: 6, destinationMode: "edge", destinationX: 180, destinationY: 260 })
   })) })
   page.receiveMessage({ data: envelope("begin-2", "map.asset.begin", begin({
     asset: nextAsset, scene: nextScene, sha256: nextDigest
   })) })
   assert.equal(page.mapPath, oldURI)
   assert.equal(page.confirmedMap.uri, oldURI)
+  assert.equal(page.navMarkerPath, "/common/marker-1.png")
 
   page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", {
     asset: nextAsset, run: RUN, scene: nextScene, offset: 0,
@@ -326,6 +407,8 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   page.mapComplete(page.pendingPublication.token)
   assert.equal(page.confirmedMap.scene, nextScene)
   assert.equal(page.mapPath, `internal://files/${nextAsset}.png`)
+  assert.equal(page.navMarkerPath, "/common/marker-6.png")
+  assert.equal(page.navDestinationPath, "/common/destination-edge.png")
 })
 
 test("wrong windowed offset aborts the refresh and keeps the confirmed map", async () => {

@@ -3,10 +3,9 @@
     <div class="waiting" if="{{ waiting }}">
       <div class="mark"><text class="mark-text">M</text></div>
       <text class="title">BLUEBAND MAP</text>
-      <text class="status">{{ statusText }}</text>
-      <text class="detail">{{ detailText }}</text>
-      <input class="check" type="button" value="CHECK CONNECTION" @click="checkConnection" />
-      <text class="version">RPK 0.6.0</text>
+      <text class="status">ĐANG CHỜ KẾT NỐI…</text>
+      <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
+      <text class="version">RPK 0.6.1</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,14 +23,12 @@
         <text class="nav-status" if="{{ navStatusVisible }}">{{ navStatus }}</text>
       </div>
       <text class="online" if="{{ !mapReady && !pendingPublication && !preparedRender }}">{{ startupStatus }}</text>
-      <div class="diagnostics" if="{{ showDiagnostics && !preparedRender && !showCalibration }}">
+      <div class="diagnostics" if="{{ showDiagnostics && !preparedRender }}">
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <input class="calibrate" type="button" value="CALIBRATE DISPLAY" @click="toggleCalibration" />
-        <text class="version">RPK 0.6.0 • ENV V1</text>
+        <text class="version">RPK 0.6.1 • ENV V1</text>
       </div>
-      <image class="calibration" if="{{ showCalibration }}" src="/common/safe-area-calibration.png" @click="toggleCalibration" />
     </div>
   </div>
 </template>
@@ -260,10 +257,19 @@ function renderProtocolReject(code) {
 
 function renderProtocolValidPreview(preview) {
   var maneuvers = ["straight", "left", "right", "uTurn", "roundabout", "arrive"]
+  var destinationModes = ["visible", "edge", "hidden"]
   return preview && typeof preview === "object" && !Array.isArray(preview) &&
     maneuvers.indexOf(preview.maneuver) >= 0 &&
     renderProtocolValidInteger(preview.distanceM) && preview.distanceM >= 0 &&
-    typeof preview.street === "string" && renderProtocolUTF8Length(preview.street) <= 48
+    typeof preview.street === "string" && renderProtocolUTF8Length(preview.street) <= 48 &&
+    renderProtocolValidInteger(preview.x) && renderProtocolValidInteger(preview.y) &&
+    safeMaskContains(preview.x, preview.y, 46, 54) &&
+    renderProtocolValidInteger(preview.heading) && preview.heading >= 0 && preview.heading < 8 &&
+    destinationModes.indexOf(preview.destinationMode) >= 0 &&
+    renderProtocolValidInteger(preview.destinationX) && renderProtocolValidInteger(preview.destinationY) &&
+    (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
+      safeMaskContains(preview.destinationX, preview.destinationY, 20,
+        preview.destinationMode === "visible" ? 24 : 20))
 }
 
 function renderProtocolValidatePrepare(body, options) {
@@ -339,12 +345,12 @@ export default {
     MAP_WIDTH: 212,
     MAP_HEIGHT: 520,
     connection: null,
+    connectionProbeTimer: null,
+    connectionProbeInFlight: false,
     destroyed: false,
     acceptingMessages: false,
     waiting: true,
     connected: false,
-    statusText: "PAGE READY",
-    detailText: "Connect Band 10 in BlueBandMap on iPhone.",
     logText: "Echo ready.",
     logRows: [],
     recentIDs: [],
@@ -382,7 +388,6 @@ export default {
     retiredMapURI: "",
     nextRenderToken: 1,
     showDiagnostics: true,
-    showCalibration: false,
     nextID: 1
   },
 
@@ -393,9 +398,9 @@ export default {
     try {
       this.connection = interconnect.instance()
       this.bindConnectionHandlers(this.connection)
+      this.probeConnection()
     } catch (error) {
-      this.statusText = "INTERCONNECT ERROR"
-      this.detailText = "Unable to start the system bridge."
+      this.connection = null
     }
   },
 
@@ -405,8 +410,7 @@ export default {
     var epoch = this.lifecycleEpoch
     connection.onopen = function () {
       if (!page.ownsConnectionEpoch(connection, epoch)) return
-      page.statusText = "IOS LINK OPEN"
-      page.detailText = "Press CHECK CONNECTION."
+      page.probeConnection()
     }
     connection.onclose = function () {
       if (!page.ownsConnectionEpoch(connection, epoch)) return
@@ -428,6 +432,8 @@ export default {
     this.acceptingMessages = false
     this.connected = false
     this.waiting = true
+    this.stopConnectionPolling()
+    this.connectionProbeInFlight = false
     this.resetMapLifecycle()
     if (!this.connection) return
     this.connection.onopen = null
@@ -436,30 +442,41 @@ export default {
     this.connection.onmessage = null
   },
 
-  checkConnection() {
-    if (this.destroyed) return
-    if (!this.connection) {
-      this.statusText = "NO INTERCONNECT API"
-      return
-    }
+  probeConnection() {
+    if (this.destroyed || this.connected || this.connectionProbeInFlight || !this.connection) return
     var page = this
     var ownedConnection = this.connection
     var epoch = this.lifecycleEpoch
-    ownedConnection.getReadyState({
-      success: function (result) {
-        if (!page.ownsConnectionEpoch(ownedConnection, epoch)) return
-        if (result.status === 1) page.unlock(ownedConnection)
-        else {
-          page.statusText = "IOS NOT CONNECTED"
-          page.detailText = "Ready state: " + result.status
-        }
-      },
-      fail: function (result, code) {
-        if (!page.ownsConnectionEpoch(ownedConnection, epoch)) return
-        page.statusText = "CHECK FAILED"
-        page.detailText = "Error code: " + code
-      }
-    })
+    this.connectionProbeInFlight = true
+    var finish = function (ready) {
+      if (!page.ownsConnectionEpoch(ownedConnection, epoch)) return
+      page.connectionProbeInFlight = false
+      if (ready) page.unlock(ownedConnection)
+      else page.scheduleConnectionProbe()
+    }
+    try {
+      ownedConnection.getReadyState({
+        success: function (result) { finish(result.status === 1) },
+        fail: function () { finish(false) }
+      })
+    } catch (error) {
+      finish(false)
+    }
+  },
+
+  scheduleConnectionProbe() {
+    if (this.destroyed || this.connected || this.connectionProbeTimer !== null) return
+    var page = this
+    this.connectionProbeTimer = setTimeout(function () {
+      page.connectionProbeTimer = null
+      page.probeConnection()
+    }, 2000)
+  },
+
+  stopConnectionPolling() {
+    if (this.connectionProbeTimer === null) return
+    clearTimeout(this.connectionProbeTimer)
+    this.connectionProbeTimer = null
   },
 
   unlock(connection) {
@@ -469,6 +486,7 @@ export default {
     this.waiting = false
     this.connected = true
     this.acceptingMessages = true
+    this.stopConnectionPolling()
     this.bindConnectionHandlers(ownedConnection)
     this.logRows = []
     if (newSession) this.recentIDs = []
@@ -479,10 +497,10 @@ export default {
     if (this.destroyed) return
     this.acceptingMessages = false
     this.connected = false
+    this.connectionProbeInFlight = false
     this.resetMapLifecycle()
     this.waiting = true
-    this.statusText = reason
-    this.detailText = "Reconnect on iPhone, then check again."
+    this.scheduleConnectionProbe()
   },
 
   ownsConnection(connection) {
@@ -502,7 +520,6 @@ export default {
     this.navStatusVisible = false
     this.navMarkerVisible = false
     this.navDestinationVisible = false
-    this.showCalibration = false
     this.startupStatus = "IOS CONNECTED • WAITING ROUTE"
     var cleanupURI = this.pendingPublication ? this.pendingPublication.uri :
       (this.activeTransfer ? this.activeTransfer.uri : this.unconfirmedURI)
@@ -1063,7 +1080,8 @@ export default {
       preparedAt: transfer.preparedAt,
       transferStartedAt: transfer.startedAt,
       validatedAt: transfer.validatedAt,
-      renderStartedAt: Date.now()
+      renderStartedAt: Date.now(),
+      preview: this.preparedRender ? this.preparedRender.preview : null
     }
     this.activeTransfer = null
     this.holdSuccessfulAsset(message.id)
@@ -1347,8 +1365,23 @@ export default {
     this.logText = "Echo ready."
   },
 
-  toggleCalibration() {
-    this.showCalibration = !this.showCalibration
+  applyPreviewOverlay(preview) {
+    if (!preview) {
+      this.navMarkerVisible = false
+      this.navDestinationVisible = false
+      return
+    }
+    this.navMarkerVisible = true
+    this.navMarkerPath = "/common/marker-" + preview.heading + ".png"
+    this.navMarkerStyle = "left:" + (preview.x - 23) + "px;top:" + (preview.y - 27) + "px;"
+    this.navDestinationVisible = preview.destinationMode !== "hidden"
+    if (this.navDestinationVisible) {
+      var height = preview.destinationMode === "visible" ? 24 : 20
+      this.navDestinationPath = preview.destinationMode === "visible" ?
+        "/common/destination-pin.png" : "/common/destination-edge.png"
+      this.navDestinationStyle = "left:" + (preview.destinationX - 10) + "px;top:" +
+        (preview.destinationY - height / 2) + "px;"
+    }
   },
 
   mapComplete(token) {
@@ -1378,9 +1411,7 @@ export default {
     this.navSequence = -1
     this.navStatus = "WAITING"
     this.navStatusVisible = false
-    this.navMarkerVisible = false
-    this.navDestinationVisible = false
-    this.statusText = "ROUTE CARD READY"
+    this.applyPreviewOverlay(publication.preview)
     var page = this
     var publish = function () {
       if (page.pendingPublication !== publication || page.lifecycleEpoch !== publication.epoch ||
@@ -1452,7 +1483,7 @@ export default {
 .title { margin-top: 18px; font-size: 25px; font-weight: bold; color: #ffffff; }
 .status, .online { margin-top: 12px; font-size: 16px; font-weight: bold; color: #5dffb0; }
 .detail { margin-top: 14px; width: 180px; height: 76px; font-size: 15px; lines: 4; text-align: center; color: #a9bdd6; }
-.check, .button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
+.button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
 .nav-shade { position: absolute; left: 0; top: 0; width: 212px; height: 96px; }
 .nav-header { position: absolute; left: 0; top: 0; width: 212px; height: 96px; }
@@ -1467,6 +1498,4 @@ export default {
 .diagnostics { width: 212px; flex-direction: column; align-items: center; }
 .log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }
 .clear { margin-top: 10px; width: 184px; height: 40px; border-radius: 20px; font-size: 14px; color: #a9bdd6; background-color: #1f3652; }
-.calibrate { margin-top: 10px; width: 184px; height: 40px; border-radius: 20px; font-size: 13px; color: #ffcc64; background-color: #1f3652; }
-.calibration { position: absolute; left: 0; top: 0; width: 212px; height: 520px; }
 </style>

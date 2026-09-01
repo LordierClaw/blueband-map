@@ -57,6 +57,39 @@ final class GuidancePresentationTests: XCTestCase {
         XCTAssertEqual(GuidancePresentationPolicy.routeBearing(route: route, progress: progress), 90, accuracy: 0.5)
     }
 
+    func testStationaryBearingUsesSelectedManeuverAndSkipsDegenerateForwardPoint() throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106)
+        let east = GeoPoint(latitude: 10, longitude: 106.001)
+        let route = RoutePlan(
+            points: [origin, origin, east],
+            instructions: [
+                RouteInstruction(distanceMeters: 0, headingDegrees: 0, sign: 0, interval: 0...1, streetName: "Duplicate"),
+                RouteInstruction(distanceMeters: 100, headingDegrees: 90, sign: 0, interval: 1...2, streetName: "East")
+            ],
+            distanceMeters: 100
+        )
+        let progress = RouteProgress(
+            pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0,
+            distanceFromRouteMeters: 0, matchedLocation: origin,
+            shouldReroute: false, status: .navigating
+        )
+        let degenerate = GuidanceSelection(
+            instructionIndex: 0,
+            instruction: route.instructions[0],
+            distanceMeters: 0
+        )
+
+        XCTAssertEqual(
+            GuidancePresentationPolicy.forwardPoint(route: route, progress: progress, selection: degenerate),
+            east
+        )
+        XCTAssertEqual(
+            GuidancePresentationPolicy.stationaryBearing(route: route, progress: progress, selection: degenerate),
+            90,
+            accuracy: 0.5
+        )
+    }
+
     func testCourseActivatesAfterTwoEligibleFixesAndFallsBackAfterThree() {
         var policy = GuidanceBearingPolicy()
         let first = policy.update(horizontalAccuracyMeters: 5, speedMetersPerSecond: 2, courseDegrees: 92, routeBearingDegrees: 0, confirmedBearingDegrees: 0, secondsSinceRefresh: 20)

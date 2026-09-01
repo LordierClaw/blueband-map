@@ -10,8 +10,7 @@ public struct BandDisplaySafeMask: Equatable, Sendable {
     public let bottomRadius: Double
     public let visualMargin: Double
 
-    // Estimated from the user's straight-on/near-straight Band 10 photographs.
-    // Keep this as the single calibration seam until the diagnostic screen is photographed.
+    // Hardware-accepted Smart Band 10 production mask. Changes require a dedicated calibration task.
     public static let smartBand10PhotoEstimate = BandDisplaySafeMask(
         width: 212,
         height: 520,

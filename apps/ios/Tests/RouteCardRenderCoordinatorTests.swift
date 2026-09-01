@@ -115,7 +115,11 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
             data: Data(repeating: 0x5A, count: 2_048),
             primitives: 0
         )
-        let preview = try RenderNavigationPreview(maneuver: .right, distanceMeters: 88, street: "Chu Huy Man")
+        let preview = try RenderNavigationPreview(
+            maneuver: .right, distanceMeters: 88, street: "Chu Huy Man",
+            x: 106, y: 374, headingBucket: 2,
+            destinationMode: .visible, destinationX: 106, destinationY: 120
+        )
 
         await coordinator.start(asset: asset, preview: preview)
 

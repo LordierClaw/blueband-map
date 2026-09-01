@@ -74,15 +74,35 @@ public enum GuidancePresentationPolicy {
     }
 
     public static func routeBearing(route: RoutePlan, progress: RouteProgress) -> Double {
+        stationaryBearing(route: route, progress: progress, selection: nil)
+    }
+
+    public static func forwardPoint(
+        route: RoutePlan,
+        progress: RouteProgress,
+        selection: GuidanceSelection?
+    ) -> GeoPoint? {
+        guard route.points.count >= 2 else { return nil }
+        let startIndex = min(progress.matchedSegmentIndex, route.points.count - 2)
+        let origin = progress.matchedLocation ?? route.points[startIndex]
+        if let selection {
+            let maneuverIndex = min(selection.instruction.interval.upperBound, route.points.count - 1)
+            let maneuver = route.points[maneuverIndex]
+            if meters(origin, maneuver) > 0.5 { return maneuver }
+        }
+        return route.points[(startIndex + 1)...].first { meters(origin, $0) > 0.5 }
+    }
+
+    public static func stationaryBearing(
+        route: RoutePlan,
+        progress: RouteProgress,
+        selection: GuidanceSelection?
+    ) -> Double {
         guard route.points.count >= 2 else { return 0 }
         let startIndex = min(progress.matchedSegmentIndex, route.points.count - 2)
         let origin = progress.matchedLocation ?? route.points[startIndex]
-        for index in (startIndex + 1)..<route.points.count {
-            if meters(origin, route.points[index]) > 0.5 {
-                return bearing(origin, route.points[index])
-            }
-        }
-        return 0
+        guard let forward = forwardPoint(route: route, progress: progress, selection: selection) else { return 0 }
+        return bearing(origin, forward)
     }
 
     private static func distance(to instruction: RouteInstruction, route: RoutePlan, progress: RouteProgress) -> Double {

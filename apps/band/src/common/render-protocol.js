@@ -50,11 +50,31 @@ function reject(code) {
   return { ok: false, code }
 }
 
+function safePixel(x, y) {
+  if (x < 12 || x > 200 || y < 12 || y > 508) return false
+  if (y < 106) return Math.hypot(x - 106, y - 106) <= 94
+  if (y > 413) return Math.hypot(x - 106, y - 413) <= 94
+  return true
+}
+
+function safeCenter(x, y, width, height) {
+  const halfWidth = width / 2 + 6, halfHeight = height / 2 + 6
+  return safePixel(x - halfWidth, y - halfHeight) && safePixel(x + halfWidth, y - halfHeight) &&
+    safePixel(x - halfWidth, y + halfHeight) && safePixel(x + halfWidth, y + halfHeight)
+}
+
 function validPreview(preview) {
   return preview && typeof preview === "object" && !Array.isArray(preview) &&
     ["straight", "left", "right", "uTurn", "roundabout", "arrive"].includes(preview.maneuver) &&
     validInteger(preview.distanceM) && preview.distanceM >= 0 &&
-    typeof preview.street === "string" && utf8Length(preview.street) <= 48
+    typeof preview.street === "string" && utf8Length(preview.street) <= 48 &&
+    validInteger(preview.x) && validInteger(preview.y) && safeCenter(preview.x, preview.y, 46, 54) &&
+    validInteger(preview.heading) && preview.heading >= 0 && preview.heading < 8 &&
+    ["visible", "edge", "hidden"].includes(preview.destinationMode) &&
+    validInteger(preview.destinationX) && validInteger(preview.destinationY) &&
+    (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
+      safeCenter(preview.destinationX, preview.destinationY, 20,
+        preview.destinationMode === "visible" ? 24 : 20))
 }
 
 function validatePrepare(body, options = {}) {

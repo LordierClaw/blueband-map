@@ -79,6 +79,61 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         XCTAssertEqual(configuration.point(for: request.matchedPosition).y, 520 * 0.72, accuracy: 0.5)
     }
 
+    func testCardinalAndStationaryRouteShapesAlwaysProjectForwardAboveUser() throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106)
+        let forwardPoints = [
+            GeoPoint(latitude: 10.001, longitude: 106),
+            GeoPoint(latitude: 10, longitude: 106.001),
+            GeoPoint(latitude: 9.999, longitude: 106),
+            GeoPoint(latitude: 10, longitude: 105.999),
+            GeoPoint(latitude: 10.000_35, longitude: 106.000_18),
+            GeoPoint(latitude: 21.065587, longitude: 106.023863)
+        ]
+        for (index, forward) in forwardPoints.enumerated() {
+            let routeOrigin = index == forwardPoints.count - 1
+                ? GeoPoint(latitude: 21.039341, longitude: 106.092286) : origin
+            let route = RoutePlan(
+                points: [routeOrigin, forward],
+                instructions: [RouteInstruction(
+                    distanceMeters: 100, headingDegrees: 0, sign: 0,
+                    interval: 0...1, streetName: "Road"
+                )],
+                distanceMeters: 100
+            )
+            let progress = RouteProgress(
+                pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0,
+                distanceFromRouteMeters: 0, matchedLocation: routeOrigin,
+                shouldReroute: false, status: .navigating
+            )
+            let selection = try XCTUnwrap(GuidancePresentationPolicy.select(
+                route: route, progress: progress, horizontalAccuracyMeters: 5
+            ))
+            let bearing = GuidancePresentationPolicy.stationaryBearing(
+                route: route, progress: progress, selection: selection
+            )
+            let request = VietmapSnapshotRequest(
+                route: route, matchedPosition: routeOrigin,
+                overlayGeometry: RouteOverlayGeometry(
+                    subdued: route.points, traveled: [routeOrigin], active: route.points, context: []
+                ),
+                headingDegrees: bearing, nextManeuver: forward, tileMapKey: "fixture-key"
+            )
+            let configuration = try VietmapSnapshotConfiguration.make(request)
+            let user = configuration.point(for: routeOrigin)
+            let ahead = configuration.point(for: forward)
+            XCTAssertLessThan(ahead.y, user.y, "forward point must be above user for \(forward)")
+            let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
+            XCTAssertTrue(mask.contains(
+                center: ScreenPoint(x: Int(user.x.rounded()), y: Int(user.y.rounded())),
+                resourceWidth: 46, resourceHeight: 54
+            ))
+            XCTAssertTrue(mask.contains(
+                center: ScreenPoint(x: Int(ahead.x.rounded()), y: Int(ahead.y.rounded())),
+                resourceWidth: 1, resourceHeight: 1
+            ))
+        }
+    }
+
     func testOverlayCommandsKeepRouteGeometryAndManeuverAboveRoads() throws {
         let route = RoutePlan(
             points: [GeoPoint(latitude: 10, longitude: 106), GeoPoint(latitude: 10.01, longitude: 106.01), GeoPoint(latitude: 10.02, longitude: 106.02)],

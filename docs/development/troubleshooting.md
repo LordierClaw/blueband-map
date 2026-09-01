@@ -7,7 +7,7 @@
 | FE95/5E/5F missing | Confirm the selected device is Xiaomi Smart Band 10 |
 | HMAC mismatch | Re-enter the correct 32-hex AuthKey; the session retries once only |
 | Proof timeout | Close Mi Fitness, reconnect, keep both apps foregrounded |
-| RPK remains waiting | Open BlueBandMap RPK and press `CHECK CONNECTION` |
+| RPK remains waiting | Keep BlueBandMap open on iPhone; the RPK retries the connection automatically every 2 seconds |
 | Fingerprint mismatch | Reinstall the known RPK; reset trust only after confirming that change |
 | Old RPK UI appears | Uninstall the RPK, reinstall the newly hashed artifact, and confirm displayed version |
 | Free sideload expired | Re-sign/reinstall with the same Apple ID workflow |

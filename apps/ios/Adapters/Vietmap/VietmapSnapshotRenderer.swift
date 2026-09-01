@@ -50,29 +50,48 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
             throw VietmapSnapshotRenderer.Error.invalidRequest
         }
         let distance = meters(request.matchedPosition, request.nextManeuver)
-        let zoom: Double = distance <= 150 ? 17 : distance <= 500 ? 16 : distance <= 1_500 ? 15 : 14
+        var zoom: Double = distance <= 150 ? 17 : distance <= 500 ? 16 : distance <= 1_500 ? 15 : 14
         let size = CGSize(width: RenderProtocol.viewportWidth, height: RenderProtocol.viewportHeight)
         let overlayInsets = EdgeInsets(top: 144, left: 14, bottom: 12, right: 14)
-        let center = cameraCenter(
-            matched: request.matchedPosition,
-            heading: request.headingDegrees,
-            zoom: zoom,
-            desiredPoint: CGPoint(
-                x: min(size.width - overlayInsets.right, max(overlayInsets.left, size.width / 2)),
-                y: min(size.height - overlayInsets.bottom, max(overlayInsets.top, size.height * 0.72))
-            ),
-            size: size
+        let desiredPoint = CGPoint(
+            x: min(size.width - overlayInsets.right, max(overlayInsets.left, size.width / 2)),
+            y: min(size.height - overlayInsets.bottom, max(overlayInsets.top, size.height * 0.72))
         )
-        return Self(
-            size: size,
-            scale: 1,
-            pitch: 0,
-            heading: request.headingDegrees,
-            userVerticalFraction: 0.72,
-            overlayInsets: overlayInsets,
-            zoom: zoom,
-            center: center
-        )
+        let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
+        while zoom >= 10 {
+            let center = cameraCenter(
+                matched: request.matchedPosition,
+                heading: request.headingDegrees,
+                zoom: zoom,
+                desiredPoint: desiredPoint,
+                size: size
+            )
+            let configuration = Self(
+                size: size,
+                scale: 1,
+                pitch: 0,
+                heading: request.headingDegrees,
+                userVerticalFraction: 0.72,
+                overlayInsets: overlayInsets,
+                zoom: zoom,
+                center: center
+            )
+            let user = configuration.point(for: request.matchedPosition)
+            let forward = configuration.point(for: request.nextManeuver)
+            if forward.y < user.y,
+               mask.contains(
+                center: ScreenPoint(x: Int(user.x.rounded()), y: Int(user.y.rounded())),
+                resourceWidth: 46,
+                resourceHeight: 54
+               ),
+               mask.contains(
+                center: ScreenPoint(x: Int(forward.x.rounded()), y: Int(forward.y.rounded())),
+                resourceWidth: 1,
+                resourceHeight: 1
+               ) { return configuration }
+            zoom -= 1
+        }
+        throw VietmapSnapshotRenderer.Error.invalidRequest
     }
 
     private static func cameraCenter(

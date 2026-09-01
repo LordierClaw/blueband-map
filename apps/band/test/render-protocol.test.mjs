@@ -49,7 +49,11 @@ test("matching prepare admits begin and stale or missing preparation is rejected
 })
 
 test("prepare admits a bounded navigation preview", () => {
-  const preview = { maneuver: "right", distanceM: 88, street: "Chu Huy Man" }
+  const preview = {
+    maneuver: "right", distanceM: 88, street: "Chu Huy Man",
+    x: 106, y: 374, heading: 3,
+    destinationMode: "edge", destinationX: 180, destinationY: 260
+  }
   const result = validatePrepare(prepare({ preview }))
   assert.equal(result.ok, true)
   assert.deepEqual(result.prepared.preview, preview)
@@ -58,6 +62,11 @@ test("prepare admits a bounded navigation preview", () => {
     null,
     { maneuver: "fork", distanceM: 88, street: "Chu Huy Man" },
     { maneuver: "right", distanceM: -1, street: "Chu Huy Man" },
-    { maneuver: "right", distanceM: 88, street: "x".repeat(49) }
+    { ...preview, street: "x".repeat(49) },
+    { ...preview, x: -1 },
+    { ...preview, x: 20, y: 20 },
+    { ...preview, heading: 8 },
+    { ...preview, destinationY: undefined },
+    { ...preview, destinationMode: "hidden", destinationX: 1 }
   ]) assert.equal(validatePrepare(prepare({ preview: invalid })).ok, false)
 })

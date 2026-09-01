@@ -94,19 +94,59 @@ public enum RenderProtocol {
 }
 
 public struct RenderNavigationPreview: Equatable, Codable, Sendable {
-    public enum Error: Swift.Error, Equatable, Sendable { case invalidDistance }
+    public enum Error: Swift.Error, Equatable, Sendable {
+        case invalidDistance, invalidMarker, invalidHeading, invalidDestination
+    }
 
     public let maneuver: NavigationManeuver
     public let distanceMeters: Int
     public let street: String
+    public let x: Int
+    public let y: Int
+    public let headingBucket: Int
+    public let destinationMode: DestinationPresentationMode
+    public let destinationX: Int
+    public let destinationY: Int
 
-    public init(maneuver: NavigationManeuver, distanceMeters: Int, street: String) throws {
+    public init(
+        maneuver: NavigationManeuver,
+        distanceMeters: Int,
+        street: String,
+        x: Int,
+        y: Int,
+        headingBucket: Int,
+        destinationMode: DestinationPresentationMode,
+        destinationX: Int,
+        destinationY: Int
+    ) throws {
         guard distanceMeters >= 0 else { throw Error.invalidDistance }
+        guard BandDisplaySafeMask.smartBand10PhotoEstimate.contains(
+            center: ScreenPoint(x: x, y: y),
+            resourceWidth: 46,
+            resourceHeight: 54
+        ) else { throw Error.invalidMarker }
+        guard (0..<8).contains(headingBucket) else { throw Error.invalidHeading }
+        if destinationMode == .hidden {
+            guard destinationX == 0, destinationY == 0 else { throw Error.invalidDestination }
+        } else {
+            let height = destinationMode == .visible ? 24 : 20
+            guard BandDisplaySafeMask.smartBand10PhotoEstimate.contains(
+                center: ScreenPoint(x: destinationX, y: destinationY),
+                resourceWidth: 20,
+                resourceHeight: height
+            ) else { throw Error.invalidDestination }
+        }
         var boundedStreet = street
         while boundedStreet.utf8.count > 48 { boundedStreet.removeLast() }
         self.maneuver = maneuver
         self.distanceMeters = distanceMeters
         self.street = boundedStreet
+        self.x = x
+        self.y = y
+        self.headingBucket = headingBucket
+        self.destinationMode = destinationMode
+        self.destinationX = destinationX
+        self.destinationY = destinationY
     }
 
     public func jsonBody() -> [String: JSONValue] {
@@ -114,6 +154,12 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
             "maneuver": .string(maneuver.rawValue),
             "distanceM": .number(Double(distanceMeters)),
             "street": .string(street),
+            "x": .number(Double(x)),
+            "y": .number(Double(y)),
+            "heading": .number(Double(headingBucket)),
+            "destinationMode": .string(destinationMode.rawValue),
+            "destinationX": .number(Double(destinationX)),
+            "destinationY": .number(Double(destinationY)),
         ]
     }
 }

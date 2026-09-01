@@ -19,7 +19,13 @@ final class RenderProtocolTests: XCTestCase {
         let preview = try RenderNavigationPreview(
             maneuver: .right,
             distanceMeters: 88,
-            street: String(repeating: "Đ", count: 40)
+            street: String(repeating: "Đ", count: 40),
+            x: 106,
+            y: 374,
+            headingBucket: 3,
+            destinationMode: .edge,
+            destinationX: 180,
+            destinationY: 260
         )
         let prepare = try RenderPrepareBody(runID: runID, sceneID: sceneID, asset: asset, preview: preview)
 
@@ -40,6 +46,9 @@ final class RenderProtocolTests: XCTestCase {
             "width", "height", "bytes", "sha256", "primitives", "preview",
         ])
         XCTAssertEqual(prepare.jsonBody()["preview"], .object(preview.jsonBody()))
+        XCTAssertEqual(preview.jsonBody()["x"], .number(106))
+        XCTAssertEqual(preview.jsonBody()["heading"], .number(3))
+        XCTAssertEqual(preview.jsonBody()["destinationMode"], .string("edge"))
         let envelope = ApplicationEnvelope.message(
             id: "prepare-0123456789", source: .ios,
             topic: RenderProtocol.prepareTopic, body: prepare.jsonBody()
@@ -83,7 +92,29 @@ final class RenderProtocolTests: XCTestCase {
 
     func testNavigationPreviewRejectsNegativeDistance() {
         XCTAssertThrowsError(try RenderNavigationPreview(
-            maneuver: .straight, distanceMeters: -1, street: "Road"
+            maneuver: .straight, distanceMeters: -1, street: "Road",
+            x: 106, y: 374, headingBucket: 0,
+            destinationMode: .hidden, destinationX: 0, destinationY: 0
+        ))
+        XCTAssertThrowsError(try RenderNavigationPreview(
+            maneuver: .straight, distanceMeters: 1, street: "Road",
+            x: -1, y: 374, headingBucket: 0,
+            destinationMode: .hidden, destinationX: 0, destinationY: 0
+        ))
+        XCTAssertThrowsError(try RenderNavigationPreview(
+            maneuver: .straight, distanceMeters: 1, street: "Road",
+            x: 20, y: 20, headingBucket: 0,
+            destinationMode: .hidden, destinationX: 0, destinationY: 0
+        ))
+        XCTAssertThrowsError(try RenderNavigationPreview(
+            maneuver: .straight, distanceMeters: 1, street: "Road",
+            x: 106, y: 374, headingBucket: 8,
+            destinationMode: .hidden, destinationX: 0, destinationY: 0
+        ))
+        XCTAssertThrowsError(try RenderNavigationPreview(
+            maneuver: .straight, distanceMeters: 1, street: "Road",
+            x: 106, y: 374, headingBucket: 0,
+            destinationMode: .hidden, destinationX: 1, destinationY: 0
         ))
     }
 

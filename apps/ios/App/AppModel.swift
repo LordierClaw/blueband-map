@@ -362,12 +362,22 @@ final class AppModel: ObservableObject {
             )
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
+            var selection = GuidancePresentationPolicy.select(
+                route: route,
+                progress: progress,
+                horizontalAccuracyMeters: first.horizontalAccuracy
+            )
+            let initialRouteBearing = GuidancePresentationPolicy.stationaryBearing(
+                route: route,
+                progress: progress,
+                selection: selection
+            )
             var bearing = guidanceBearingPolicy.update(
                 horizontalAccuracyMeters: first.horizontalAccuracy,
                 speedMetersPerSecond: first.speed,
                 courseDegrees: first.course,
-                routeBearingDegrees: GuidancePresentationPolicy.routeBearing(route: route, progress: progress),
-                confirmedBearingDegrees: GuidancePresentationPolicy.routeBearing(route: route, progress: progress),
+                routeBearingDegrees: initialRouteBearing,
+                confirmedBearingDegrees: initialRouteBearing,
                 secondsSinceRefresh: .infinity
             )
             let limitedMap = try await publish(
@@ -391,7 +401,16 @@ final class AppModel: ObservableObject {
                 let goodFix = location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 25
                 if goodFix { lastGoodLocation = location.geoPoint }
                 let displayedLocation = goodFix ? location.geoPoint : lastGoodLocation
-                let routeBearing = GuidancePresentationPolicy.routeBearing(route: route, progress: progress)
+                selection = GuidancePresentationPolicy.select(
+                    route: route,
+                    progress: progress,
+                    horizontalAccuracyMeters: location.horizontalAccuracy
+                )
+                let routeBearing = GuidancePresentationPolicy.stationaryBearing(
+                    route: route,
+                    progress: progress,
+                    selection: selection
+                )
                 bearing = guidanceBearingPolicy.update(
                     horizontalAccuracyMeters: location.horizontalAccuracy,
                     speedMetersPerSecond: location.speed,
@@ -417,18 +436,23 @@ final class AppModel: ObservableObject {
                     )
                     tracker = RouteProgressTracker()
                     progress = tracker.update(route: route, location: location.geoPoint, horizontalAccuracyMeters: location.horizontalAccuracy)
-                    let rerouteRouteBearing = GuidancePresentationPolicy.routeBearing(route: route, progress: progress)
+                    let rerouteSelection = GuidancePresentationPolicy.select(
+                        route: route,
+                        progress: progress,
+                        horizontalAccuracyMeters: location.horizontalAccuracy
+                    )
+                    selection = rerouteSelection
+                    let rerouteRouteBearing = GuidancePresentationPolicy.stationaryBearing(
+                        route: route,
+                        progress: progress,
+                        selection: rerouteSelection
+                    )
                     let rerouteBearing = bearing.source == .course ? bearing.bearingDegrees : rerouteRouteBearing
                     scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey, bearingDegrees: rerouteBearing)
                     lastReroute = Date()
                     contextRefreshed = true
                 }
                 let status: NavigationStatus = progress.status == .gpsLow ? .gpsLow : (limitedMap ? .limitedMap : .navigating)
-                let selection = GuidancePresentationPolicy.select(
-                    route: route,
-                    progress: progress,
-                    horizontalAccuracyMeters: location.horizontalAccuracy
-                )
                 let instruction = selection?.instruction
                 let markerPoint = activeSnapshotConfiguration?.point(for: displayedLocation)
                 let nextManeuverVisible = instruction.flatMap {
@@ -531,6 +555,11 @@ final class AppModel: ObservableObject {
         )
         let instruction = selection?.instruction ?? route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
         let maneuverIndex = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
+        let forwardPoint = GuidancePresentationPolicy.forwardPoint(
+            route: route,
+            progress: progress,
+            selection: selection
+        ) ?? route.points[maneuverIndex]
         var prepared: (snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)?
         var candidates: [(snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)] = []
         var rejectedSnapshots: [(snapshot: VietmapSnapshotOutput, profile: SnapshotPaletteProfile)] = []
@@ -548,7 +577,7 @@ final class AppModel: ObservableObject {
                     context: []
                 ),
                 headingDegrees: bearingDegrees,
-                nextManeuver: route.points[maneuverIndex],
+                nextManeuver: forwardPoint,
                 tileMapKey: tileMapKey,
                 profile: profile
             ))
@@ -599,10 +628,42 @@ final class AppModel: ObservableObject {
             "styleMs=\(snapshot.styleLoadMilliseconds) snapshotMs=\(snapshot.snapshotMilliseconds) encodeMs=\(encoded.durationMilliseconds)"
         )
         routePreviewPNG = asset.data
+        let safeMask = BandDisplaySafeMask.smartBand10PhotoEstimate
+        let markerLocation = GuidancePresentationPolicy.markerLocation(
+            progress: progress,
+            rawLocation: location.geoPoint
+        )
+        let projectedMarker = snapshot.configuration.point(for: markerLocation)
+        let marker = safeMask.clampedCenter(
+            ScreenPoint(
+                x: max(0, min(RenderProtocol.viewportWidth - 1, Int(projectedMarker.x.rounded()))),
+                y: max(0, min(RenderProtocol.viewportHeight - 1, Int(projectedMarker.y.rounded())))
+            ),
+            resourceWidth: 46,
+            resourceHeight: 54
+        )
+        let destination = destinationPresentation(
+            status: .navigating,
+            marker: marker,
+            mask: safeMask,
+            configuration: snapshot.configuration
+        )
+        let markerHeading = location.course >= 0
+            ? location.course : GuidancePresentationPolicy.stationaryBearing(
+                route: route,
+                progress: progress,
+                selection: selection
+            )
         let preview = try RenderNavigationPreview(
             maneuver: instruction?.maneuver ?? .straight,
             distanceMeters: max(0, Int((selection?.distanceMeters ?? 0).rounded())),
-            street: instruction?.streetName ?? ""
+            street: instruction?.streetName ?? "",
+            x: marker.x,
+            y: marker.y,
+            headingBucket: Self.headingBucket(markerHeading - snapshot.configuration.heading),
+            destinationMode: destination.mode,
+            destinationX: destination.point.x,
+            destinationY: destination.point.y
         )
         await renderCoordinator.start(asset: asset, diagnostics: RouteCardRenderDiagnostics(
             gpsWaitMilliseconds: gpsWaitMilliseconds,
@@ -751,11 +812,14 @@ final class AppModel: ObservableObject {
     private func destinationPresentation(
         status: NavigationStatus,
         marker: ScreenPoint,
-        mask: BandDisplaySafeMask
+        mask: BandDisplaySafeMask,
+        configuration suppliedConfiguration: VietmapSnapshotConfiguration? = nil
     ) -> (mode: DestinationPresentationMode, point: ScreenPoint) {
         guard status != .arrived,
               let destination = navigationDestination,
-              let configuration = activeSnapshotConfiguration else { return (.hidden, ScreenPoint(x: 0, y: 0)) }
+              let configuration = suppliedConfiguration ?? activeSnapshotConfiguration else {
+            return (.hidden, ScreenPoint(x: 0, y: 0))
+        }
         let projected = configuration.point(for: destination)
         guard projected.x.isFinite, projected.y.isFinite else { return (.hidden, ScreenPoint(x: 0, y: 0)) }
         let target = ScreenPoint(
