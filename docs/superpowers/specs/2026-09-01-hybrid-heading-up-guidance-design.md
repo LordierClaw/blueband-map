@@ -101,15 +101,14 @@ Each `nav.update` includes:
 
 The fields are validated together. Missing, partial, non-integer, or out-of-bounds destination data rejects the update. `hidden` uses stable zero coordinates. This extends the application JSON only; Xiaomi BLE/SPP/authentication bytes and envelope framing remain unchanged.
 
-Use an inset vertical capsule as the destination safe boundary:
+Use the hardware-calibrated `BandDisplaySafeMask` as the destination boundary. Do not approximate the display with a rectangular clamp or an unverified capsule radius.
 
-- outer safe capsule: `x: 24...188`, `y: 112...496`, radius 82;
-- effective center boundary for a 20 px indicator: `x: 34...178`, `y: 122...486`, radius 72.
+For each resource, derive a center-valid mask by eroding `BandDisplaySafeMask` by the resource's non-transparent pixel bounds plus a 6 px visual margin. The 20×20 edge indicator therefore has its own center-valid contour; the 20×24 destination pin and 46×54 user marker use different contours.
 
 Project the destination using the confirmed snapshot configuration:
 
-1. If the projected destination center is inside the effective capsule, use `visible` at the projected coordinate.
-2. Otherwise, trace a ray from the current projected user marker toward the projected destination and intersect it with the effective capsule; use `edge` at that intersection.
+1. If every visible destination-pin pixel fits inside its center-valid mask at the projected coordinate, use `visible`.
+2. Otherwise, trace a ray from the current projected user marker toward the projected destination and intersect it with the edge-indicator center-valid contour; use `edge` at that intersection.
 3. If no confirmed snapshot exists, navigation has arrived, or projection input is invalid, use `hidden`.
 
 The edge calculation uses the confirmed map and marker coordinates until a pending snapshot is atomically published. It must never mix pending-map projection with the confirmed raster.
@@ -154,22 +153,37 @@ Initial rendering uses route-derived bearing, so navigation does not require an 
 
 All values refer to the 212×520 Band canvas.
 
+### Hardware-calibrated display mask
+
+Xiaomi documents a 212×520 pill-shaped display but does not publish an exact pixel contour or corner/cap radius. Production placement must therefore use a mask calibrated on the target Smart Band 10 rather than treating the 212×520 bounding rectangle as fully visible.
+
+Before finalizing production coordinates, build a diagnostic RPK screen containing:
+
+- candidate contour dots at 16 evenly spaced directions around the pill;
+- nested candidate insets at 6, 10, 14, and 18 px;
+- horizontal and vertical rulers through the screen center;
+- numbered top, upper-corner, side, lower-corner, and bottom probes;
+- the 46×54 user marker and 20×20 edge indicator placed at each candidate extreme.
+
+Photograph the diagnostic screen straight-on on the same Band 10 hardware. Select the most outward candidate contour for which every opaque probe pixel remains visible; that contour plus its accepted inset defines `BandDisplaySafeMask`. Record the accepted contour parameters and calibration photo in the hardware handoff. If the top and bottom curves are not symmetric in observed pixels, store independent top and bottom contour parameters rather than forcing one radius.
+
+`BandDisplaySafeMask` is a shared pure-data contour used by Swift projection tests, RPK marker clamping, destination ray intersection, and HUD layout assertions. Production code must not keep a second set of handwritten edge constants.
+
 ### HUD
 
-- Keep the full-width fade, but put readable content within horizontal coordinates 38...174.
-- Maneuver arrow display size becomes 44×56 at approximately `left: 38`, `top: 20`.
-- Distance begins near `left: 86`, uses width 88, and moves down from the curved top edge.
-- Street and exceptional status use the same right boundary of 174.
+- Keep the full-width fade, but require every opaque arrow pixel and every text bounding box to fit inside the calibrated mask with at least the accepted visual inset.
+- Maneuver arrow display size becomes 44×56; its final `left` and `top` come from the calibrated top-contour fit rather than assumed rectangular coordinates.
+- Distance, street, and exceptional status share a calibrated right boundary and move below the verified top curve.
 - Distance remains primary; street remains one line; status remains visually subordinate.
 
-Exact offsets may move by at most 2 px during hardware visual tuning, but content must not move closer to either curved edge than the values above.
+The implementation plan may begin from the current conservative 38...174 horizontal content range, but those values are provisional until the diagnostic RPK confirms the physical contour.
 
 ### User marker
 
 - Increase marker resource size from 38×44 to 46×54.
 - Preserve transparent margins, a dark outline, and bright green fill.
 - Keep eight heading buckets.
-- Clamp marker center to `x: 38...174` and `y: 148...464` so the larger resource remains away from the curved edge and HUD.
+- Clamp marker center through its center-valid contour derived from `BandDisplaySafeMask`; do not clamp x and y independently against a rectangle.
 - The marker heading continues to update through `nav.update` without requiring a snapshot refresh.
 
 Destination pin and edge-ring overlays render below the user marker and above the raster. RPK packaging validates their exact dimensions, indexed PNG format, visible bounds, and transparent margins.
@@ -214,8 +228,9 @@ Exact coordinates, API keys, device identifiers, and raw captures remain exclude
 - Snapshot configuration uses the selected bearing and retains the user near the lower safe viewport.
 - Overlay commands use matched segment/fraction and the three route emphasis levels.
 - Marker projection and route split align under bearings 0, 90, 180, and 270 degrees.
-- Destination projection selects `visible` inside the safe capsule and `edge` at the capsule intersection outside it.
+- Destination projection selects `visible` inside the resource-specific safe mask and `edge` at the calibrated contour intersection outside it.
 - Destination edge projection remains correct across all four cardinal bearings and diagonal directions.
+- Every opaque pixel of each marker remains inside synthetic asymmetric top/bottom calibration masks.
 - Pending snapshot coordinates are never published against the confirmed raster.
 - Failed refresh retains the confirmed map.
 
@@ -227,6 +242,8 @@ Exact coordinates, API keys, device identifiers, and raw captures remain exclude
 - Marker clamping uses the new center bounds.
 - Destination pin is an indexed 20×24 PNG and edge indicator is an indexed 20×20 PNG.
 - `nav.update` accepts only complete bounded destination fields and switches atomically between visible pin, edge ring, and hidden state.
+- Diagnostic calibration probes cover 16 directions and all four candidate insets.
+- Production HUD/marker CSS and projection helpers consume the same calibrated mask constants.
 - Existing envelope, scene, digest, publication, and disconnect tests remain unchanged.
 
 Run the canonical gates through Make, then run iOS simulator/device build through GitHub Actions.
@@ -235,14 +252,15 @@ Run the canonical gates through Make, then run iOS simulator/device build throug
 
 Use a safe outdoor route containing a straight section, a left turn, a right turn, and at least one parallel or crossing road.
 
-1. Start while stationary. Confirm the road-snapped marker touches the bright route and the route faces upward.
-2. Confirm a sub-accuracy instruction such as 2 m is replaced by the next useful maneuver.
-3. Begin moving above 3.6 km/h. Confirm the next confirmed snapshot adopts travel course without oscillating on one poor fix.
-4. Pass at least three maneuvers. Confirm distance decreases, turn changes happen once, and the active leg begins at the marker.
-5. Choose a route whose destination begins outside the viewport. Confirm an amber edge ring appears in the correct direction, stays inside the pill safe area, and becomes a destination pin when the destination enters view.
-6. Stop and resume. Confirm the marker continues rotating through heading buckets while full-map refreshes remain bounded.
-7. Deviate from route safely. Confirm rerouting behavior remains unchanged and no false connector is drawn.
-8. Check HUD, user marker, destination pin, and edge-ring visibility around every curved edge and export the final sanitized debug log.
+1. Run the diagnostic RPK straight-on, photograph all contour probes, and lock the smallest fully visible inset as the production mask.
+2. Start while stationary. Confirm the road-snapped marker touches the bright route and the route faces upward.
+3. Confirm a sub-accuracy instruction such as 2 m is replaced by the next useful maneuver.
+4. Begin moving above 3.6 km/h. Confirm the next confirmed snapshot adopts travel course without oscillating on one poor fix.
+5. Pass at least three maneuvers. Confirm distance decreases, turn changes happen once, and the active leg begins at the marker.
+6. Choose a route whose destination begins outside the viewport. Confirm an amber edge ring appears in the correct direction, follows the calibrated pill contour, and becomes a destination pin when the destination enters view.
+7. Stop and resume. Confirm the marker continues rotating through heading buckets while full-map refreshes remain bounded.
+8. Deviate from route safely. Confirm rerouting behavior remains unchanged and no false connector is drawn.
+9. Check HUD, user marker, destination pin, and edge-ring visibility around every curved edge and export the final sanitized debug log.
 
 Compilation, simulator tests, and deterministic fixtures do not establish Smart Band 10 hardware acceptance.
 
@@ -252,6 +270,7 @@ Compilation, simulator tests, and deterministic fixtures do not establish Smart 
 - [Google Navigation SDK road-snapped location and travel-mode course](https://developers.google.com/maps/documentation/navigation/ios-sdk/reference/objc/Classes/GMSMapView)
 - [Google top-down heading-up navigation perspective](https://developers.google.com/maps/documentation/navigation/ios-sdk/reference/objc/Enums/GMSNavigationCameraPerspective)
 - [Apple MapKit follow-with-heading behavior](https://developer.apple.com/documentation/mapkit/mkusertrackingmode/followwithheading)
+- [Xiaomi Smart Band 10 official display shape and dimensions](https://www.mi.com/qa/product/xiaomi-smart-band-10/)
 
 ## Versioning and artifacts
 
