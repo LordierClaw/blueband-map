@@ -43,9 +43,12 @@ Add the action point to `GuidanceSelection`:
 public let maneuverPointIndex: Int
 ```
 
-In `GuidancePresentationPolicy.select`, retain the existing pass-radius loop to identify the route section being traversed. Use that section's upper bound as `maneuverPointIndex`, but expose the following instruction as the header action:
+In `GuidancePresentationPolicy.select`, identify the first instruction section whose upper bound is strictly ahead of the matched segment. Use that section's upper bound as `maneuverPointIndex`, but expose the following instruction as the header action. Keep the accuracy parameter for API compatibility without using it to skip a maneuver before the matched geometry passes its boundary:
 
 ```swift
+let index = route.instructions.firstIndex {
+    $0.interval.upperBound > progress.matchedSegmentIndex
+} ?? route.instructions.count - 1
 let maneuverPointIndex = min(route.instructions[index].interval.upperBound, route.points.count - 1)
 let actionIndex = min(index + 1, route.instructions.count - 1)
 return GuidanceSelection(

@@ -17,7 +17,7 @@ The current implementation has four mismatches:
 
 ## Guidance model
 
-`GuidancePresentationPolicy` will first identify the route instruction section currently being traversed. The distance from the matched position to that section's upper-bound point remains the geometric distance to the next action, while the following instruction supplies the maneuver and street shown in the header. If no later instruction remains, the final instruction is used. The existing pass-radius loop skips zero-length or already-passed sections in provider order.
+`GuidancePresentationPolicy` will first identify the first route instruction section whose upper-bound point is still ahead of the matched segment. The distance from the matched position to that section's upper-bound point is the geometric distance to the next action, while the following instruction supplies the maneuver and street shown in the header. If no later instruction remains, the final instruction is used. Zero-length or already-passed sections are skipped by their geometry boundary, not prematurely by GPS accuracy.
 
 The distance calculation follows route geometry from the matched fractional position to the current section's upper-bound point. It does not use the provider instruction's declared distance as the live remaining distance, because multiple instructions can share a polyline index.
 
