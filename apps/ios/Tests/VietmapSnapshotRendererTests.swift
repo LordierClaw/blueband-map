@@ -100,10 +100,9 @@ final class VietmapSnapshotRendererTests: XCTestCase {
                 )],
                 distanceMeters: 100
             )
-            let progress = RouteProgress(
-                pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0,
-                distanceFromRouteMeters: 0, matchedLocation: routeOrigin,
-                shouldReroute: false, status: .navigating
+            var tracker = RouteProgressTracker()
+            let progress = tracker.update(
+                route: route, location: routeOrigin, horizontalAccuracyMeters: 5
             )
             let selection = try XCTUnwrap(GuidancePresentationPolicy.select(
                 route: route, progress: progress, horizontalAccuracyMeters: 5
