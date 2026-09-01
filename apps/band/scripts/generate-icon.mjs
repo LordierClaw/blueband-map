@@ -182,8 +182,8 @@ function fillPolygon(bitmap, imageWidth, imageHeight, points, color) {
 
 for (let bucket = 0; bucket < 8; bucket += 1) {
   const marker = new Uint8Array(46 * 54)
-  fillPolygon(marker, 46, 54, [[23, 6], [38, 43], [8, 43]], 1)
-  fillPolygon(marker, 46, 54, [[23, 13], [32, 37], [14, 37]], 2)
+  fillPolygon(marker, 46, 54, [[23, 3], [43, 48], [3, 48]], 1)
+  fillPolygon(marker, 46, 54, [[23, 7], [39, 45], [7, 45]], 2)
   await writeIndexed(`marker-${bucket}.png`, 46, 54,
     [[0, 0, 0], [4, 19, 10], [102, 255, 122]], [0, 255, 255], marker)
 }
@@ -203,3 +203,20 @@ paintCircle(destinationEdge, 20, 20, 10, 10, 7, 2)
 paintCircle(destinationEdge, 20, 20, 10, 10, 4, 0)
 paintCircle(destinationEdge, 20, 20, 10, 10, 1.5, 3)
 await writeIndexed("destination-edge.png", 20, 20, destinationPalette, [0, 255, 255, 255], destinationEdge)
+
+const destinationTips = [[10, 1], [16, 4], [19, 10], [16, 16], [10, 19], [4, 16], [1, 10], [4, 4]]
+function rotate(points, bucket) {
+  const angle = bucket * Math.PI / 4
+  return points.map(([x, y]) => [
+    10 + (x - 10) * Math.cos(angle) - (y - 10) * Math.sin(angle),
+    10 + (x - 10) * Math.sin(angle) + (y - 10) * Math.cos(angle)
+  ])
+}
+for (let direction = 0; direction < 8; direction += 1) {
+  const chevron = new Uint8Array(20 * 20)
+  fillPolygon(chevron, 20, 20, rotate([[10, 1], [19, 13], [14, 13], [10, 9], [6, 13], [1, 13]], direction), 1)
+  fillPolygon(chevron, 20, 20, rotate([[10, 4], [16, 11], [13, 11], [10, 8], [7, 11], [4, 11]], direction), 2)
+  paintCircle(chevron, 20, 20, destinationTips[direction][0], destinationTips[direction][1], 1, 3)
+  await writeIndexed(`destination-edge-${direction}.png`, 20, 20,
+    destinationPalette, [0, 255, 255, 255], chevron)
+}

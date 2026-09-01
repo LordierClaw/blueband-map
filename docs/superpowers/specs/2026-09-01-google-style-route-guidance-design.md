@@ -40,7 +40,7 @@ This keeps the route visibly continuing beyond the immediate maneuver without ch
 
 The user marker remains a 46×54 indexed PNG for protocol compatibility. Its visible shape becomes a symmetric upright solid green triangle with a thin dark outline and substantially less transparent/outline-dominated area. All eight compatibility filenames remain byte-identical because the marker no longer rotates.
 
-An off-screen destination uses one of eight directional chevrons rather than a centered ring. The chevron's outward tip touches the calibrated physical contour while the visible body remains inside it. An in-viewport destination continues to use the existing pin. Preview and live-update validation use the same resource dimensions and contour rule.
+An off-screen destination uses one of eight directional chevrons rather than a centered ring. For `destinationMode=edge`, `destinationX/Y` identify the chevron tip on the calibrated physical contour; the Band offsets the directional bitmap so its visible body extends inward. An in-viewport destination continues to use the existing center-positioned pin. Preview and live-update validation share this tip-coordinate rule without adding envelope fields.
 
 The header keeps the existing compact `m`/`km` formatting and displays the selected maneuver glyph, remaining distance, and selected instruction street. No persistent status card is added during normal navigation.
 

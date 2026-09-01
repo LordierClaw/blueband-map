@@ -119,12 +119,12 @@ final class RenderProtocolTests: XCTestCase {
         XCTAssertNoThrow(try RenderNavigationPreview(
             maneuver: .straight, distanceMeters: 1, street: "Road",
             x: 106, y: 374, headingBucket: 0,
-            destinationMode: .edge, destinationX: 190, destinationY: 260
+            destinationMode: .edge, destinationX: 199, destinationY: 260
         ))
         XCTAssertThrowsError(try RenderNavigationPreview(
             maneuver: .straight, distanceMeters: 1, street: "Road",
             x: 106, y: 374, headingBucket: 0,
-            destinationMode: .visible, destinationX: 190, destinationY: 260
+            destinationMode: .visible, destinationX: 199, destinationY: 260
         ))
     }
 

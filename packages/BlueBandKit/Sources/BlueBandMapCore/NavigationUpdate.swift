@@ -48,13 +48,14 @@ public struct NavigationUpdate: Equatable, Sendable {
         if destinationMode == .hidden {
             guard destinationX == 0, destinationY == 0 else { throw Error.invalidDestination }
         } else {
-            let height = destinationMode == .visible ? 24 : 20
+            let width = destinationMode == .visible ? 20 : 1
+            let height = destinationMode == .visible ? 24 : 1
             let mask = destinationMode == .edge
                 ? BandDisplaySafeMask.smartBand10PhotoEstimate.withoutVisualMargin
                 : BandDisplaySafeMask.smartBand10PhotoEstimate
             guard mask.contains(
                 center: ScreenPoint(x: destinationX, y: destinationY),
-                resourceWidth: 20,
+                resourceWidth: width,
                 resourceHeight: height
             ) else { throw Error.invalidDestination }
         }

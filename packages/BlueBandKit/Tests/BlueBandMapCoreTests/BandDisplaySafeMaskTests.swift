@@ -37,7 +37,7 @@ final class BandDisplaySafeMaskTests: XCTestCase {
         XCTAssertTrue(mask.contains(center: user, resourceWidth: 46, resourceHeight: 54))
     }
 
-    func testZeroMarginEdgeRingMovesSixPixelsOutwardAndStaysInsidePhysicalContour() {
+    func testEdgeChevronTipReachesPhysicalContourBeyondTheOldRingCenter() {
         let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
         let physical = mask.withoutVisualMargin
         let origin = ScreenPoint(x: 106, y: 374)
@@ -50,9 +50,9 @@ final class BandDisplaySafeMaskTests: XCTestCase {
 
         for target in targets {
             let conservative = mask.edgePoint(from: origin, toward: target, resourceWidth: 20, resourceHeight: 20)
-            let outward = physical.edgePoint(from: origin, toward: target, resourceWidth: 20, resourceHeight: 20)
-            XCTAssertTrue(physical.contains(center: outward, resourceWidth: 20, resourceHeight: 20))
-            XCTAssertGreaterThan(hypot(Double(outward.x - origin.x), Double(outward.y - origin.y)),
+            let tip = physical.edgePoint(from: origin, toward: target, resourceWidth: 1, resourceHeight: 1)
+            XCTAssertTrue(physical.contains(center: tip, resourceWidth: 1, resourceHeight: 1))
+            XCTAssertGreaterThan(hypot(Double(tip.x - origin.x), Double(tip.y - origin.y)),
                                  hypot(Double(conservative.x - origin.x), Double(conservative.y - origin.y)))
         }
     }

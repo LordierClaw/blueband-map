@@ -248,6 +248,10 @@ test("preview and live guidance share compact metre and kilometre labels", async
 
 test("destination overlay switches atomically and stays inside the curved safe mask", async () => {
   const { page } = await harness()
+  assert.equal(page.destinationDirection(106, 374, 106, 22), 0)
+  assert.equal(page.destinationDirection(106, 374, 190, 290), 1)
+  assert.equal(page.destinationDirection(106, 374, 199, 260), 1)
+  assert.equal(page.destinationDirection(106, 374, 22, 374), 6)
   publish(page)
   page.receiveMessage({ data: envelope("visible", "nav.update", navigation({
     destinationMode: "visible", destinationX: 106, destinationY: 120
@@ -257,10 +261,10 @@ test("destination overlay switches atomically and stays inside the curved safe m
   assert.equal(page.navDestinationStyle, "left:96px;top:108px;")
 
   page.receiveMessage({ data: envelope("edge", "nav.update", navigation({
-    seq: 2, destinationMode: "edge", destinationX: 190, destinationY: 260
+    seq: 2, destinationMode: "edge", destinationX: 199, destinationY: 260
   })) })
-  assert.equal(page.navDestinationPath, "/common/destination-edge.png")
-  assert.equal(page.navDestinationStyle, "left:180px;top:250px;")
+  assert.equal(page.navDestinationPath, "/common/destination-edge-1.png")
+  assert.equal(page.navDestinationStyle, "left:183px;top:256px;")
 
   page.receiveMessage({ data: envelope("visible-too-close", "nav.update", navigation({
     seq: 3, destinationMode: "visible", destinationX: 190, destinationY: 260
@@ -435,7 +439,7 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   assert.equal(page.confirmedMap.scene, nextScene)
   assert.equal(page.mapPath, `internal://files/${nextAsset}.png`)
   assert.equal(page.navMarkerPath, "/common/marker-0.png")
-  assert.equal(page.navDestinationPath, "/common/destination-edge.png")
+  assert.equal(page.navDestinationPath, "/common/destination-edge-1.png")
 })
 
 test("wrong windowed offset aborts the refresh and keeps the confirmed map", async () => {

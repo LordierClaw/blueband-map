@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.2</text>
+      <text class="version">RPK 0.6.3</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -27,7 +27,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.6.2 • ENV V1</text>
+        <text class="version">RPK 0.6.3 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -702,7 +702,8 @@ export default {
       this.validInteger(body.destinationX) && this.validInteger(body.destinationY) &&
       ((body.destinationMode === "hidden" && body.destinationX === 0 && body.destinationY === 0) ||
         (body.destinationMode !== "hidden" && safeMaskContains(
-          body.destinationX, body.destinationY, 20, body.destinationMode === "visible" ? 24 : 20,
+          body.destinationX, body.destinationY, body.destinationMode === "visible" ? 20 : 1,
+          body.destinationMode === "visible" ? 24 : 1,
           body.destinationMode === "edge" ? 0 : 6)))
     if (valid) {
       var labels = { navigating: "NAVIGATING", gpsLow: "GPS LOW", limitedMap: "LIMITED MAP", rerouting: "REROUTING", arrived: "ARRIVED" }
@@ -729,16 +730,11 @@ export default {
       this.navMarkerStyle = "left:83px;top:347px;"
       this.navDestinationVisible = body.destinationMode !== "hidden"
       if (this.navDestinationVisible) {
-        var destinationWidth = 20
-        var destinationHeight = body.destinationMode === "visible" ? 24 : 20
-        var destination = safeMaskClamp(
-          body.destinationX, body.destinationY, destinationWidth, destinationHeight,
-          body.destinationMode === "edge" ? 0 : 6
+        var destination = this.destinationOverlay(
+          body.destinationMode, body.destinationX, body.destinationY
         )
-        this.navDestinationPath = body.destinationMode === "visible" ?
-          "/common/destination-pin.png" : "/common/destination-edge.png"
-        this.navDestinationStyle = "left:" + (destination.x - 10) + "px;top:" +
-          (destination.y - destinationHeight / 2) + "px;"
+        this.navDestinationPath = destination.path
+        this.navDestinationStyle = destination.style
       }
     }
     this.rememberSuccess(message.id)
@@ -1375,6 +1371,24 @@ export default {
     this.logText = "Echo ready."
   },
 
+  destinationDirection(markerX, markerY, destinationX, destinationY) {
+    var angle = Math.atan2(destinationX - markerX, markerY - destinationY)
+    return (Math.round(angle / (Math.PI / 4)) + 8) % 8
+  },
+
+  destinationOverlay(mode, x, y) {
+    if (mode === "visible") {
+      var point = safeMaskClamp(x, y, 20, 24, 6)
+      return { path: "/common/destination-pin.png", style: "left:" + (point.x - 10) + "px;top:" + (point.y - 12) + "px;" }
+    }
+    var direction = this.destinationDirection(106, 374, x, y)
+    var tips = [[10, 1], [16, 4], [19, 10], [16, 16], [10, 19], [4, 16], [1, 10], [4, 4]]
+    return {
+      path: "/common/destination-edge-" + direction + ".png",
+      style: "left:" + (x - tips[direction][0]) + "px;top:" + (y - tips[direction][1]) + "px;"
+    }
+  },
+
   applyPreviewOverlay(preview) {
     if (!preview) {
       this.navMarkerVisible = false
@@ -1386,11 +1400,11 @@ export default {
     this.navMarkerStyle = "left:83px;top:347px;"
     this.navDestinationVisible = preview.destinationMode !== "hidden"
     if (this.navDestinationVisible) {
-      var height = preview.destinationMode === "visible" ? 24 : 20
-      this.navDestinationPath = preview.destinationMode === "visible" ?
-        "/common/destination-pin.png" : "/common/destination-edge.png"
-      this.navDestinationStyle = "left:" + (preview.destinationX - 10) + "px;top:" +
-        (preview.destinationY - height / 2) + "px;"
+      var destination = this.destinationOverlay(
+        preview.destinationMode, preview.destinationX, preview.destinationY
+      )
+      this.navDestinationPath = destination.path
+      this.navDestinationStyle = destination.style
     }
   },
 

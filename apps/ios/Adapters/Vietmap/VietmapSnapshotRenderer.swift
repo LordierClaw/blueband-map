@@ -215,7 +215,6 @@ struct VietmapRouteOverlay {
     static let traveledColorHex = "#41516b"
     static let contextColorHex = "#31577f"
     static let activeColorHex = "#1f5fd1"
-    static let fixedAnchor = CGPoint(x: 106, y: 374)
 
     static func commands(for request: VietmapSnapshotRequest) -> [Command] {
         [Command(kind: .subdued, width: 3), Command(kind: .traveled, width: 4),
@@ -225,44 +224,31 @@ struct VietmapRouteOverlay {
 
     static func draw(_ request: VietmapSnapshotRequest, on overlay: MGLMapSnapshotOverlay) {
         let context = overlay.context
-        let sourceAnchor = overlay.point(for: coordinate(request.matchedPosition))
-        let offset = CGPoint(x: fixedAnchor.x - sourceAnchor.x, y: fixedAnchor.y - sourceAnchor.y)
         context.saveGState()
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        drawPath(request.overlayGeometry.subdued, color: VietmapDarkStyle.color(hex: subduedColorHex).cgColor, width: 3, offset: offset, overlay: overlay)
-        drawPath(request.overlayGeometry.traveled, color: VietmapDarkStyle.color(hex: traveledColorHex).cgColor, width: 4, offset: offset, overlay: overlay)
-        drawPath(request.overlayGeometry.context, color: VietmapDarkStyle.color(hex: contextColorHex).cgColor, width: 4, offset: offset, overlay: overlay)
-        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeColorHex).cgColor, width: 5, offset: offset, overlay: overlay)
-        let projectedManeuver = overlay.point(for: coordinate(request.nextManeuver))
-        let point = CGPoint(x: projectedManeuver.x + offset.x, y: projectedManeuver.y + offset.y)
+        drawPath(request.overlayGeometry.subdued, color: VietmapDarkStyle.color(hex: subduedColorHex).cgColor, width: 3, overlay: overlay)
+        drawPath(request.overlayGeometry.traveled, color: VietmapDarkStyle.color(hex: traveledColorHex).cgColor, width: 4, overlay: overlay)
+        drawPath(request.overlayGeometry.context, color: VietmapDarkStyle.color(hex: contextColorHex).cgColor, width: 4, overlay: overlay)
+        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeColorHex).cgColor, width: 5, overlay: overlay)
+        let point = overlay.point(for: coordinate(request.nextManeuver))
         context.setStrokeColor(VietmapDarkStyle.color(hex: activeColorHex).cgColor)
         context.setLineWidth(3)
         context.strokeEllipse(in: CGRect(x: point.x - 4.5, y: point.y - 4.5, width: 9, height: 9))
         context.restoreGState()
     }
 
-    static func translated(_ points: [CGPoint], sourceAnchor: CGPoint, fixedAnchor: CGPoint) -> [CGPoint] {
-        let dx = fixedAnchor.x - sourceAnchor.x, dy = fixedAnchor.y - sourceAnchor.y
-        return points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
-    }
-
     private static func drawPath(
         _ points: [GeoPoint],
         color: CGColor,
         width: CGFloat,
-        offset: CGPoint,
         overlay: MGLMapSnapshotOverlay
     ) {
         guard points.count >= 2 else { return }
         let context = overlay.context
-        let projected = points.map {
-            let point = overlay.point(for: coordinate($0))
-            return CGPoint(x: point.x + offset.x, y: point.y + offset.y)
-        }
         context.beginPath()
-        context.move(to: projected[0])
-        for point in projected.dropFirst() { context.addLine(to: point) }
+        context.move(to: overlay.point(for: coordinate(points[0])))
+        for point in points.dropFirst() { context.addLine(to: overlay.point(for: coordinate(point))) }
         context.setStrokeColor(color)
         context.setLineWidth(width)
         context.strokePath()

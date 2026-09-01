@@ -803,7 +803,7 @@ final class AppModel: ObservableObject {
         )
         if mask.contains(center: target, resourceWidth: 20, resourceHeight: 24) { return (.visible, target) }
         return (.edge, mask.withoutVisualMargin.edgePoint(
-            from: marker, toward: target, resourceWidth: 20, resourceHeight: 20
+            from: marker, toward: target, resourceWidth: 1, resourceHeight: 1
         ))
     }
 

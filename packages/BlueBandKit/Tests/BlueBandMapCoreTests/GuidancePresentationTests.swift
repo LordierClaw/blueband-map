@@ -17,7 +17,7 @@ final class GuidancePresentationTests: XCTestCase {
         distanceMeters: 220
     )
 
-    func testSkipsOnlyGPSIndistinguishableInstruction() throws {
+    func testShowsNextTurnUntilMatchedGeometryPassesItsBoundary() throws {
         let progress = RouteProgress(
             pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0,
             distanceFromRouteMeters: 0, matchedLocation: route.points[0],
@@ -30,7 +30,8 @@ final class GuidancePresentationTests: XCTestCase {
 
         XCTAssertEqual(selected.instructionIndex, 1)
         XCTAssertEqual(selected.instruction.maneuver, .right)
-        XCTAssertGreaterThan(selected.distanceMeters, 100)
+        XCTAssertEqual(selected.maneuverPointIndex, 1)
+        XCTAssertEqual(selected.distanceMeters, 2, accuracy: 0.2)
     }
 
     func testDoesNotSkipInstructionOutsidePassRadius() throws {
@@ -44,7 +45,9 @@ final class GuidancePresentationTests: XCTestCase {
             route: route, progress: progress, horizontalAccuracyMeters: 25
         ))
 
-        XCTAssertEqual(selected.instructionIndex, 1)
+        XCTAssertEqual(selected.instructionIndex, 2)
+        XCTAssertEqual(selected.instruction.maneuver, .straight)
+        XCTAssertEqual(selected.maneuverPointIndex, 2)
     }
 
     func testStationaryBearingFollowsMatchedRouteTangent() throws {
@@ -76,6 +79,7 @@ final class GuidancePresentationTests: XCTestCase {
         let degenerate = GuidanceSelection(
             instructionIndex: 0,
             instruction: route.instructions[0],
+            maneuverPointIndex: 1,
             distanceMeters: 0
         )
 
@@ -128,8 +132,8 @@ final class GuidancePresentationTests: XCTestCase {
 
         XCTAssertEqual(geometry.traveled.last, matched)
         XCTAssertEqual(geometry.active.first, matched)
-        XCTAssertEqual(geometry.active.last, route.points[selection.instruction.interval.upperBound])
-        XCTAssertEqual(geometry.context.first, geometry.active.last)
+        XCTAssertEqual(geometry.active.last, route.points.last)
+        XCTAssertTrue(geometry.context.isEmpty)
     }
 
     func testOffRouteMarkerUsesRawAcceptedLocation() {

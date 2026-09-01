@@ -4,7 +4,7 @@
 
 **Goal:** Show a fixed lower-center navigation marker, the complete remaining route, the next Google-style maneuver, and a contour-attached off-screen destination indicator on Smart Band 10.
 
-**Architecture:** Keep the snapshot camera as the single projection authority and remove route-only translation. Split guidance into the route section currently being traversed, its endpoint as the next-action location, and the following instruction as the header action; draw the active route from the matched position through the route end. Keep the current destination coordinates and derive an eight-way chevron asset on the Band without changing transport envelopes.
+**Architecture:** Keep the snapshot camera as the single projection authority and remove route-only translation. Split guidance into the route section currently being traversed, its endpoint as the next-action location, and the following instruction as the header action; draw the active route from the matched position through the route end. Reuse the destination coordinate fields as the edge-chevron tip and derive its eight-way asset/offset on the Band without adding transport fields.
 
 **Tech Stack:** Swift/XCTest, Vietmap `MGLMapSnapshotter`, Core Graphics, Vela UX JavaScript, indexed PNG generation, Node test runner, Make/Docker, GitHub Actions.
 
@@ -17,7 +17,7 @@
 - Modify: `packages/BlueBandKit/Tests/BlueBandMapCoreTests/GuidancePresentationTests.swift`
 - Modify: `apps/ios/App/AppModel.swift`
 
-- [ ] **Step 1: Add failing next-action and full-route tests**
+- [x] **Step 1: Add failing next-action and full-route tests**
 
 Add a Vietmap-shaped route whose first interval is straight `0...1` and whose next instruction is right `1...1`. Assert that progress halfway through segment zero produces `right`, targets route point one, and reports the fractional remaining geometry distance. Also change the overlay assertion from the current maneuver endpoint to the final route point:
 
@@ -29,13 +29,13 @@ XCTAssertEqual(geometry.active.first, matched)
 XCTAssertEqual(geometry.active.last, route.points.last)
 ```
 
-- [ ] **Step 2: Run the Swift suite and verify RED**
+- [x] **Step 2: Run the Swift suite and verify RED**
 
 Run: `make test-swift`
 
 Expected: compilation fails because `GuidanceSelection` has no `maneuverPointIndex`, and the old active geometry ends at the selected instruction.
 
-- [ ] **Step 3: Implement the minimal guidance split**
+- [x] **Step 3: Implement the minimal guidance split**
 
 Add the action point to `GuidanceSelection`:
 
@@ -68,7 +68,7 @@ let maneuver = min(selection.maneuverPointIndex, route.points.count - 1)
 
 Update `forwardPoint` and `AppModel.publish` to use `selection.maneuverPointIndex` for the camera/maneuver ring while continuing to use `selection.instruction` for the header.
 
-- [ ] **Step 4: Run Swift tests and verify GREEN**
+- [x] **Step 4: Run Swift tests and verify GREEN**
 
 Run: `make test-swift`
 
@@ -80,7 +80,7 @@ Expected: all Swift package tests pass, including the new Vietmap boundary case 
 - Modify: `apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift`
 - Modify: `apps/ios/Tests/VietmapSnapshotRendererTests.swift`
 
-- [ ] **Step 1: Add a failing no-translation renderer test**
+- [x] **Step 1: Add a failing no-translation renderer test**
 
 Replace the translation-helper test with an assertion that the configuration itself projects the matched location to the fixed anchor and that route drawing exposes no translation helper:
 
@@ -93,7 +93,7 @@ XCTAssertEqual(anchor.y, 374, accuracy: 0.5)
 
 The source inspection assertion must reject `VietmapRouteOverlay.translated` and per-path `offset` parameters.
 
-- [ ] **Step 2: Run the iOS source/metadata checks and verify RED**
+- [x] **Step 2: Run the iOS source/metadata checks and verify RED**
 
 Run:
 
@@ -104,7 +104,7 @@ rg -n 'translated|offset:' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swi
 
 Expected: metadata passes, while the source check finds the route-only translation.
 
-- [ ] **Step 3: Remove overlay-only translation**
+- [x] **Step 3: Remove overlay-only translation**
 
 Project and draw every coordinate directly with `overlay.point(for:)`, including the maneuver ring:
 
@@ -115,7 +115,7 @@ let point = overlay.point(for: coordinate(request.nextManeuver))
 
 Delete `fixedAnchor`, `translated`, and the `offset` parameter. The camera center produced by `VietmapSnapshotConfiguration.make` remains responsible for placing the matched point at `(106,374)`.
 
-- [ ] **Step 4: Run Swift and iOS syntax checks and verify GREEN**
+- [x] **Step 4: Run Swift and iOS syntax checks and verify GREEN**
 
 Run `make test-swift`, `bash tools/ios/test-project-metadata.sh`, and parse the modified iOS Swift files with the available Swift frontend command used by this repository.
 
@@ -130,7 +130,7 @@ Expected: tests and syntax checks pass, and `rg -n 'translated|offset:' apps/ios
 - Modify: `apps/band/test/bundle-contract.test.mjs`
 - Modify: `apps/band/test/envelope-page.test.mjs`
 
-- [ ] **Step 1: Add failing bitmap and page tests**
+- [x] **Step 1: Add failing bitmap and page tests**
 
 Assert the marker remains 46×54 and identical in all eight filenames, its green bounding box is at least 28 px wide, and its visible bounds are symmetric around x=23. Assert eight `destination-edge-0.png` through `destination-edge-7.png` resources exist and each outward tip reaches the corresponding edge/corner of its 20×20 bitmap.
 
@@ -138,20 +138,20 @@ Add page tests for deterministic direction selection:
 
 ```javascript
 assert.equal(page.destinationDirection(106, 374, 106, 22), 0)
-assert.equal(page.destinationDirection(106, 374, 190, 100), 1)
-assert.equal(page.destinationDirection(106, 374, 190, 260), 2)
-assert.equal(page.destinationDirection(106, 374, 22, 260), 6)
+assert.equal(page.destinationDirection(106, 374, 190, 290), 1)
+assert.equal(page.destinationDirection(106, 374, 199, 260), 1)
+assert.equal(page.destinationDirection(106, 374, 22, 374), 6)
 ```
 
-For an edge update at `(190,260)`, assert `navDestinationPath === "/common/destination-edge-2.png"`.
+For an edge update at `(199,260)`, assert `navDestinationPath === "/common/destination-edge-1.png"` and that the north-east bitmap is positioned with its tip at `(199,260)`.
 
-- [ ] **Step 2: Run RPK tests and verify RED**
+- [x] **Step 2: Run RPK tests and verify RED**
 
 Run: `make test-rpk`
 
 Expected: the marker green width assertion fails, the directional destination resources are missing, and the page still selects `destination-edge.png`.
 
-- [ ] **Step 3: Generate the wider marker and eight chevrons**
+- [x] **Step 3: Generate the wider marker and eight chevrons**
 
 Keep the 46×54 marker canvas but widen its fill:
 
@@ -162,7 +162,7 @@ fillPolygon(marker, 46, 54, [[23, 7], [37, 43], [9, 43]], 2)
 
 Generate one 20×20 outward chevron and rotate it in 45-degree steps around `(10,10)` into `destination-edge-0.png` through `destination-edge-7.png`. Use only transparent, dark-outline, amber-fill, and pale-tip palette entries so the assets remain firmware-safe indexed PNGs.
 
-- [ ] **Step 4: Select the chevron from the existing destination coordinates**
+- [x] **Step 4: Select the chevron from the existing destination coordinates**
 
 Add one Band helper with up as bucket zero and clockwise buckets:
 
@@ -181,9 +181,9 @@ this.navDestinationPath = preview.destinationMode === "visible"
   : "/common/destination-edge-" + this.destinationDirection(106, 374, preview.destinationX, preview.destinationY) + ".png"
 ```
 
-Do not change envelope fields or destination center coordinates.
+For `edge`, treat `destinationX/Y` as the tip coordinate and position the bitmap using its direction-specific tip offset. For `visible`, keep the existing center-coordinate pin behavior. Do not add envelope fields.
 
-- [ ] **Step 5: Run RPK tests and verify GREEN**
+- [x] **Step 5: Run RPK tests and verify GREEN**
 
 Run: `make test-rpk`
 
@@ -196,15 +196,15 @@ Expected: all resource, bundle, preview, and live navigation tests pass.
 - Modify only if RPK product code/resources changed: `apps/band/package.json`, `apps/band/package-lock.json`, `apps/band/src/manifest.json`, `apps/band/scripts/verify-rpk.mjs`, `apps/band/test/bundle-contract.test.mjs`
 - Modify: `docs/testing/handoffs/hybrid-heading-up-guidance.md`
 
-- [ ] **Step 1: Apply component-only version bumps after confirming the diff**
+- [x] **Step 1: Apply component-only version bumps after confirming the diff**
 
 Because this plan changes both iOS navigation code and RPK code/resources, update IPA `0.5.3 (19)` to `0.5.4 (20)` and RPK `0.6.2 (17)` to `0.6.3 (18)`. If implementation produces no diff for a component, leave that component unchanged instead.
 
-- [ ] **Step 2: Update the manual hardware checks**
+- [x] **Step 2: Update the manual hardware checks**
 
 Document these acceptance points: fixed lower-center symmetric marker, route continuing beyond the next maneuver, correct next-turn glyph/distance/street, eight-direction contour chevron, in-view destination pin, and no regression in refresh/error behavior.
 
-- [ ] **Step 3: Run the complete canonical gate**
+- [x] **Step 3: Run the complete canonical gate**
 
 Run:
 

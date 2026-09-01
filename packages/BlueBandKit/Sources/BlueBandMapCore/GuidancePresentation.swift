@@ -3,6 +3,7 @@ import Foundation
 public struct GuidanceSelection: Equatable, Sendable {
     public let instructionIndex: Int
     public let instruction: RouteInstruction
+    public let maneuverPointIndex: Int
     public let distanceMeters: Double
 }
 
@@ -26,18 +27,9 @@ public struct RouteOverlayGeometry: Equatable, Sendable {
     ) -> Self {
         let segment = min(progress.matchedSegmentIndex, route.points.count - 2)
         let matched = progress.matchedLocation ?? route.points[segment]
-        let maneuver = min(selection.instruction.interval.upperBound, route.points.count - 1)
         let traveled = Array(route.points.prefix(segment + 1)) + [matched]
-        let active = [matched] + (maneuver > segment ? Array(route.points[(segment + 1)...maneuver]) : [])
-        var context = [route.points[maneuver]]
-        var distance = 0.0
-        var index = maneuver
-        while index + 1 < route.points.count, context.count == 1 || distance < 80 {
-            distance += meters(route.points[index], route.points[index + 1])
-            index += 1
-            context.append(route.points[index])
-        }
-        return Self(subdued: route.points, traveled: traveled, active: active, context: context)
+        let active = [matched] + Array(route.points.dropFirst(segment + 1))
+        return Self(subdued: route.points, traveled: traveled, active: active, context: [])
     }
 
     private static func meters(_ a: GeoPoint, _ b: GeoPoint) -> Double {
@@ -54,22 +46,19 @@ public enum GuidancePresentationPolicy {
     public static func select(
         route: RoutePlan,
         progress: RouteProgress,
-        horizontalAccuracyMeters: Double
+        horizontalAccuracyMeters _: Double
     ) -> GuidanceSelection? {
         guard !route.instructions.isEmpty, route.points.count >= 2 else { return nil }
-        var index = route.instructions.firstIndex {
-            $0.interval.upperBound >= progress.matchedSegmentIndex
+        let index = route.instructions.firstIndex {
+            $0.interval.upperBound > progress.matchedSegmentIndex
         } ?? route.instructions.count - 1
-        let passRadius = max(8, min(20, horizontalAccuracyMeters.isFinite ? horizontalAccuracyMeters : 8))
-        var remaining = distance(to: route.instructions[index], route: route, progress: progress)
-        while remaining <= passRadius, index + 1 < route.instructions.count {
-            index += 1
-            remaining = distance(to: route.instructions[index], route: route, progress: progress)
-        }
+        let maneuverPointIndex = min(route.instructions[index].interval.upperBound, route.points.count - 1)
+        let actionIndex = min(index + 1, route.instructions.count - 1)
         return GuidanceSelection(
-            instructionIndex: index,
-            instruction: route.instructions[index],
-            distanceMeters: remaining
+            instructionIndex: actionIndex,
+            instruction: route.instructions[actionIndex],
+            maneuverPointIndex: maneuverPointIndex,
+            distanceMeters: distance(to: maneuverPointIndex, route: route, progress: progress)
         )
     }
 
@@ -86,7 +75,7 @@ public enum GuidancePresentationPolicy {
         let startIndex = min(progress.matchedSegmentIndex, route.points.count - 2)
         let origin = progress.matchedLocation ?? route.points[startIndex]
         if let selection {
-            let maneuverIndex = min(selection.instruction.interval.upperBound, route.points.count - 1)
+            let maneuverIndex = min(selection.maneuverPointIndex, route.points.count - 1)
             let maneuver = route.points[maneuverIndex]
             if meters(origin, maneuver) > 0.5 { return maneuver }
         }
@@ -105,8 +94,7 @@ public enum GuidancePresentationPolicy {
         return bearing(origin, forward)
     }
 
-    private static func distance(to instruction: RouteInstruction, route: RoutePlan, progress: RouteProgress) -> Double {
-        let target = min(instruction.interval.upperBound, route.points.count - 1)
+    private static func distance(to target: Int, route: RoutePlan, progress: RouteProgress) -> Double {
         let segment = min(progress.matchedSegmentIndex, route.points.count - 2)
         guard target > segment else { return 0 }
         let matched = progress.matchedLocation ?? route.points[segment]

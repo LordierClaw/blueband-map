@@ -50,6 +50,7 @@ for (const required of [
   "common/maneuver-arrive.png",
   "common/destination-pin.png",
   "common/destination-edge.png",
+  ...Array.from({ length: 8 }, (_, index) => `common/destination-edge-${index}.png`),
   ...Array.from({ length: 8 }, (_, index) => `common/marker-${index}.png`)
 ]) {
   if (!files.has(required)) throw new Error(`RPK missing ${required}`)
@@ -60,7 +61,7 @@ const expectedFeatures = [
   { name: "system.file" }
 ]
 if (manifest.package !== "dev.lordierclaw.bluebandmap.band" || manifest.icon !== "/common/icon.png" ||
-    manifest.versionName !== "0.6.2" || manifest.versionCode !== 17 || manifest.config.designWidth !== 212 ||
+    manifest.versionName !== "0.6.3" || manifest.versionCode !== 18 || manifest.config.designWidth !== 212 ||
     JSON.stringify(manifest.features) !== JSON.stringify(expectedFeatures)) {
   throw new Error("compiled manifest does not match Band 10 bundle contract")
 }

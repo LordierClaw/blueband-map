@@ -79,19 +79,6 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         XCTAssertEqual(configuration.point(for: request.matchedPosition).y, 520 * 0.72, accuracy: 0.5)
     }
 
-    func testRouteOverlayTranslationPinsTheMatchedPointToTheFixedMarker() {
-        let translated = VietmapRouteOverlay.translated(
-            [CGPoint(x: 109, y: 369), CGPoint(x: 120, y: 300)],
-            sourceAnchor: CGPoint(x: 109, y: 369),
-            fixedAnchor: CGPoint(x: 106, y: 374)
-        )
-
-        XCTAssertEqual(translated[0].x, 106, accuracy: 0.001)
-        XCTAssertEqual(translated[0].y, 374, accuracy: 0.001)
-        XCTAssertEqual(translated[1].x, 117, accuracy: 0.001)
-        XCTAssertEqual(translated[1].y, 305, accuracy: 0.001)
-    }
-
     func testCardinalAndStationaryRouteShapesAlwaysProjectForwardAboveUser() throws {
         let origin = GeoPoint(latitude: 10, longitude: 106)
         let forwardPoints = [
