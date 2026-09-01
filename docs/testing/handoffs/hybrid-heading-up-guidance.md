@@ -2,7 +2,7 @@
 
 ## Artifact versions
 
-- IPA: `0.5.0 (16)`; build and package only through `.github/workflows/ios-checks.yml`.
+- IPA: `0.5.1 (17)`; build and package only through `.github/workflows/ios-checks.yml`.
 - RPK: `0.6.0 (15)`; build through `make test-rpk`.
 - The application JSON adds bounded destination overlay fields. Xiaomi BLE/SPP/authentication bytes and Route v4 request behavior are unchanged.
 
@@ -16,7 +16,7 @@ On the connected diagnostics screen, tap **CALIBRATE DISPLAY**. Photograph the 2
 
 Use a passenger or stop safely before observing or operating either device. First complete a stationary route replay, then use a safe 0–50 km/h route containing a straight section, left turn, right turn, crossing road, and parallel road.
 
-1. Install IPA `0.5.0 (16)` and RPK `0.6.0 (15)`, connect, open diagnostics, show the calibration image, and photograph it straight-on. Confirm the 14 px contour and all white probes are fully visible.
+1. Install IPA `0.5.1 (17)` and RPK `0.6.0 (15)`, connect, open diagnostics, show the calibration image, and photograph it straight-on. Confirm the 14 px contour and all white probes are fully visible.
 2. Start navigation while stationary. Confirm the map faces the route tangent, the enlarged green marker is centered on the active dark-blue route, and neither the HUD nor marker is cut by a curved edge.
 3. With GPS accuracy near 10 m, confirm a completed instruction such as “straight 2 m” is replaced by the next actionable turn rather than flickering between steps.
 4. Begin moving above 3.6 km/h. Confirm the map changes to travel-course heading only after stable movement and does not rotate for one poor or slow GPS fix.

@@ -94,15 +94,20 @@ enum SnapshotPNGEncoder {
         height: Int,
         palette: [(UInt8, UInt8, UInt8)]
     ) throws -> Data {
+        let fourBit = palette.count <= 16
+        let pixels = fourBit ? IndexedPixelPacking.fourBit(indices, width: width, height: height) : indices
+        let bitsPerPixel = fourBit ? 4 : 8
+        let bytesPerRow = fourBit ? (width + 1) / 2 : width
+        guard pixels.count == bytesPerRow * height else { throw Error.imageCreationFailed }
         let table = palette.flatMap { [$0.0, $0.1, $0.2] }
         let colorSpace = table.withUnsafeBufferPointer {
             CGColorSpace(indexedBaseSpace: CGColorSpaceCreateDeviceRGB(), last: palette.count - 1, colorTable: $0.baseAddress!)
         }
         guard let colorSpace,
-              let provider = CGDataProvider(data: Data(indices) as CFData),
+              let provider = CGDataProvider(data: Data(pixels) as CFData),
               let indexedImage = CGImage(
-                width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8,
-                bytesPerRow: width, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: 0),
+                width: width, height: height, bitsPerComponent: bitsPerPixel, bitsPerPixel: bitsPerPixel,
+                bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: 0),
                 provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
               ) else { throw Error.imageCreationFailed }
         let output = NSMutableData()

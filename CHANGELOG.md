@@ -1,5 +1,10 @@
 # Changelog
 
+## iOS 0.5.1 / RPK 0.6.0 - 2026-09-01
+
+- Encode the existing 16-color snapshot palette at its native 4-bit indexed PNG depth instead of wasting 8 bits per pixel, fixing real 11,510-byte snapshots that exceeded the 8 KiB Band budget without removing map detail.
+- Bump only iOS to `0.5.1 (17)` because snapshot encoding changes the IPA. RPK remains `0.6.0 (15)`.
+
 ## iOS 0.5.0 / RPK 0.6.0 - 2026-09-01
 
 - Keep the road-snapped marker and active route continuous at the exact fractional route match without changing monotonic progress, off-route thresholds, reroute cooldown, or Vietmap Route v4.

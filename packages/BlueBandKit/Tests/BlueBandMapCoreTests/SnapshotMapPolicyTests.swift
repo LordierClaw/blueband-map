@@ -2,6 +2,17 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class SnapshotMapPolicyTests: XCTestCase {
+    func testPacksTwoFourBitPaletteIndicesPerByte() {
+        XCTAssertEqual(
+            IndexedPixelPacking.fourBit([0x0, 0x1, 0xA, 0xF, 0x5], width: 5, height: 1),
+            [0x01, 0xAF, 0x50]
+        )
+        XCTAssertEqual(
+            IndexedPixelPacking.fourBit([0x1, 0x2, 0x3, 0x4, 0x5, 0x6], width: 3, height: 2),
+            [0x12, 0x30, 0x45, 0x60]
+        )
+    }
+
     func testPayloadAdmissionPrefersFiveKiBThenFallsBackToTheSmallestValidCandidate() {
         XCTAssertEqual(SnapshotPaletteProfile.transferOptimizedOrder, [
             .colors16Labels,

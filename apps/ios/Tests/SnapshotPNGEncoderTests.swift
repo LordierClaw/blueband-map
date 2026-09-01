@@ -15,6 +15,8 @@ final class SnapshotPNGEncoderTests: XCTestCase {
         XCTAssertEqual(output.profile, .colors16Labels)
         XCTAssertEqual(output.colorCount, 16)
         XCTAssertLessThanOrEqual(output.data.count, RenderProtocol.maximumPayloadBytes)
+        XCTAssertEqual(output.data[24], 4)
+        XCTAssertEqual(output.data[25], 3)
         let source = try XCTUnwrap(CGImageSourceCreateWithData(output.data as CFData, nil))
         let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(decoded.width, 212)

@@ -33,6 +33,23 @@ public enum SnapshotPayloadAdmission {
     }
 }
 
+public enum IndexedPixelPacking {
+    public static func fourBit(_ indices: [UInt8], width: Int, height: Int) -> [UInt8] {
+        guard width > 0, height > 0, indices.count == width * height,
+              indices.allSatisfy({ $0 < 16 }) else { return [] }
+        let bytesPerRow = (width + 1) / 2
+        var packed = [UInt8](repeating: 0, count: bytesPerRow * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                let value = indices[y * width + x]
+                let offset = y * bytesPerRow + x / 2
+                packed[offset] |= x.isMultiple(of: 2) ? value << 4 : value
+            }
+        }
+        return packed
+    }
+}
+
 public enum ReusableLocationPolicy {
     public static func isReusable(horizontalAccuracyMeters: Double, ageSeconds: Double) -> Bool {
         (0...25).contains(horizontalAccuracyMeters) && (0...10).contains(ageSeconds)
