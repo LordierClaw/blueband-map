@@ -27,6 +27,7 @@ final class AppModel: ObservableObject {
         let progress: RouteProgress
         let location: CLLocation
         let tileMapKey: String
+        let bearingDegrees: Double
     }
     @Published var authKeyInput = ""
     @Published var tileMapKeyInput = ""
@@ -86,6 +87,7 @@ final class AppModel: ObservableObject {
     private var routeRequestMilliseconds = 0
     private var pendingSnapshotRefresh: SnapshotRefreshRequest?
     private var snapshotRefreshTask: Task<Void, Never>?
+    private var guidanceBearingPolicy = GuidanceBearingPolicy()
 
     init(
         keyStore: any AuthKeyStoreProtocol,
@@ -296,6 +298,7 @@ final class AppModel: ObservableObject {
         activeSnapshotConfiguration = nil
         activeSnapshotAnchor = nil
         lastSnapshotRefreshStartedAt = nil
+        guidanceBearingPolicy = GuidanceBearingPolicy()
         routePreviewPNG = nil
         navigationState = .idle
     }
@@ -359,7 +362,18 @@ final class AppModel: ObservableObject {
             )
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
-            let limitedMap = try await publish(route: route, progress: progress, location: first, tileMapKey: tileMapKey)
+            var bearing = guidanceBearingPolicy.update(
+                horizontalAccuracyMeters: first.horizontalAccuracy,
+                speedMetersPerSecond: first.speed,
+                courseDegrees: first.course,
+                routeBearingDegrees: GuidancePresentationPolicy.routeBearing(route: route, progress: progress),
+                confirmedBearingDegrees: GuidancePresentationPolicy.routeBearing(route: route, progress: progress),
+                secondsSinceRefresh: .infinity
+            )
+            let limitedMap = try await publish(
+                route: route, progress: progress, location: first,
+                tileMapKey: tileMapKey, bearingDegrees: bearing.bearingDegrees
+            )
             var lastReroute = Date.distantPast
             var lastGoodLocation = first.geoPoint
             sendNavigationUpdate(
@@ -367,6 +381,7 @@ final class AppModel: ObservableObject {
                 progress: progress,
                 location: first.geoPoint,
                 headingDegrees: first.course,
+                horizontalAccuracyMeters: first.horizontalAccuracy,
                 status: limitedMap ? .limitedMap : .navigating
             )
 
@@ -376,15 +391,24 @@ final class AppModel: ObservableObject {
                 let goodFix = location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 25
                 if goodFix { lastGoodLocation = location.geoPoint }
                 let displayedLocation = goodFix ? location.geoPoint : lastGoodLocation
+                let routeBearing = GuidancePresentationPolicy.routeBearing(route: route, progress: progress)
+                bearing = guidanceBearingPolicy.update(
+                    horizontalAccuracyMeters: location.horizontalAccuracy,
+                    speedMetersPerSecond: location.speed,
+                    courseDegrees: location.course,
+                    routeBearingDegrees: routeBearing,
+                    confirmedBearingDegrees: activeSnapshotConfiguration?.heading ?? routeBearing,
+                    secondsSinceRefresh: lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? .infinity
+                )
                 if goodFix && Self.meters(location.geoPoint, destination) <= 25 {
                     navigationState = .arrived
-                    sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, status: .arrived)
+                    sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, horizontalAccuracyMeters: location.horizontalAccuracy, status: .arrived)
                     return
                 }
                 var contextRefreshed = false
                 if progress.shouldReroute, Date().timeIntervalSince(lastReroute) >= 15 {
                     navigationState = .rerouting
-                    sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, status: .rerouting)
+                    sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, horizontalAccuracyMeters: location.horizontalAccuracy, status: .rerouting)
                     route = try await makeRoute(
                         from: location,
                         to: destination,
@@ -393,28 +417,49 @@ final class AppModel: ObservableObject {
                     )
                     tracker = RouteProgressTracker()
                     progress = tracker.update(route: route, location: location.geoPoint, horizontalAccuracyMeters: location.horizontalAccuracy)
-                    scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey)
+                    let rerouteRouteBearing = GuidancePresentationPolicy.routeBearing(route: route, progress: progress)
+                    let rerouteBearing = bearing.source == .course ? bearing.bearingDegrees : rerouteRouteBearing
+                    scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey, bearingDegrees: rerouteBearing)
                     lastReroute = Date()
                     contextRefreshed = true
                 }
-                var status: NavigationStatus = progress.status == .gpsLow ? .gpsLow : (limitedMap ? .limitedMap : .navigating)
-                let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
+                let status: NavigationStatus = progress.status == .gpsLow ? .gpsLow : (limitedMap ? .limitedMap : .navigating)
+                let selection = GuidancePresentationPolicy.select(
+                    route: route,
+                    progress: progress,
+                    horizontalAccuracyMeters: location.horizontalAccuracy
+                )
+                let instruction = selection?.instruction
                 let markerPoint = activeSnapshotConfiguration?.point(for: displayedLocation)
                 let nextManeuverVisible = instruction.flatMap {
                     route.points.indices.contains($0.interval.upperBound)
                         ? activeSnapshotConfiguration?.point(for: route.points[$0.interval.upperBound]) : nil
                 }.map { (0..<212).contains(Int($0.x)) && (0..<520).contains(Int($0.y)) } ?? false
-                if !contextRefreshed && status != .gpsLow && SnapshotRefreshPolicy.shouldRefresh(SnapshotRefreshContext(
+                let refreshContext = SnapshotRefreshContext(
                     marker: markerPoint.map { ScreenPoint(x: Int($0.x.rounded()), y: Int($0.y.rounded())) },
                     safeViewport: SnapshotRefreshPolicy.defaultSafeViewport,
                     distanceFromAnchorMeters: activeSnapshotAnchor.map { Self.meters($0, displayedLocation) } ?? .infinity,
                     secondsSinceLastRefresh: lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? .infinity,
                     nextManeuverVisible: nextManeuverVisible
-                )) {
-                    scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey)
+                )
+                let viewportShouldRefresh = SnapshotRefreshPolicy.shouldRefresh(refreshContext)
+                let refreshReason = contextRefreshed ? "reroute" : status == .gpsLow ? "gpsLow" :
+                    bearing.shouldRefresh ? "bearing" : viewportShouldRefresh ? "viewport" : "none"
+                if !contextRefreshed && status != .gpsLow && (bearing.shouldRefresh || viewportShouldRefresh) {
+                    scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey, bearingDegrees: bearing.bearingDegrees)
                 }
                 navigationState = Self.state(status)
-                sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, status: status)
+                sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, horizontalAccuracyMeters: location.horizontalAccuracy, status: status)
+                let routeDistance = progress.distanceFromRouteMeters.isFinite
+                    ? String(Int(progress.distanceFromRouteMeters.rounded())) : "unknown"
+                logNavigation(
+                    "guidance.fix",
+                    "ageMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1_000).rounded())) accuracyM=\(Int(max(0, location.horizontalAccuracy).rounded())) " +
+                    "speedMps=\(String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), location.speed)) course=\(Int(location.course.rounded())) " +
+                    "routeDistanceM=\(routeDistance) segment=\(progress.matchedSegmentIndex) fraction=\(String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), progress.matchedFraction)) " +
+                    "instruction=\(selection?.instructionIndex ?? -1) remainingM=\(Int((selection?.distanceMeters ?? 0).rounded())) " +
+                    "bearing=\(Int(bearing.bearingDegrees.rounded())) source=\(bearing.source.rawValue) delta=\(Int(bearing.deltaDegrees.rounded())) refresh=\(refreshReason)"
+                )
             }
         } catch is CancellationError {
             return
@@ -473,12 +518,18 @@ final class AppModel: ObservableObject {
         route: RoutePlan,
         progress: RouteProgress,
         location: CLLocation,
-        tileMapKey: String
+        tileMapKey: String,
+        bearingDegrees: Double
     ) async throws -> Bool {
         navigationState = .transferring
         let snapshotStartedAt = Date()
         lastSnapshotRefreshStartedAt = snapshotStartedAt
-        let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
+        let selection = GuidancePresentationPolicy.select(
+            route: route,
+            progress: progress,
+            horizontalAccuracyMeters: location.horizontalAccuracy
+        )
+        let instruction = selection?.instruction ?? route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
         let maneuverIndex = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
         var prepared: (snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)?
         var candidates: [(snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)] = []
@@ -486,9 +537,16 @@ final class AppModel: ObservableObject {
         for profile in SnapshotPaletteProfile.transferOptimizedOrder {
             let snapshot = try await snapshotRenderer.render(VietmapSnapshotRequest(
                 route: route,
-                progressIndex: progress.pointIndex,
                 matchedPosition: progress.matchedLocation ?? location.geoPoint,
-                headingDegrees: location.course >= 0 ? location.course : Double(instruction?.headingDegrees ?? 0),
+                overlayGeometry: selection.map {
+                    RouteOverlayGeometry.make(route: route, progress: progress, selection: $0)
+                } ?? RouteOverlayGeometry(
+                    subdued: route.points,
+                    traveled: Array(route.points.prefix(progress.pointIndex + 1)),
+                    active: Array(route.points.dropFirst(progress.pointIndex)),
+                    context: []
+                ),
+                headingDegrees: bearingDegrees,
                 nextManeuver: route.points[maneuverIndex],
                 tileMapKey: tileMapKey,
                 profile: profile
@@ -527,12 +585,7 @@ final class AppModel: ObservableObject {
         routePreviewPNG = asset.data
         let preview = try RenderNavigationPreview(
             maneuver: instruction?.maneuver ?? .straight,
-            distanceMeters: Self.remainingDistance(
-                route: route,
-                location: location.geoPoint,
-                progressIndex: progress.pointIndex,
-                instruction: instruction
-            ),
+            distanceMeters: max(0, Int((selection?.distanceMeters ?? 0).rounded())),
             street: instruction?.streetName ?? ""
         )
         await renderCoordinator.start(asset: asset, diagnostics: RouteCardRenderDiagnostics(
@@ -555,19 +608,26 @@ final class AppModel: ObservableObject {
         activeSnapshotConfiguration = snapshot.configuration
         activeSnapshotAnchor = progress.matchedLocation ?? location.geoPoint
         navigationManeuver = instruction?.maneuver ?? .straight
-        navigationDistanceMeters = Self.remainingDistance(route: route, location: location.geoPoint, progressIndex: progress.pointIndex, instruction: instruction)
+        navigationDistanceMeters = max(0, Int((selection?.distanceMeters ?? 0).rounded()))
         navigationStreet = instruction?.streetName ?? ""
         navigationState = .navigating
         logNavigation("band.displayed", "scene=\(sceneID) status=\(navigationStateCode)")
         return false
     }
 
-    private func scheduleRefresh(route: RoutePlan, progress: RouteProgress, location: CLLocation, tileMapKey: String) {
+    private func scheduleRefresh(
+        route: RoutePlan,
+        progress: RouteProgress,
+        location: CLLocation,
+        tileMapKey: String,
+        bearingDegrees: Double
+    ) {
         pendingSnapshotRefresh = SnapshotRefreshRequest(
             route: route,
             progress: progress,
             location: location,
-            tileMapKey: tileMapKey
+            tileMapKey: tileMapKey,
+            bearingDegrees: bearingDegrees
         )
         guard snapshotRefreshTask == nil else { return }
         snapshotRefreshTask = Task { @MainActor [weak self] in
@@ -583,13 +643,15 @@ final class AppModel: ObservableObject {
                     route: request.route,
                     progress: request.progress,
                     location: request.location,
-                    tileMapKey: request.tileMapKey
+                    tileMapKey: request.tileMapKey,
+                    bearingDegrees: request.bearingDegrees
                 )
                 sendNavigationUpdate(
                     route: request.route,
                     progress: request.progress,
                     location: request.location.geoPoint,
                     headingDegrees: request.location.course,
+                    horizontalAccuracyMeters: request.location.horizontalAccuracy,
                     status: .navigating
                 )
             } catch is CancellationError {
@@ -601,6 +663,7 @@ final class AppModel: ObservableObject {
                     progress: request.progress,
                     location: request.location.geoPoint,
                     headingDegrees: request.location.course,
+                    horizontalAccuracyMeters: request.location.horizontalAccuracy,
                     status: .limitedMap
                 )
                 logNavigation("map.refresh.failed", "code=LIMITED_MAP")
@@ -614,16 +677,27 @@ final class AppModel: ObservableObject {
         progress: RouteProgress,
         location: GeoPoint,
         headingDegrees: Double,
+        horizontalAccuracyMeters: Double,
         status: NavigationStatus
     ) {
         guard let scene = activeSceneID else { return }
-        let instruction = route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
-        let markerLocation = progress.matchedLocation ?? location
+        let selection = GuidancePresentationPolicy.select(
+            route: route,
+            progress: progress,
+            horizontalAccuracyMeters: horizontalAccuracyMeters
+        )
+        let instruction = selection?.instruction ?? route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
+        let markerLocation = GuidancePresentationPolicy.markerLocation(progress: progress, rawLocation: location)
         let projected = activeSnapshotConfiguration?.point(for: markerLocation) ?? CGPoint(x: 106, y: 374)
-        let marker = ScreenPoint(
+        let rawMarker = ScreenPoint(
             x: max(0, min(RenderProtocol.viewportWidth - 1, Int(projected.x.rounded()))),
             y: max(0, min(RenderProtocol.viewportHeight - 1, Int(projected.y.rounded())))
         )
+        let safeMask = BandDisplaySafeMask.smartBand10PhotoEstimate
+        let marker = safeMask.clampedCenter(rawMarker, resourceWidth: 46, resourceHeight: 54)
+        let destination = destinationPresentation(status: status, marker: marker, mask: safeMask)
+        let mapHeading = activeSnapshotConfiguration?.heading ?? 0
+        let markerHeading = headingDegrees >= 0 ? headingDegrees : GuidancePresentationPolicy.routeBearing(route: route, progress: progress)
         updateSequence += 1
         guard let update = try? NavigationUpdate(
             scene: scene,
@@ -631,10 +705,13 @@ final class AppModel: ObservableObject {
             x: marker.x,
             y: marker.y,
             maneuver: status == .arrived ? .arrive : (instruction?.maneuver ?? .straight),
-            headingBucket: Self.headingBucket(headingDegrees >= 0 ? headingDegrees : Double(instruction?.headingDegrees ?? 0)),
-            distanceMeters: Self.remainingDistance(route: route, location: location, progressIndex: progress.pointIndex, instruction: instruction),
+            headingBucket: Self.headingBucket(markerHeading - mapHeading),
+            distanceMeters: max(0, Int((selection?.distanceMeters ?? 0).rounded())),
             street: instruction?.streetName ?? "",
-            status: status
+            status: status,
+            destinationMode: destination.mode,
+            destinationX: destination.point.x,
+            destinationY: destination.point.y
         ) else { return }
         navigationManeuver = update.maneuver
         navigationDistanceMeters = update.distanceMeters
@@ -642,7 +719,8 @@ final class AppModel: ObservableObject {
         logNavigation(
             "nav.update",
             "maneuver=\(update.maneuver.rawValue) distanceM=\(update.distanceMeters) " +
-            "status=\(update.status.rawValue) marker=\(update.x),\(update.y)"
+            "status=\(update.status.rawValue) marker=\(update.x),\(update.y) " +
+            "destination=\(update.destinationMode.rawValue),\(update.destinationX),\(update.destinationY)"
         )
         guard let first = updateCoalescer.enqueue(update), updateTask == nil else { return }
         updateTask = Task { @MainActor [weak self] in await self?.drainUpdates(first) }
@@ -652,6 +730,24 @@ final class AppModel: ObservableObject {
         let normalized = degrees.truncatingRemainder(dividingBy: 360)
         let positive = normalized < 0 ? normalized + 360 : normalized
         return Int((positive + 22.5) / 45) % 8
+    }
+
+    private func destinationPresentation(
+        status: NavigationStatus,
+        marker: ScreenPoint,
+        mask: BandDisplaySafeMask
+    ) -> (mode: DestinationPresentationMode, point: ScreenPoint) {
+        guard status != .arrived,
+              let destination = navigationDestination,
+              let configuration = activeSnapshotConfiguration else { return (.hidden, ScreenPoint(x: 0, y: 0)) }
+        let projected = configuration.point(for: destination)
+        guard projected.x.isFinite, projected.y.isFinite else { return (.hidden, ScreenPoint(x: 0, y: 0)) }
+        let target = ScreenPoint(
+            x: Int(max(-100_000, min(100_000, projected.x)).rounded()),
+            y: Int(max(-100_000, min(100_000, projected.y)).rounded())
+        )
+        if mask.contains(center: target, resourceWidth: 20, resourceHeight: 24) { return (.visible, target) }
+        return (.edge, mask.edgePoint(from: marker, toward: target, resourceWidth: 20, resourceHeight: 20))
     }
 
     static func initialRouteHeading(courseDegrees: Double, speedMetersPerSecond: Double) -> Int? {
@@ -887,21 +983,6 @@ final class AppModel: ObservableObject {
         Int(Date().timeIntervalSince1970 * 1_000)
     }
 
-    private static func remainingDistance(
-        route: RoutePlan,
-        location: GeoPoint,
-        progressIndex: Int,
-        instruction: RouteInstruction?
-    ) -> Int {
-        guard let instruction else { return 0 }
-        let end = min(instruction.interval.upperBound, route.points.count - 1)
-        let start = min(progressIndex, end)
-        var distance = meters(location, route.points[start])
-        if start < end {
-            for index in start..<end { distance += meters(route.points[index], route.points[index + 1]) }
-        }
-        return max(0, Int(distance.rounded()))
-    }
 }
 
 private extension CLLocation {

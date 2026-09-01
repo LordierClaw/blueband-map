@@ -57,8 +57,11 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         )
         let request = VietmapSnapshotRequest(
             route: route,
-            progressIndex: 0,
             matchedPosition: route.points[0],
+            overlayGeometry: RouteOverlayGeometry(
+                subdued: route.points, traveled: [route.points[0]],
+                active: route.points, context: [route.points[1]]
+            ),
             headingDegrees: 45,
             nextManeuver: route.points[1],
             tileMapKey: "fixture-key"
@@ -79,18 +82,23 @@ final class VietmapSnapshotRendererTests: XCTestCase {
     func testOverlayCommandsKeepRouteGeometryAndManeuverAboveRoads() throws {
         let route = RoutePlan(
             points: [GeoPoint(latitude: 10, longitude: 106), GeoPoint(latitude: 10.01, longitude: 106.01), GeoPoint(latitude: 10.02, longitude: 106.02)],
-            instructions: [], distanceMeters: 500
+            instructions: [RouteInstruction(distanceMeters: 500, headingDegrees: 45, sign: 0, interval: 0...2, streetName: "Road")],
+            distanceMeters: 500
         )
         let request = VietmapSnapshotRequest(
-            route: route, progressIndex: 1, matchedPosition: route.points[1],
+            route: route, matchedPosition: route.points[1],
+            overlayGeometry: RouteOverlayGeometry(
+                subdued: route.points, traveled: Array(route.points.prefix(2)),
+                active: Array(route.points.dropFirst(1)), context: [route.points[2]]
+            ),
             headingDegrees: 0, nextManeuver: route.points[2], tileMapKey: "fixture-key"
         )
 
         XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.kind), [
-            .traveled, .upcoming, .maneuver,
+            .subdued, .traveled, .context, .active, .maneuver,
         ])
-        XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [4, 5, 9])
+        XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [3, 4, 4, 5, 9])
         XCTAssertEqual(VietmapRouteOverlay.traveledColorHex, "#41516b")
-        XCTAssertEqual(VietmapRouteOverlay.upcomingColorHex, "#2f6bff")
+        XCTAssertEqual(VietmapRouteOverlay.activeColorHex, "#1f5fd1")
     }
 }

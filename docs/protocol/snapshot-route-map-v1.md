@@ -11,7 +11,7 @@ This protocol is above the unchanged Xiaomi transport and application envelope v
 | Dimensions | `212×520` |
 | Payload | `1…8,192` bytes |
 | Primitives | `0` |
-| Envelope ceiling | 512 encoded bytes |
+| Envelope ceiling | 1,024 encoded bytes |
 | Transfer window | 1, 2, or 4 application ACKs |
 
 The iPhone sends `render.prepare` and waits for matching `render.ready`; then sends ordered `map.asset.begin`, windowed `map.asset.chunk` messages, and ordered `map.asset.end`. Each chunk has a unique message ID and the exact next byte offset. Base64 chunk size is selected from the real encoded envelope, not a fixed data size.
@@ -26,7 +26,7 @@ The Band preallocates one bounded buffer, validates the complete SHA-256, writes
 
 Before the first scene exists, `nav.status` carries only `locating` or `gpsLow` so the Band gives immediate feedback. It does not contain coordinates or route data.
 
-`nav.update` retains the existing bounded fields: confirmed `scene`, monotonic `seq`, `x/y`, maneuver, distance, street, and status. It is sent no faster than 1 Hz; while one update awaits an ACK, only the newest pending update is retained. Coordinates are inside 212×520.
+`nav.update` retains the existing bounded fields: confirmed `scene`, monotonic `seq`, `x/y`, heading, maneuver, distance, street, and status. It also carries atomic destination presentation fields: `destinationMode` (`visible`, `edge`, or `hidden`) plus `destinationX/Y`. Hidden mode requires zero coordinates; visible and edge coordinates must be inside 212×520. It is sent no faster than 1 Hz; while one update awaits an ACK, only the newest pending update is retained.
 
 Normal `navigating` status text is hidden. `gpsLow`, `limitedMap`, `rerouting`, and `arrived` remain visible; asset preparation/publication uses `LOADING MAP`.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## iOS 0.5.0 / RPK 0.6.0 - 2026-09-01
+
+- Keep the road-snapped marker and active route continuous at the exact fractional route match without changing monotonic progress, off-route thresholds, reroute cooldown, or Vietmap Route v4.
+- Skip only GPS-indistinguishable completed guidance, use route-tangent heading while stationary, and adopt GPS course after two reliable moving fixes with three-fix fallback and bounded refresh hysteresis.
+- Add a curved-safe destination pin and off-screen edge ring, enlarge the green user marker and maneuver arrow, move the HUD inward, and include a Band display calibration screen estimated from the supplied hardware photographs.
+- Bump iOS to `0.5.0 (16)` and RPK to `0.6.0 (15)` because both packaged artifacts change. Xiaomi BLE/SPP/authentication bytes remain unchanged.
+
 ## iOS 0.4.1 / RPK 0.5.0 - 2026-09-01
 
 - Ignore low-speed or invalid GPS course when requesting the initial route so Vietmap Route v4 is not constrained by a noisy stationary heading.

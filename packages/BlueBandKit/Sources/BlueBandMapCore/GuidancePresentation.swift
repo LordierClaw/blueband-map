@@ -6,7 +6,51 @@ public struct GuidanceSelection: Equatable, Sendable {
     public let distanceMeters: Double
 }
 
+public struct RouteOverlayGeometry: Equatable, Sendable {
+    public let subdued: [GeoPoint]
+    public let traveled: [GeoPoint]
+    public let active: [GeoPoint]
+    public let context: [GeoPoint]
+
+    public init(subdued: [GeoPoint], traveled: [GeoPoint], active: [GeoPoint], context: [GeoPoint]) {
+        self.subdued = subdued
+        self.traveled = traveled
+        self.active = active
+        self.context = context
+    }
+
+    public static func make(
+        route: RoutePlan,
+        progress: RouteProgress,
+        selection: GuidanceSelection
+    ) -> Self {
+        let segment = min(progress.matchedSegmentIndex, route.points.count - 2)
+        let matched = progress.matchedLocation ?? route.points[segment]
+        let maneuver = min(selection.instruction.interval.upperBound, route.points.count - 1)
+        let traveled = Array(route.points.prefix(segment + 1)) + [matched]
+        let active = [matched] + (maneuver > segment ? Array(route.points[(segment + 1)...maneuver]) : [])
+        var context = [route.points[maneuver]]
+        var distance = 0.0
+        var index = maneuver
+        while index + 1 < route.points.count, context.count == 1 || distance < 80 {
+            distance += meters(route.points[index], route.points[index + 1])
+            index += 1
+            context.append(route.points[index])
+        }
+        return Self(subdued: route.points, traveled: traveled, active: active, context: context)
+    }
+
+    private static func meters(_ a: GeoPoint, _ b: GeoPoint) -> Double {
+        let latitude = (a.latitude + b.latitude) / 2 * .pi / 180
+        return hypot((b.longitude - a.longitude) * 111_320 * cos(latitude), (b.latitude - a.latitude) * 111_132)
+    }
+}
+
 public enum GuidancePresentationPolicy {
+    public static func markerLocation(progress: RouteProgress, rawLocation: GeoPoint) -> GeoPoint {
+        progress.shouldReroute ? rawLocation : (progress.matchedLocation ?? rawLocation)
+    }
+
     public static func select(
         route: RoutePlan,
         progress: RouteProgress,

@@ -91,6 +91,27 @@ final class VietmapRouteTests: XCTestCase {
         let good = tracker.update(route: route, location: route.points[0], horizontalAccuracyMeters: 5)
         let poor = tracker.update(route: route, location: route.points[1], horizontalAccuracyMeters: 30)
         XCTAssertEqual(poor.pointIndex, good.pointIndex)
+        XCTAssertEqual(poor.matchedLocation, good.matchedLocation)
         XCTAssertEqual(poor.status, .gpsLow)
+    }
+
+    func testConsecutiveFixesStayOnTheCurrentSegmentPastItsMidpoint() throws {
+        let route = RoutePlan(
+            points: [
+                GeoPoint(latitude: 10, longitude: 106),
+                GeoPoint(latitude: 10.001, longitude: 106),
+                GeoPoint(latitude: 10.002, longitude: 106),
+            ],
+            instructions: [],
+            distanceMeters: 222
+        )
+        var tracker = RouteProgressTracker()
+
+        _ = tracker.update(route: route, location: GeoPoint(latitude: 10.0006, longitude: 106), horizontalAccuracyMeters: 5)
+        let next = tracker.update(route: route, location: GeoPoint(latitude: 10.0007, longitude: 106), horizontalAccuracyMeters: 5)
+
+        XCTAssertEqual(next.matchedSegmentIndex, 0)
+        XCTAssertEqual(next.matchedFraction, 0.7, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(next.matchedLocation).latitude, 10.0007, accuracy: 0.000001)
     }
 }

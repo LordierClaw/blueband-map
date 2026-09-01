@@ -79,4 +79,35 @@ final class GuidancePresentationTests: XCTestCase {
         XCTAssertTrue(GuidanceBearingPolicy.shouldRefresh(preferred: 30, confirmed: 0, secondsSinceRefresh: 12))
         XCTAssertFalse(GuidanceBearingPolicy.shouldRefresh(preferred: 29, confirmed: 0, secondsSinceRefresh: 20))
     }
+
+    func testOverlayGeometrySplitsExactlyAtFractionalMatch() throws {
+        let matched = GeoPoint(latitude: 10.000_009, longitude: 106)
+        let progress = RouteProgress(
+            pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0.5,
+            distanceFromRouteMeters: 0, matchedLocation: matched,
+            shouldReroute: false, status: .navigating
+        )
+        let selection = try XCTUnwrap(GuidancePresentationPolicy.select(
+            route: route, progress: progress, horizontalAccuracyMeters: 5
+        ))
+
+        let geometry = RouteOverlayGeometry.make(route: route, progress: progress, selection: selection)
+
+        XCTAssertEqual(geometry.traveled.last, matched)
+        XCTAssertEqual(geometry.active.first, matched)
+        XCTAssertEqual(geometry.active.last, route.points[selection.instruction.interval.upperBound])
+        XCTAssertEqual(geometry.context.first, geometry.active.last)
+    }
+
+    func testOffRouteMarkerUsesRawAcceptedLocation() {
+        let raw = GeoPoint(latitude: 10.002, longitude: 106.002)
+        let snapped = route.points[1]
+        let progress = RouteProgress(
+            pointIndex: 1, matchedSegmentIndex: 1, matchedFraction: 0,
+            distanceFromRouteMeters: 50, matchedLocation: snapped,
+            shouldReroute: true, status: .navigating
+        )
+
+        XCTAssertEqual(GuidancePresentationPolicy.markerLocation(progress: progress, rawLocation: raw), raw)
+    }
 }

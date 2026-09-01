@@ -1,9 +1,13 @@
 import BlueBandCore
 import Foundation
 
+public enum DestinationPresentationMode: String, Equatable, Codable, Sendable {
+    case visible, edge, hidden
+}
+
 public struct NavigationUpdate: Equatable, Sendable {
     public enum Error: Swift.Error, Equatable, Sendable {
-        case invalidScene, invalidSequence, invalidMarker, invalidHeading, invalidDistance
+        case invalidScene, invalidSequence, invalidMarker, invalidHeading, invalidDistance, invalidDestination
     }
     public static let topic = "nav.update"
 
@@ -16,6 +20,9 @@ public struct NavigationUpdate: Equatable, Sendable {
     public let distanceMeters: Int
     public let street: String
     public let status: NavigationStatus
+    public let destinationMode: DestinationPresentationMode
+    public let destinationX: Int
+    public let destinationY: Int
 
     public init(
         scene: String,
@@ -26,7 +33,10 @@ public struct NavigationUpdate: Equatable, Sendable {
         headingBucket: Int = 0,
         distanceMeters: Int,
         street: String,
-        status: NavigationStatus
+        status: NavigationStatus,
+        destinationMode: DestinationPresentationMode = .hidden,
+        destinationX: Int = 0,
+        destinationY: Int = 0
     ) throws {
         guard RenderProtocol.isValidIdentifier(scene) else { throw Error.invalidScene }
         guard seq >= 0 else { throw Error.invalidSequence }
@@ -35,6 +45,12 @@ public struct NavigationUpdate: Equatable, Sendable {
         }
         guard (0..<8).contains(headingBucket) else { throw Error.invalidHeading }
         guard distanceMeters >= 0 else { throw Error.invalidDistance }
+        if destinationMode == .hidden {
+            guard destinationX == 0, destinationY == 0 else { throw Error.invalidDestination }
+        } else {
+            guard (0..<RenderProtocol.viewportWidth).contains(destinationX),
+                  (0..<RenderProtocol.viewportHeight).contains(destinationY) else { throw Error.invalidDestination }
+        }
         var boundedStreet = street
         while boundedStreet.utf8.count > 48 { boundedStreet.removeLast() }
         self.scene = scene
@@ -46,6 +62,9 @@ public struct NavigationUpdate: Equatable, Sendable {
         self.distanceMeters = distanceMeters
         self.street = boundedStreet
         self.status = status
+        self.destinationMode = destinationMode
+        self.destinationX = destinationX
+        self.destinationY = destinationY
     }
 
     public func jsonBody() -> [String: JSONValue] {
@@ -55,6 +74,8 @@ public struct NavigationUpdate: Equatable, Sendable {
             "heading": .number(Double(headingBucket)),
             "maneuver": .string(maneuver.rawValue), "distanceM": .number(Double(distanceMeters)),
             "street": .string(street), "status": .string(status.rawValue),
+            "destinationMode": .string(destinationMode.rawValue),
+            "destinationX": .number(Double(destinationX)), "destinationY": .number(Double(destinationY)),
         ]
     }
 }

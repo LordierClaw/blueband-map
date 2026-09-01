@@ -45,6 +45,15 @@ function begin(overrides = {}) {
   }
 }
 
+function navigation(overrides = {}) {
+  return {
+    scene: SCENE, seq: 1, x: 106, y: 320, heading: 0,
+    maneuver: "straight", distanceM: 100, street: "Road", status: "navigating",
+    destinationMode: "hidden", destinationX: 0, destinationY: 0,
+    ...overrides
+  }
+}
+
 function memoryFile() {
   const storage = new Map()
   const writes = []
@@ -72,13 +81,13 @@ async function harness() {
   return { page: await loadPage(connection, file), sent, file, connection }
 }
 
-function publish(page) {
-  page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
-  page.receiveMessage({ data: envelope("begin", "map.asset.begin", begin()) })
-  page.receiveMessage({ data: envelope("chunk", "map.asset.chunk", {
-    asset: ASSET, run: RUN, scene: SCENE, offset: 0, data: Buffer.from(BYTES).toString("base64")
+function publish(page, scene = SCENE, suffix = "") {
+  page.receiveMessage({ data: envelope(`prepare${suffix}`, "render.prepare", prepare({ sceneId: scene })) })
+  page.receiveMessage({ data: envelope(`begin${suffix}`, "map.asset.begin", begin({ scene })) })
+  page.receiveMessage({ data: envelope(`chunk${suffix}`, "map.asset.chunk", {
+    asset: ASSET, run: RUN, scene, offset: 0, data: Buffer.from(BYTES).toString("base64")
   }) })
-  page.receiveMessage({ data: envelope("end", "map.asset.end", { asset: ASSET, run: RUN, scene: SCENE }) })
+  page.receiveMessage({ data: envelope(`end${suffix}`, "map.asset.end", { asset: ASSET, run: RUN, scene }) })
   page.mapComplete(page.pendingPublication.token)
 }
 
@@ -135,27 +144,62 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
   statuses.forEach((status, seq) => page.receiveMessage({ data: envelope(`nav-${seq}`, "nav.update", {
     scene: SCENE, seq, x: 100 + seq, y: 300 - seq,
     maneuver: status === "arrived" ? "arrive" : "right",
-    heading: seq, distanceM: 180 - seq, street: "Next Road", status
+    heading: seq, distanceM: 180 - seq, street: "Next Road", status,
+    destinationMode: "hidden", destinationX: 0, destinationY: 0
   }) }))
 
   assert.equal(page.navStatus, "ARRIVED")
   assert.equal(page.navArrowPath, "/common/maneuver-arrive.png")
   assert.equal(page.navMarkerPath, "/common/marker-4.png")
-  assert.equal(page.navMarkerStyle, "left:85px;top:274px;")
+  assert.equal(page.navMarkerStyle, "left:81px;top:269px;")
   assert.equal(page.navStatusVisible, true)
   page.receiveMessage({ data: envelope("nav-5", "nav.update", {
-    scene: SCENE, seq: 5, x: 104, y: 296, heading: 3, maneuver: "straight", distanceM: 120, street: "Next Road", status: "navigating"
+    ...navigation({ seq: 5, x: 104, y: 296, heading: 3, distanceM: 120, street: "Next Road" })
   }) })
   assert.equal(page.navStatusVisible, false)
   page.receiveMessage({ data: envelope("stale", "nav.update", {
-    scene: SCENE, seq: 3, x: 1, y: 1, maneuver: "left", distanceM: 1, street: "Stale", status: "navigating"
+    ...navigation({ seq: 3, x: 1, y: 1, maneuver: "left", distanceM: 1, street: "Stale" })
   }) })
   page.receiveMessage({ data: envelope("wrong", "nav.update", {
-    scene: "wrong-scene", seq: 99, x: 1, y: 1, maneuver: "left", distanceM: 1, street: "Wrong", status: "navigating"
+    ...navigation({ scene: "wrong-scene", seq: 99, x: 1, y: 1, maneuver: "left", distanceM: 1, street: "Wrong" })
   }) })
   assert.equal(page.navSequence, 5)
   assert.equal(page.navStreet, "Next Road")
   assert.equal(sent.filter(message => message.type === "ack" && /^nav-|stale|wrong/.test(message.id)).length, 8)
+})
+
+test("destination overlay switches atomically and stays inside the curved safe mask", async () => {
+  const { page } = await harness()
+  publish(page)
+  page.receiveMessage({ data: envelope("visible", "nav.update", navigation({
+    destinationMode: "visible", destinationX: 106, destinationY: 120
+  })) })
+  assert.equal(page.navDestinationVisible, true)
+  assert.equal(page.navDestinationPath, "/common/destination-pin.png")
+  assert.equal(page.navDestinationStyle, "left:96px;top:108px;")
+
+  page.receiveMessage({ data: envelope("edge", "nav.update", navigation({
+    seq: 2, destinationMode: "edge", destinationX: 25, destinationY: 80
+  })) })
+  assert.equal(page.navDestinationPath, "/common/destination-edge.png")
+  assert.match(page.navDestinationStyle, /^left:\d+px;top:\d+px;$/)
+
+  page.receiveMessage({ data: envelope("partial", "nav.update", navigation({
+    seq: 3, destinationMode: "visible", destinationX: 106, destinationY: undefined
+  })) })
+  assert.equal(page.navSequence, 2)
+
+  page.receiveMessage({ data: envelope("hidden", "nav.update", navigation({ seq: 3 })) })
+  assert.equal(page.navDestinationVisible, false)
+
+  page.receiveMessage({ data: envelope("visible-again", "nav.update", navigation({
+    seq: 4, destinationMode: "visible", destinationX: 106, destinationY: 120
+  })) })
+  publish(page, "scene-refresh-01", "-refresh")
+  assert.equal(page.navDestinationVisible, false)
+  assert.equal(page.navMarkerVisible, false)
+  page.receiveMessage({ data: envelope("new-marker", "nav.update", navigation({ scene: "scene-refresh-01" })) })
+  assert.equal(page.navMarkerVisible, true)
 })
 
 test("render.prepare shows compact guidance before the map arrives", async () => {
@@ -192,7 +236,8 @@ test("cancelled refresh restores the confirmed scene guidance", async () => {
   publish(page)
   page.receiveMessage({ data: envelope("nav-old", "nav.update", {
     scene: SCENE, seq: 1, x: 106, y: 320, heading: 2,
-    maneuver: "left", distanceM: 140, street: "Old Road", status: "navigating"
+    maneuver: "left", distanceM: 140, street: "Old Road", status: "navigating",
+    destinationMode: "hidden", destinationX: 0, destinationY: 0
   }) })
   page.receiveMessage({ data: envelope("prepare-new", "render.prepare", prepare({
     sceneId: "scene-refresh-01",
@@ -200,7 +245,8 @@ test("cancelled refresh restores the confirmed scene guidance", async () => {
   })) })
   page.receiveMessage({ data: envelope("nav-latest", "nav.update", {
     scene: SCENE, seq: 2, x: 108, y: 318, heading: 3,
-    maneuver: "straight", distanceM: 120, street: "Latest Road", status: "navigating"
+    maneuver: "straight", distanceM: 120, street: "Latest Road", status: "navigating",
+    destinationMode: "hidden", destinationX: 0, destinationY: 0
   }) })
   assert.equal(page.navStreet, "New Road")
   page.receiveMessage({ data: envelope("cancel-new", "render.cancel", {
@@ -232,7 +278,8 @@ test("disconnect clears transfer ownership and nav sequence without accepting qu
   const before = sent.length
   connection.onclose()
   page.receiveMessage({ data: envelope("queued", "nav.update", {
-    scene: SCENE, seq: 1, x: 106, y: 320, heading: 0, maneuver: "straight", distanceM: 1, street: "Queued", status: "navigating"
+    scene: SCENE, seq: 1, x: 106, y: 320, heading: 0, maneuver: "straight", distanceM: 1,
+    street: "Queued", status: "navigating", destinationMode: "hidden", destinationX: 0, destinationY: 0
   }) })
   assert.equal(page.activeTransfer, null)
   assert.equal(page.activeMapOperationID, "")

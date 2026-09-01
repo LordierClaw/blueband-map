@@ -14,8 +14,8 @@ struct EdgeInsets: Equatable, Sendable {
 
 struct VietmapSnapshotRequest: Sendable {
     let route: RoutePlan
-    let progressIndex: Int
     let matchedPosition: GeoPoint
+    let overlayGeometry: RouteOverlayGeometry
     let headingDegrees: Double
     let nextManeuver: GeoPoint
     let tileMapKey: String
@@ -44,7 +44,6 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
 
     static func make(_ request: VietmapSnapshotRequest) throws -> Self {
         guard request.route.points.count >= 2,
-              request.route.points.indices.contains(request.progressIndex),
               request.headingDegrees.isFinite,
               (0...360).contains(request.headingDegrees),
               !request.tileMapKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -191,13 +190,16 @@ enum VietmapDarkStyle {
 }
 
 struct VietmapRouteOverlay {
-    enum Kind: Equatable { case traveled, upcoming, maneuver }
+    enum Kind: Equatable { case subdued, traveled, context, active, maneuver }
     struct Command: Equatable { let kind: Kind; let width: CGFloat }
+    static let subduedColorHex = "#243852"
     static let traveledColorHex = "#41516b"
-    static let upcomingColorHex = "#2f6bff"
+    static let contextColorHex = "#31577f"
+    static let activeColorHex = "#1f5fd1"
 
     static func commands(for request: VietmapSnapshotRequest) -> [Command] {
-        [Command(kind: .traveled, width: 4), Command(kind: .upcoming, width: 5),
+        [Command(kind: .subdued, width: 3), Command(kind: .traveled, width: 4),
+         Command(kind: .context, width: 4), Command(kind: .active, width: 5),
          Command(kind: .maneuver, width: 9)]
     }
 
@@ -206,11 +208,12 @@ struct VietmapRouteOverlay {
         context.saveGState()
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        drawPath(Array(request.route.points.prefix(request.progressIndex + 1)), color: VietmapDarkStyle.color(hex: traveledColorHex).cgColor, width: 4, overlay: overlay)
-        let upcoming = Array(request.route.points.dropFirst(request.progressIndex))
-        drawPath(upcoming, color: VietmapDarkStyle.color(hex: upcomingColorHex).cgColor, width: 5, overlay: overlay)
+        drawPath(request.overlayGeometry.subdued, color: VietmapDarkStyle.color(hex: subduedColorHex).cgColor, width: 3, overlay: overlay)
+        drawPath(request.overlayGeometry.traveled, color: VietmapDarkStyle.color(hex: traveledColorHex).cgColor, width: 4, overlay: overlay)
+        drawPath(request.overlayGeometry.context, color: VietmapDarkStyle.color(hex: contextColorHex).cgColor, width: 4, overlay: overlay)
+        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeColorHex).cgColor, width: 5, overlay: overlay)
         let point = overlay.point(for: coordinate(request.nextManeuver))
-        context.setStrokeColor(VietmapDarkStyle.color(hex: upcomingColorHex).cgColor)
+        context.setStrokeColor(VietmapDarkStyle.color(hex: activeColorHex).cgColor)
         context.setLineWidth(3)
         context.strokeEllipse(in: CGRect(x: point.x - 4.5, y: point.y - 4.5, width: 9, height: 9))
         context.restoreGState()

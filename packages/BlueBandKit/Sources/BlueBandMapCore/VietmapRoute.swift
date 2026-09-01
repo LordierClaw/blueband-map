@@ -244,6 +244,7 @@ public struct RouteProgressTracker: Sendable {
     private var lastPointIndex = 0
     private var lastMatchedSegmentIndex = 0
     private var lastMatchedFraction = 0.0
+    private var lastMatchedLocation: GeoPoint?
     private var consecutiveOffRouteFixes = 0
 
     public init() {}
@@ -260,12 +261,12 @@ public struct RouteProgressTracker: Sendable {
                 matchedSegmentIndex: lastMatchedSegmentIndex,
                 matchedFraction: lastMatchedFraction,
                 distanceFromRouteMeters: .infinity,
-                matchedLocation: nil,
+                matchedLocation: lastMatchedLocation,
                 shouldReroute: false,
                 status: .gpsLow
             )
         }
-        let start = min(lastPointIndex, route.points.count - 2)
+        let start = min(lastMatchedSegmentIndex, route.points.count - 2)
         var bestIndex = start
         var bestSegmentIndex = start
         var bestDistance = Double.infinity
@@ -290,6 +291,7 @@ public struct RouteProgressTracker: Sendable {
             latitude: startPoint.latitude + (endPoint.latitude - startPoint.latitude) * bestFraction,
             longitude: startPoint.longitude + (endPoint.longitude - startPoint.longitude) * bestFraction
         )
+        lastMatchedLocation = matchedLocation
         return RouteProgress(
             pointIndex: lastPointIndex,
             matchedSegmentIndex: bestSegmentIndex,

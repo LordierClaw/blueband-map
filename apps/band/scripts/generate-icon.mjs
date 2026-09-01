@@ -115,27 +115,28 @@ function paintLine(bitmap, imageWidth, imageHeight, from, to, radius, color) {
 }
 
 function paintGlyph(lines, circles = []) {
-  const bitmap = new Uint8Array(42 * 54)
+  const bitmap = new Uint8Array(44 * 56)
   for (const color of [1, 2]) {
     const radius = color === 1 ? 5 : 3
-    for (const [from, to] of lines) paintLine(bitmap, 42, 54, from, to, radius, color)
-    for (const [x, y, size] of circles) paintCircle(bitmap, 42, 54, x, y, size + (color === 1 ? 2 : 0), color)
+    for (const [from, to] of lines) paintLine(bitmap, 44, 56,
+      [from[0] + 1, from[1] + 1], [to[0] + 1, to[1] + 1], radius, color)
+    for (const [x, y, size] of circles) paintCircle(bitmap, 44, 56, x + 1, y + 1, size + (color === 1 ? 2 : 0), color)
   }
   return bitmap
 }
 
 function paintRoundabout() {
-  const bitmap = new Uint8Array(42 * 54)
+  const bitmap = new Uint8Array(44 * 56)
   for (const color of [1, 2]) {
     const thickness = color === 1 ? 5 : 3
-    for (let y = 7; y < 40; y += 1) {
-      for (let x = 4; x < 38; x += 1) {
-        if (Math.abs(Math.hypot(x - 21, y - 23) - 11) <= thickness) bitmap[y * 42 + x] = color
+    for (let y = 8; y < 41; y += 1) {
+      for (let x = 5; x < 39; x += 1) {
+        if (Math.abs(Math.hypot(x - 22, y - 24) - 11) <= thickness) bitmap[y * 44 + x] = color
       }
     }
-    paintLine(bitmap, 42, 54, [21, 47], [21, 34], thickness, color)
-    paintLine(bitmap, 42, 54, [29, 12], [36, 18], thickness, color)
-    paintLine(bitmap, 42, 54, [36, 18], [29, 24], thickness, color)
+    paintLine(bitmap, 44, 56, [22, 48], [22, 35], thickness, color)
+    paintLine(bitmap, 44, 56, [30, 13], [37, 19], thickness, color)
+    paintLine(bitmap, 44, 56, [37, 19], [30, 25], thickness, color)
   }
   return bitmap
 }
@@ -161,7 +162,7 @@ const glyphs = {
   ]
 }
 for (const [name, [lines, circles]] of Object.entries(glyphs)) {
-  await writeIndexed(`maneuver-${name}.png`, 42, 54,
+  await writeIndexed(`maneuver-${name}.png`, 44, 56,
     [[0, 0, 0], [0, 33, 46], [0, 229, 255]], [0, 255, 255],
     name === "roundabout" ? paintRoundabout() : paintGlyph(lines, circles))
 }
@@ -182,15 +183,71 @@ function fillPolygon(bitmap, imageWidth, imageHeight, points, color) {
 function rotated(points, bucket) {
   const angle = bucket * Math.PI / 4
   return points.map(([x, y]) => [
-    19 + (x - 19) * Math.cos(angle) - (y - 22) * Math.sin(angle),
-    22 + (x - 19) * Math.sin(angle) + (y - 22) * Math.cos(angle)
+    23 + (x - 23) * Math.cos(angle) - (y - 27) * Math.sin(angle),
+    27 + (x - 23) * Math.sin(angle) + (y - 27) * Math.cos(angle)
   ])
 }
 
 for (let bucket = 0; bucket < 8; bucket += 1) {
-  const marker = new Uint8Array(38 * 44)
-  fillPolygon(marker, 38, 44, rotated([[19, 5], [31, 35], [19, 29], [7, 35]], bucket), 1)
-  fillPolygon(marker, 38, 44, rotated([[19, 10], [26, 30], [19, 25], [12, 30]], bucket), 2)
-  await writeIndexed(`marker-${bucket}.png`, 38, 44,
+  const marker = new Uint8Array(46 * 54)
+  fillPolygon(marker, 46, 54, rotated([[23, 6], [36, 44], [23, 37], [10, 44]], bucket), 1)
+  fillPolygon(marker, 46, 54, rotated([[23, 12], [31, 38], [23, 32], [15, 38]], bucket), 2)
+  await writeIndexed(`marker-${bucket}.png`, 46, 54,
     [[0, 0, 0], [4, 19, 10], [102, 255, 122]], [0, 255, 255], marker)
 }
+
+const destinationPalette = [[0, 0, 0], [55, 32, 3], [255, 178, 24], [255, 244, 194]]
+const destinationPin = new Uint8Array(20 * 24)
+paintCircle(destinationPin, 20, 24, 10, 9, 8, 1)
+paintCircle(destinationPin, 20, 24, 10, 9, 6, 2)
+paintCircle(destinationPin, 20, 24, 10, 9, 2, 3)
+fillPolygon(destinationPin, 20, 24, [[6, 14], [14, 14], [10, 22]], 1)
+fillPolygon(destinationPin, 20, 24, [[8, 14], [12, 14], [10, 19]], 2)
+await writeIndexed("destination-pin.png", 20, 24, destinationPalette, [0, 255, 255, 255], destinationPin)
+
+const destinationEdge = new Uint8Array(20 * 20)
+paintCircle(destinationEdge, 20, 20, 10, 10, 9, 1)
+paintCircle(destinationEdge, 20, 20, 10, 10, 7, 2)
+paintCircle(destinationEdge, 20, 20, 10, 10, 4, 0)
+paintCircle(destinationEdge, 20, 20, 10, 10, 1.5, 3)
+await writeIndexed("destination-edge.png", 20, 20, destinationPalette, [0, 255, 255, 255], destinationEdge)
+
+function insideCapsule(x, y, inset) {
+  const radius = 106 - inset
+  if (x < inset || x > 212 - inset || y < inset || y > 520 - inset) return false
+  if (y < 106) return Math.hypot(x - 106, y - 106) <= radius
+  if (y > 413) return Math.hypot(x - 106, y - 413) <= radius
+  return true
+}
+
+const calibration = new Uint8Array(212 * 520)
+for (let y = 12; y < 508; y += 1) calibration[y * 212 + 106] = 1
+for (let x = 12; x < 200; x += 1) calibration[260 * 212 + x] = 1
+const calibrationInsets = [6, 10, 14, 18]
+for (let level = 0; level < calibrationInsets.length; level += 1) {
+  const inset = calibrationInsets[level]
+  for (let y = 0; y < 520; y += 1) {
+    for (let x = 0; x < 212; x += 1) {
+      if (!insideCapsule(x, y, inset)) continue
+      if (!insideCapsule(x - 1, y, inset) || !insideCapsule(x + 1, y, inset) ||
+        !insideCapsule(x, y - 1, inset) || !insideCapsule(x, y + 1, inset)) calibration[y * 212 + x] = level + 2
+    }
+  }
+}
+for (let index = 0; index < 16; index += 1) {
+  const angle = index * Math.PI * 2 / 16
+  const target = [106 + Math.cos(angle) * 600, 260 + Math.sin(angle) * 600]
+  let low = 0, high = 1
+  for (let iteration = 0; iteration < 24; iteration += 1) {
+    const ratio = (low + high) / 2
+    const x = 106 + (target[0] - 106) * ratio
+    const y = 260 + (target[1] - 260) * ratio
+    if (insideCapsule(x, y, 14)) low = ratio
+    else high = ratio
+  }
+  paintCircle(calibration, 212, 520,
+    106 + (target[0] - 106) * low, 260 + (target[1] - 260) * low, 3, 6)
+}
+await writeIndexed("safe-area-calibration.png", 212, 520,
+  [[0, 0, 0], [60, 82, 110], [37, 99, 235], [0, 170, 255], [94, 255, 160], [255, 178, 24], [255, 255, 255]],
+  [255, 255, 255, 255, 255, 255, 255], calibration)
