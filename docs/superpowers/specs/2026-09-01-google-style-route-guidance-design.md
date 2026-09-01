@@ -11,15 +11,15 @@ The accepted hardware screenshot and `BlueBandMap-navigation-debug.txt` show a 9
 The current implementation has four mismatches:
 
 1. `RouteOverlayGeometry.active` ends at the selected instruction's upper bound, and `context` retains only about 80 m after it. The remaining route is therefore subdued or absent instead of visibly continuing through the viewport.
-2. Guidance uses the current interval's maneuver and distance to its upper bound. It therefore shows `straight 66 m` where the next action at that boundary is a right turn.
+2. Guidance pairs the current interval's maneuver with the distance remaining to that interval's end. Vietmap defines that distance as the distance until the next instruction, so the UI shows `straight 66 m` where the next action is a right turn.
 3. The 20×20 off-screen destination ring is kept fully inside the physical contour. Its center must remain about half an icon inward, so it does not look attached to the edge.
 4. The marker bitmap is centered mathematically, but its visible green fill is narrow inside a large transparent canvas and dark outline, making it look pinched and optically displaced on hardware.
 
 ## Guidance model
 
-`GuidancePresentationPolicy` will select the next instruction whose `interval.lowerBound` lies ahead of the matched route segment. Its maneuver, street, and distance from the matched position to that lower bound become the header guidance. If no later instruction remains, the arrival instruction is used. Instructions sharing a boundary are kept in provider order; after progress advances beyond that boundary they are all considered passed.
+`GuidancePresentationPolicy` will first identify the route instruction section currently being traversed. The distance from the matched position to that section's upper-bound point remains the geometric distance to the next action, while the following instruction supplies the maneuver and street shown in the header. If no later instruction remains, the final instruction is used. The existing pass-radius loop skips zero-length or already-passed sections in provider order.
 
-The distance calculation follows route geometry from the matched fractional position to the selected instruction's lower-bound point. It does not use the provider instruction's declared segment distance as remaining distance.
+The distance calculation follows route geometry from the matched fractional position to the current section's upper-bound point. It does not use the provider instruction's declared distance as the live remaining distance, because multiple instructions can share a polyline index.
 
 ## Route presentation
 
