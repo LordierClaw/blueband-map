@@ -1,5 +1,11 @@
 # Changelog
 
+## iOS 0.4.1 / RPK 0.5.0 - 2026-09-01
+
+- Ignore low-speed or invalid GPS course when requesting the initial route so Vietmap Route v4 is not constrained by a noisy stationary heading.
+- Add route-request speed diagnostics and a regression test for reliable heading selection.
+- Bump only iOS to `0.4.1 (15)` because only the IPA changes. RPK remains `0.5.0 (14)`.
+
 ## iOS 0.4.0 / RPK 0.5.0 - 2026-09-01
 
 - Preserve familiar urban context with dark road hierarchy, buildings, land use, major/secondary labels, and a bounded POI allowlist.

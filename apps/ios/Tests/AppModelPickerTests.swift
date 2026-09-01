@@ -16,6 +16,13 @@ final class AppModelPickerTests: XCTestCase {
         XCTAssertEqual(AppModel.headingBucket(359), 0)
     }
 
+    func testRouteHeadingRequiresReliableMovement() {
+        XCTAssertNil(AppModel.routeHeading(courseDegrees: 214, speedMetersPerSecond: -1))
+        XCTAssertNil(AppModel.routeHeading(courseDegrees: 214, speedMetersPerSecond: 0))
+        XCTAssertNil(AppModel.routeHeading(courseDegrees: -1, speedMetersPerSecond: 5))
+        XCTAssertEqual(AppModel.routeHeading(courseDegrees: 214.4, speedMetersPerSecond: 1), 214)
+    }
+
     func testSelectingWithoutAuthKeyKeepsOwnedScanActive() async {
         let central = PickerCentral()
         let model = makeModel(central: central, authMode: .missing)

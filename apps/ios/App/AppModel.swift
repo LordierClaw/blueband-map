@@ -426,12 +426,16 @@ final class AppModel: ObservableObject {
     private func makeRoute(from location: CLLocation, to destination: GeoPoint, serviceKey: String) async throws -> RoutePlan {
         navigationState = .routing
         let started = Self.nowMilliseconds()
-        let heading = location.course >= 0 ? Int(location.course.rounded()) : nil
+        let heading = Self.routeHeading(
+            courseDegrees: location.course,
+            speedMetersPerSecond: location.speed
+        )
         logNavigation(
             "route.request",
             "origin=\(NavigationDebugFormatter.coordinateSummary(location.geoPoint)) " +
             "destination=\(NavigationDebugFormatter.coordinateSummary(destination)) " +
-            "heading=\(heading.map(String.init) ?? "unknown")"
+            "heading=\(heading.map(String.init) ?? "unknown") " +
+            "speedMps=\(location.speed.isFinite ? String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), location.speed) : "unknown")"
         )
         let route = try await routeClient.route(
             origin: location.geoPoint,
@@ -634,6 +638,12 @@ final class AppModel: ObservableObject {
         let normalized = degrees.truncatingRemainder(dividingBy: 360)
         let positive = normalized < 0 ? normalized + 360 : normalized
         return Int((positive + 22.5) / 45) % 8
+    }
+
+    static func routeHeading(courseDegrees: Double, speedMetersPerSecond: Double) -> Int? {
+        guard courseDegrees.isFinite, courseDegrees >= 0,
+              speedMetersPerSecond.isFinite, speedMetersPerSecond >= 1 else { return nil }
+        return Int(courseDegrees.rounded())
     }
 
     var navigationStartText: String { Self.fullCoordinate(navigationStart) }
