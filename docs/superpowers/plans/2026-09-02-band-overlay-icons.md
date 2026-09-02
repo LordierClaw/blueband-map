@@ -82,6 +82,8 @@ Insert `<div class="nav-panel" ...></div>` before `nav-header`; remove the `nav-
 
 Use an inset 198×88 dark panel with rounded corners, a contrasting border, and a black shadow. Leave header child positions unchanged.
 
+Set `minAPILevel` to `3` in the Band manifest and assert it in both source-contract and packaged-RPK verification.
+
 - [ ] **Step 3: Centre the larger edge asset**
 
 Change edge overlay positioning from 14-pixel offsets to 17-pixel offsets and include explicit 34×34 inline dimensions. Leave visible destination-pin behavior unchanged.

@@ -253,7 +253,7 @@ test("destination overlay switches atomically and stays inside the curved safe m
   assert.equal(page.destinationDirection(106, 374, 199, 260), 1)
   assert.equal(page.destinationDirection(106, 374, 22, 374), 6)
   assert.deepEqual(page.destinationOverlay("edge", 12, 260), {
-    path: "/common/destination-edge-7.png", style: "left:-2px;top:246px;"
+    path: "/common/destination-edge-7.png", style: "left:-5px;top:243px;width:34px;height:34px;"
   })
   publish(page)
   page.receiveMessage({ data: envelope("visible", "nav.update", navigation({
@@ -267,7 +267,7 @@ test("destination overlay switches atomically and stays inside the curved safe m
     seq: 2, destinationMode: "edge", destinationX: 199, destinationY: 260
   })) })
   assert.equal(page.navDestinationPath, "/common/destination-edge-1.png")
-  assert.equal(page.navDestinationStyle, "left:185px;top:246px;")
+  assert.equal(page.navDestinationStyle, "left:182px;top:243px;width:34px;height:34px;")
 
   page.receiveMessage({ data: envelope("visible-too-close", "nav.update", navigation({
     seq: 3, destinationMode: "visible", destinationX: 190, destinationY: 260

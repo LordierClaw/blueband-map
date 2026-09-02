@@ -41,7 +41,6 @@ for (const required of [
   "app.js",
   "pages/index/index.js",
   "common/icon.png",
-  "common/nav-shade.png",
   "common/maneuver-straight.png",
   "common/maneuver-left.png",
   "common/maneuver-right.png",
@@ -55,13 +54,15 @@ for (const required of [
 ]) {
   if (!files.has(required)) throw new Error(`RPK missing ${required}`)
 }
+if (files.has("common/nav-shade.png")) throw new Error("RPK must use the native navigation panel instead of nav-shade.png")
 const manifest = JSON.parse(files.get("manifest.json").toString("utf8"))
 const expectedFeatures = [
   { name: "system.interconnect" },
   { name: "system.file" }
 ]
 if (manifest.package !== "dev.lordierclaw.bluebandmap.band" || manifest.icon !== "/common/icon.png" ||
-    manifest.versionName !== "0.6.5" || manifest.versionCode !== 20 || manifest.config.designWidth !== 212 ||
+    manifest.versionName !== "0.6.6" || manifest.versionCode !== 21 || manifest.minAPILevel !== 3 ||
+    manifest.config.designWidth !== 212 ||
     JSON.stringify(manifest.features) !== JSON.stringify(expectedFeatures)) {
   throw new Error("compiled manifest does not match Band 10 bundle contract")
 }
@@ -71,6 +72,20 @@ if (!icon.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
 }
 if (icon.readUInt32BE(16) !== 256 || icon.readUInt32BE(20) !== 256 || icon[25] !== 6) {
   throw new Error("compiled launcher icon must be 256x256 RGBA")
+}
+for (const name of [
+  ...Array.from({ length: 8 }, (_, index) => `marker-${index}.png`),
+  ...Array.from({ length: 8 }, (_, index) => `destination-edge-${index}.png`)
+]) {
+  const asset = files.get(`common/${name}`)
+  const marker = name.startsWith("marker-")
+  const expectedWidth = marker ? 46 : 34
+  const expectedHeight = marker ? 54 : 34
+  if (asset.readUInt32BE(16) !== expectedWidth || asset.readUInt32BE(20) !== expectedHeight || asset[25] !== 6) {
+    throw new Error(`compiled ${name} must be ${expectedWidth}x${expectedHeight} RGBA`)
+  }
+  const source = await readFile(new URL(`../src/common/${name}`, import.meta.url))
+  if (!asset.equals(source)) throw new Error(`compiled ${name} differs from its source asset`)
 }
 if (manifest.router.entry !== "pages/index" || Object.keys(manifest.router.pages).length !== 1) {
   throw new Error("compiled manifest must expose exactly one bridge page")

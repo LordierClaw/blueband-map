@@ -86,18 +86,29 @@ async function writeIndexed(name, imageWidth, imageHeight, palette, alpha, indic
   ))
 }
 
-const hudPalette = [[0, 0, 0], [4, 12, 20]]
-const shade = new Uint8Array(212 * 96)
-for (let y = 0; y < 96; y += 1) {
-  for (let x = 0; x < 212; x += 1) {
-    const visible = y < 56 ||
-      (y < 66 && x % 4 !== y % 4) ||
-      (y < 76 && x % 2 === y % 2) ||
-      (y < 88 && x % 4 === y % 4)
-    if (visible) shade[y * 212 + x] = 1
+function rgbaPNG(imageWidth, imageHeight, rgba) {
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(imageWidth, 0)
+  header.writeUInt32BE(imageHeight, 4)
+  header[8] = 8
+  header[9] = 6
+  const rows = Buffer.alloc((imageWidth * 4 + 1) * imageHeight)
+  for (let y = 0; y < imageHeight; y += 1) {
+    const row = y * (imageWidth * 4 + 1)
+    rows[row] = 0
+    Buffer.from(rgba.subarray(y * imageWidth * 4, (y + 1) * imageWidth * 4)).copy(rows, row + 1)
   }
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(rows, { level: 9 })),
+    chunk("IEND", Buffer.alloc(0))
+  ])
 }
-await writeIndexed("nav-shade.png", 212, 96, hudPalette, [0, 255], shade)
+
+async function writeRGBA(name, imageWidth, imageHeight, rgba) {
+  await writeFile(new URL(`../src/common/${name}`, import.meta.url), rgbaPNG(imageWidth, imageHeight, rgba))
+}
 
 function paintCircle(bitmap, imageWidth, imageHeight, centerX, centerY, radius, color) {
   for (let y = Math.floor(centerY - radius); y <= Math.ceil(centerY + radius); y += 1) {
@@ -185,22 +196,26 @@ function fillPolygon(bitmap, imageWidth, imageHeight, points, color) {
   }
 }
 
-function paintCenteredTriangle(bitmap, imageWidth, centerX, top, bottom, radius, color) {
+function paintPixelRGBA(bitmap, imageWidth, imageHeight, x, y, color) {
+  if (x < 0 || x >= imageWidth || y < 0 || y >= imageHeight) return
+  bitmap.set(color, (y * imageWidth + x) * 4)
+}
+
+function paintSymmetricTriangleRGBA(bitmap, imageWidth, imageHeight, top, bottom, radius, color) {
   for (let y = top; y <= bottom; y += 1) {
-    const halfWidth = Math.floor((y - top) * radius / (bottom - top))
-    for (let x = centerX - halfWidth; x <= centerX + halfWidth; x += 1) {
-      if (x >= 0 && x < imageWidth) bitmap[y * imageWidth + x] = color
-    }
+    const halfWidth = 1 + Math.floor((y - top) * (radius - 1) / (bottom - top))
+    const left = imageWidth / 2 - halfWidth
+    const right = imageWidth / 2 + halfWidth - 1
+    for (let x = left; x <= right; x += 1) paintPixelRGBA(bitmap, imageWidth, imageHeight, x, y, color)
   }
 }
 
+const marker = new Uint8Array(46 * 54 * 4)
+paintSymmetricTriangleRGBA(marker, 46, 54, 2, 51, 18, [238, 255, 242, 255])
+paintSymmetricTriangleRGBA(marker, 46, 54, 7, 47, 15, [74, 255, 112, 255])
+const markerPNG = rgbaPNG(46, 54, marker)
 for (let bucket = 0; bucket < 8; bucket += 1) {
-  const marker = new Uint8Array(46 * 54)
-  paintCenteredTriangle(marker, 46, 23, 3, 50, 21, 1)
-  paintCenteredTriangle(marker, 46, 23, 7, 47, 18, 2)
-  paintCenteredTriangle(marker, 46, 23, 11, 44, 15, 3)
-  await writeIndexed(`marker-${bucket}.png`, 46, 54,
-    [[0, 0, 0], [4, 19, 10], [238, 255, 242], [74, 255, 112]], [0, 255, 255, 255], marker)
+  await writeFile(new URL(`../src/common/marker-${bucket}.png`, import.meta.url), markerPNG)
 }
 
 const destinationPalette = [[0, 0, 0], [55, 32, 3], [255, 178, 24], [255, 244, 194]]
@@ -219,19 +234,41 @@ paintCircle(destinationEdge, 28, 28, 14, 14, 6, 0)
 paintCircle(destinationEdge, 28, 28, 14, 14, 2, 3)
 await writeIndexed("destination-edge.png", 28, 28, destinationPalette, [0, 255, 255, 255], destinationEdge)
 
-const destinationTips = [[14, 0], [24, 4], [27, 14], [24, 24], [14, 27], [4, 24], [0, 14], [4, 4]]
-function rotate(points, bucket) {
+function rotate(points, bucket, center = 14) {
   const angle = bucket * Math.PI / 4
   return points.map(([x, y]) => [
-    14 + (x - 14) * Math.cos(angle) - (y - 14) * Math.sin(angle),
-    14 + (x - 14) * Math.sin(angle) + (y - 14) * Math.cos(angle)
+    center + (x - center) * Math.cos(angle) - (y - center) * Math.sin(angle),
+    center + (x - center) * Math.sin(angle) + (y - center) * Math.cos(angle)
   ])
 }
+
+function paintCircleRGBA(bitmap, imageWidth, imageHeight, centerX, centerY, radius, color) {
+  for (let y = Math.floor(centerY - radius); y <= Math.ceil(centerY + radius); y += 1) {
+    for (let x = Math.floor(centerX - radius); x <= Math.ceil(centerX + radius); x += 1) {
+      if ((x - centerX) ** 2 + (y - centerY) ** 2 <= radius ** 2) {
+        paintPixelRGBA(bitmap, imageWidth, imageHeight, x, y, color)
+      }
+    }
+  }
+}
+
+function paintLineRGBA(bitmap, imageWidth, imageHeight, from, to, radius, color) {
+  const steps = Math.ceil(Math.max(Math.abs(to[0] - from[0]), Math.abs(to[1] - from[1])))
+  for (let step = 0; step <= steps; step += 1) {
+    const ratio = steps ? step / steps : 0
+    paintCircleRGBA(bitmap, imageWidth, imageHeight,
+      from[0] + (to[0] - from[0]) * ratio,
+      from[1] + (to[1] - from[1]) * ratio,
+      radius, color)
+  }
+}
+
 for (let direction = 0; direction < 8; direction += 1) {
-  const chevron = new Uint8Array(28 * 28)
-  fillPolygon(chevron, 28, 28, rotate([[14, 0], [27, 18], [20, 18], [14, 12], [8, 18], [1, 18]], direction), 1)
-  fillPolygon(chevron, 28, 28, rotate([[14, 4], [23, 16], [19, 16], [14, 11], [9, 16], [5, 16]], direction), 2)
-  paintCircle(chevron, 28, 28, destinationTips[direction][0], destinationTips[direction][1], 1.5, 3)
-  await writeIndexed(`destination-edge-${direction}.png`, 28, 28,
-    destinationPalette, [0, 255, 255, 255], chevron)
+  const chevron = new Uint8Array(34 * 34 * 4)
+  const [left, tip, right] = rotate([[4, 19], [17, -5], [30, 19]], direction, 17)
+  for (const [radius, color] of [[3, [5, 18, 25, 255]], [1.7, [255, 190, 50, 255]]]) {
+    paintLineRGBA(chevron, 34, 34, left, tip, radius, color)
+    paintLineRGBA(chevron, 34, 34, tip, right, radius, color)
+  }
+  await writeRGBA(`destination-edge-${direction}.png`, 34, 34, chevron)
 }

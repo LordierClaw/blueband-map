@@ -7,7 +7,7 @@ import { inflateSync } from "node:zlib"
 
 const root = new URL("../", import.meta.url)
 
-function indexedPixels(png) {
+function rgbaPixels(png) {
   const width = png.readUInt32BE(16), height = png.readUInt32BE(20)
   const compressed = []
   for (let offset = 8; offset < png.length;) {
@@ -16,24 +16,22 @@ function indexedPixels(png) {
     offset += length + 12
   }
   const rows = inflateSync(Buffer.concat(compressed))
-  return { width, height, pixel: (x, y) => rows[y * (width + 1) + x + 1] }
-}
-
-function chunkData(png, type) {
-  for (let offset = 8; offset < png.length;) {
-    const length = png.readUInt32BE(offset)
-    if (png.toString("ascii", offset + 4, offset + 8) === type) return png.subarray(offset + 8, offset + 8 + length)
-    offset += length + 12
+  const stride = width * 4 + 1
+  for (let y = 0; y < height; y += 1) assert.equal(rows[y * stride], 0, `row ${y} must use PNG filter 0`)
+  return {
+    width,
+    height,
+    pixel: (x, y) => [...rows.subarray(y * stride + 1 + x * 4, y * stride + 1 + x * 4 + 4)]
   }
-  return Buffer.alloc(0)
 }
 
 test("manifest pins BlueBandMap identity and a single Band 10 page", async () => {
   const manifest = JSON.parse(await readFile(new URL("src/manifest.json", root), "utf8"))
   assert.equal(manifest.package, "dev.lordierclaw.bluebandmap.band")
   assert.equal(manifest.name, "BlueBandMap")
-  assert.equal(manifest.versionName, "0.6.5")
-  assert.equal(manifest.versionCode, 20)
+  assert.equal(manifest.versionName, "0.6.6")
+  assert.equal(manifest.versionCode, 21)
+  assert.equal(manifest.minAPILevel, 3)
   assert.equal(manifest.config.designWidth, 212)
   assert.deepEqual(Object.keys(manifest.router.pages), ["pages/index"])
   assert.deepEqual(manifest.features, [
@@ -62,7 +60,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /@system\.crypto|crypto\.atob|crypto\.hashDigest/)
   assert.doesNotMatch(page, /transform:rotate\(|transform-origin:/)
   assert.doesNotMatch(page, /transform:\s*JSON\.stringify\(\{\s*rotate:/)
-  assert.match(page, /RPK 0\.6\.5/)
+  assert.match(page, /RPK 0\.6\.6/)
   assert.match(page, /<input[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ mapPath \}\}"[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ pendingMapPath \}\}"[^>]+@complete="mapComplete\(pendingMapToken\)"[^>]+@error="mapError\(pendingMapToken\)"[^>]+\/>/)
@@ -70,7 +68,8 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /<image[^>]+object-fit=/)
   assert.match(page, /\.map\s*\{[^}]*object-fit:\s*contain;/s)
   assert.match(page, /\.map-frame\s*\{[^}]*width:\s*212px;[^}]*height:\s*520px;/s)
-  assert.match(page, /<image class="nav-shade"[^>]+src="\/common\/nav-shade\.png"/)
+  assert.doesNotMatch(page, /nav-shade\.png|class="nav-shade"/)
+  assert.match(page, /<div class="nav-panel"[^>]*><\/div>/)
   assert.match(page, /<image class="nav-arrow"[^>]+src="\{\{ navArrowPath \}\}"/)
   assert.match(page, /<image class="nav-marker"[^>]+src="\{\{ navMarkerPath \}\}"/)
   assert.match(page, /<image class="nav-destination"[^>]+src="\{\{ navDestinationPath \}\}"/)
@@ -78,7 +77,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /class="diagnostics" if="\{\{ showDiagnostics && !preparedRender \}\}"/)
   assert.doesNotMatch(page, /<div class="nav-marker"/)
   assert.match(page, /\.nav-header\s*\{[^}]*left:\s*0;[^}]*top:\s*0;[^}]*width:\s*212px;[^}]*height:\s*96px;/s)
-  assert.doesNotMatch(page, /\.nav-header\s*\{[^}]*background-color:/s)
+  assert.match(page, /\.nav-panel\s*\{[^}]*left:\s*7px;[^}]*top:\s*7px;[^}]*width:\s*198px;[^}]*height:\s*88px;[^}]*border-radius:\s*17px;[^}]*background-color:\s*#0b2235;[^}]*box-shadow:\s*0px 5px 12px #000000;/s)
   assert.match(page, /statusVisible:\s*body\.status\s*!==\s*["']navigating["']/)
   assert.match(page, /navStatus\s*=\s*["']LOADING MAP["']/)
   assert.match(page, /\.nav-arrow\s*\{[^}]*left:\s*42px;[^}]*top:\s*28px;[^}]*width:\s*44px;[^}]*height:\s*56px;/s)
@@ -87,67 +86,77 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /\.nav-marker\s*\{[^}]*width:\s*46px;[^}]*height:\s*54px;/s)
 })
 
-test("generated HUD resources are indexed PNGs at their display size", async () => {
+test("generated HUD resources use the required PNG format at their display size", async () => {
   const expected = {
-    "nav-shade.png": [212, 96],
-    "maneuver-right.png": [44, 56],
-    "marker-0.png": [46, 54],
-    "marker-7.png": [46, 54],
-    "destination-pin.png": [28, 34],
-    "destination-edge.png": [28, 28],
-    ...Object.fromEntries(Array.from({ length: 8 }, (_, direction) => [`destination-edge-${direction}.png`, [28, 28]]))
+    "maneuver-right.png": [44, 56, 3],
+    "marker-0.png": [46, 54, 6],
+    "marker-7.png": [46, 54, 6],
+    "destination-pin.png": [28, 34, 3],
+    "destination-edge.png": [28, 28, 3],
+    ...Object.fromEntries(Array.from({ length: 8 }, (_, direction) => [`destination-edge-${direction}.png`, [34, 34, 6]]))
   }
-  for (const [name, dimensions] of Object.entries(expected)) {
+  for (const [name, [width, height, colorType]] of Object.entries(expected)) {
     const png = await readFile(new URL(`src/common/${name}`, root))
-    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], dimensions)
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [width, height])
     assert.equal(png[24], 8)
-    assert.equal(png[25], 3)
+    assert.equal(png[25], colorType)
   }
 })
 
-test("all compatibility marker files contain the same symmetric high-contrast upright triangle", async () => {
+test("all compatibility marker files contain the same pixel-mirrored closed RGBA pointer", async () => {
   const markers = []
   for (let heading = 0; heading < 8; heading += 1) {
     const png = await readFile(new URL(`src/common/marker-${heading}.png`, root))
     markers.push(png)
-    const { width, height, pixel } = indexedPixels(png)
-    assert.ok(Array.from({ length: width }, (_, x) => pixel(x, 0) + pixel(x, height - 1)).every(value => value === 0))
-    assert.ok(Array.from({ length: height }, (_, y) => pixel(0, y) + pixel(width - 1, y)).every(value => value === 0))
-    const greenX = []
+    assert.equal(png[25], 6)
+    const { width, height, pixel } = rgbaPixels(png)
+    const greenX = [], opaqueRows = []
     for (let y = 0; y < height; y += 1) {
       const row = []
       for (let x = 0; x < width; x += 1) {
-        if (pixel(x, y) !== 0) row.push(x)
-        if (pixel(x, y) === 3) greenX.push(x)
+        assert.deepEqual(pixel(x, y), pixel(width - 1 - x, y), `pixel (${x}, ${y}) must mirror exactly`)
+        const [red, green, blue, alpha] = pixel(x, y)
+        if (alpha !== 0) row.push(x)
+        if (alpha !== 0 && green > red && green > blue) greenX.push(x)
       }
-      if (row.length) assert.equal(Math.min(...row) + Math.max(...row), 46, `row ${y} must stay centered`)
+      if (row.length) {
+        assert.equal(Math.min(...row) + Math.max(...row), 45, `row ${y} must use the half-pixel centre`)
+        assert.equal(row.length, Math.max(...row) - Math.min(...row) + 1, `row ${y} must not contain an indented corner`)
+        opaqueRows.push(row.length)
+      }
     }
-    assert.ok(chunkData(png, "PLTE").includes(Buffer.from([238, 255, 242])), "marker needs a visible light outline")
     assert.ok(Math.max(...greenX) - Math.min(...greenX) + 1 >= 28)
-    assert.equal(Math.min(...greenX) + Math.max(...greenX), 46)
+    assert.equal(Math.max(...opaqueRows), 36, "approved navigation pointer must stay long instead of becoming the wide triangle")
+    for (let row = 1; row < opaqueRows.length; row += 1) assert.ok(opaqueRows[row] >= opaqueRows[row - 1], "closed pointer must widen monotonically")
   }
   for (const marker of markers.slice(1)) assert.deepEqual(marker, markers[0])
 })
 
-test("destination chevrons are large and put their outward tip on all eight bitmap edges", async () => {
-  const tips = [[14, 0], [24, 4], [27, 14], [24, 24], [14, 27], [4, 24], [0, 14], [4, 4]]
+test("destination edge icons are clean two-colour RGBA chevrons reaching all eight bitmap edges", async () => {
   for (let direction = 0; direction < 8; direction += 1) {
     const png = await readFile(new URL(`src/common/destination-edge-${direction}.png`, root))
-    const { pixel } = indexedPixels(png)
-    assert.notEqual(pixel(...tips[direction]), 0)
+    assert.equal(png[25], 6)
+    const { width, height, pixel } = rgbaPixels(png)
+    assert.deepEqual([width, height], [34, 34])
+    const opaque = []
+    const colors = new Set()
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const value = pixel(x, y)
+        if (value[3] !== 0) {
+          opaque.push([x, y])
+          colors.add(value.join(","))
+          assert.notDeepEqual(value.slice(0, 3), [255, 244, 194], "chevron must not contain the old tip dot")
+        }
+      }
+    }
+    assert.deepEqual([...colors].sort(), ["5,18,25,255", "255,190,50,255"].sort())
+    assert.ok(opaque.length < width * height * 0.3, "chevron must remain an open stroke, not a filled blob")
+    if (direction === 0 || direction === 1 || direction === 7) assert.equal(Math.min(...opaque.map(([, y]) => y)), 0)
+    if (direction === 1 || direction === 2 || direction === 3) assert.equal(Math.max(...opaque.map(([x]) => x)), 33)
+    if (direction === 3 || direction === 4 || direction === 5) assert.equal(Math.max(...opaque.map(([, y]) => y)), 33)
+    if (direction === 5 || direction === 6 || direction === 7) assert.equal(Math.min(...opaque.map(([x]) => x)), 0)
   }
-})
-
-test("navigation shade uses decoder-safe binary alpha with a fading lower edge", async () => {
-  const png = await readFile(new URL("src/common/nav-shade.png", root))
-  assert.deepEqual([...new Set(chunkData(png, "tRNS"))].sort((a, b) => a - b), [0, 255])
-  const { width, height, pixel } = indexedPixels(png)
-  const coverage = Array.from({ length: height }, (_, y) =>
-    Array.from({ length: width }, (_, x) => pixel(x, y) === 0 ? 0 : 1).reduce((sum, value) => sum + value, 0)
-  )
-  assert.equal(coverage[0], width)
-  assert.equal(coverage.at(-1), 0)
-  for (let y = 1; y < height; y += 1) assert.ok(coverage[y] <= coverage[y - 1], `shade coverage grew at row ${y}`)
 })
 
 test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 }, async () => {
@@ -158,7 +167,7 @@ test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 },
   const diagnostics = result.stdout + result.stderr
   assert.equal(result.status, 0, diagnostics)
   assert.doesNotMatch(diagnostics, /unsupport(?:ed)? attribute|unsupported (?:attribute|property)/i)
-  assert.match(result.stdout, /verified .*\.0\.6\.5\.rpk/)
+  assert.match(result.stdout, /verified .*\.0\.6\.6\.rpk/)
 
   const compiledEntry = await readFile(new URL("build/pages/index/index.js", root), "utf8")
   assert.doesNotMatch(compiledEntry, /\.\/src\/common\/(?:render-protocol|vector-scene)\.js/, "page load must not start a custom module graph")

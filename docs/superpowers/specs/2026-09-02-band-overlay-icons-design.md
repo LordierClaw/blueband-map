@@ -28,6 +28,8 @@ Generate eight 34×34 RGBA destination edge icons. Each is a thick amber two-seg
 
 Remove `nav-shade.png` from the page and bundle. Add a native `nav-panel` div behind `nav-header`, inset from the screen edge, with an explicit dark background, rounded corners, border, and shadow. Header content and maneuver icons remain unchanged.
 
+Declare `minAPILevel: 3`, the first Vela API level that supports `box-shadow`, and verify the compiled manifest retains it.
+
 ## Non-goals
 
 - No changes to iOS, Vietmap requests, route decoding, route geometry, camera selection, or raster snapshot rendering.
