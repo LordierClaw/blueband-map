@@ -24,6 +24,9 @@ final class NavigationUpdateTests: XCTestCase {
     }
 
     func testDestinationFieldsAreAtomicAndBounded() {
+        let edge = BandDisplaySafeMask.smartBand10PhotoEstimate.destinationEdgePoint(
+            from: ScreenPoint(x: 106, y: 374), toward: ScreenPoint(x: 500, y: 260)
+        )
         XCTAssertNoThrow(try NavigationUpdate(
             scene: "scene", seq: 0, x: 106, y: 320, maneuver: .straight,
             distanceMeters: 0, street: "", status: .navigating,
@@ -42,12 +45,12 @@ final class NavigationUpdateTests: XCTestCase {
         XCTAssertNoThrow(try NavigationUpdate(
             scene: "scene", seq: 0, x: 106, y: 320, maneuver: .straight,
             distanceMeters: 0, street: "", status: .navigating,
-            destinationMode: .edge, destinationX: 199, destinationY: 260
+            destinationMode: .edge, destinationX: edge.x, destinationY: edge.y
         ))
         XCTAssertThrowsError(try NavigationUpdate(
             scene: "scene", seq: 0, x: 106, y: 320, maneuver: .straight,
             distanceMeters: 0, street: "", status: .navigating,
-            destinationMode: .visible, destinationX: 199, destinationY: 260
+            destinationMode: .visible, destinationX: edge.x, destinationY: edge.y
         ))
     }
 

@@ -45,7 +45,11 @@ Run the same filtered test. Expected: one test passes.
 - Modify: `apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift`
 - Modify: `apps/ios/Tests/VietmapSnapshotRendererTests.swift`
 - Modify: `packages/BlueBandKit/Sources/BlueBandMapCore/BandDisplaySafeMask.swift`
+- Modify: `packages/BlueBandKit/Sources/BlueBandMapCore/RenderProtocol.swift`
+- Modify: `packages/BlueBandKit/Sources/BlueBandMapCore/NavigationUpdate.swift`
 - Modify: `packages/BlueBandKit/Tests/BlueBandMapCoreTests/BandDisplaySafeMaskTests.swift`
+- Modify: `packages/BlueBandKit/Tests/BlueBandMapCoreTests/RenderProtocolTests.swift`
+- Modify: `packages/BlueBandKit/Tests/BlueBandMapCoreTests/NavigationUpdateTests.swift`
 
 - [ ] **Step 1: Write the failing footprint test**
 
@@ -67,7 +71,7 @@ public func destinationEdgePoint(from origin: ScreenPoint, toward target: Screen
 }
 ```
 
-Use it in `destinationPresentation` instead of `mask.withoutVisualMargin.edgePoint(...1,1)`. Change snapshot marker containment checks from `46×54` to `30×38`; update their existing assertions without altering anchor `(106,374)`.
+Use it in `destinationPresentation` instead of `mask.withoutVisualMargin.edgePoint(...1,1)`. Make both render-preview and live-update validators require the edge destination inside the normal mask at `24×24`. Change snapshot and preview marker containment checks from `46×54` to `30×38`; update their existing assertions without altering anchor `(106,374)`.
 
 - [ ] **Step 4: Verify GREEN**
 

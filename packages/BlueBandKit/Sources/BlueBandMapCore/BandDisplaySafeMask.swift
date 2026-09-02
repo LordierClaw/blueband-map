@@ -83,6 +83,10 @@ public struct BandDisplaySafeMask: Equatable, Sendable {
         )
     }
 
+    public func destinationEdgePoint(from origin: ScreenPoint, toward target: ScreenPoint) -> ScreenPoint {
+        edgePoint(from: origin, toward: target, resourceWidth: 24, resourceHeight: 24)
+    }
+
     public func edgePoint(
         from origin: ScreenPoint,
         toward target: ScreenPoint,

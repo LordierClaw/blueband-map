@@ -31,10 +31,10 @@ final class BandDisplaySafeMaskTests: XCTestCase {
         let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
         let desired = ScreenPoint(x: 0, y: 106)
         let ring = mask.clampedCenter(desired, resourceWidth: 20, resourceHeight: 20)
-        let user = mask.clampedCenter(desired, resourceWidth: 46, resourceHeight: 54)
+        let user = mask.clampedCenter(desired, resourceWidth: 30, resourceHeight: 38)
 
         XCTAssertGreaterThan(user.x, ring.x)
-        XCTAssertTrue(mask.contains(center: user, resourceWidth: 46, resourceHeight: 54))
+        XCTAssertTrue(mask.contains(center: user, resourceWidth: 30, resourceHeight: 38))
     }
 
     func testEdgeChevronTipReachesPhysicalContourBeyondTheOldRingCenter() {
@@ -55,5 +55,22 @@ final class BandDisplaySafeMaskTests: XCTestCase {
             XCTAssertGreaterThan(hypot(Double(tip.x - origin.x), Double(tip.y - origin.y)),
                                  hypot(Double(conservative.x - origin.x), Double(conservative.y - origin.y)))
         }
+    }
+
+    func testDestinationEdgePointKeepsTheFull24PixelChevronInsideTheVisualMask() {
+        let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
+        let marker = ScreenPoint(x: 106, y: 374)
+        let target = ScreenPoint(x: 500, y: -500)
+        let oldTip = mask.withoutVisualMargin.edgePoint(
+            from: marker, toward: target, resourceWidth: 1, resourceHeight: 1
+        )
+
+        let point = mask.destinationEdgePoint(from: marker, toward: target)
+
+        XCTAssertTrue(mask.contains(center: point, resourceWidth: 24, resourceHeight: 24))
+        XCTAssertLessThan(
+            hypot(Double(point.x - marker.x), Double(point.y - marker.y)),
+            hypot(Double(oldTip.x - marker.x), Double(oldTip.y - marker.y))
+        )
     }
 }

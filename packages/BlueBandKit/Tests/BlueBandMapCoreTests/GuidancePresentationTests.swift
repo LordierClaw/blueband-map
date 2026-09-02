@@ -60,7 +60,40 @@ final class GuidancePresentationTests: XCTestCase {
         XCTAssertEqual(GuidancePresentationPolicy.routeBearing(route: route, progress: progress), 90, accuracy: 0.5)
     }
 
-    func testStationaryBearingUsesSelectedManeuverAndSkipsDegenerateForwardPoint() throws {
+    func testStationaryBearingUsesImmediateTangentBeforeLaterBend() {
+        let origin = GeoPoint(latitude: 10, longitude: 106)
+        let north = GeoPoint(latitude: 10.001, longitude: 106)
+        let eastAfterBend = GeoPoint(latitude: 10.001, longitude: 106.001)
+        let route = RoutePlan(
+            points: [origin, north, eastAfterBend],
+            instructions: [RouteInstruction(
+                distanceMeters: 220, headingDegrees: 90, sign: 2,
+                interval: 0...2, streetName: "After Bend"
+            )],
+            distanceMeters: 220
+        )
+        let progress = RouteProgress(
+            pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0,
+            distanceFromRouteMeters: 0, matchedLocation: origin,
+            shouldReroute: false, status: .navigating
+        )
+        let selection = GuidanceSelection(
+            instructionIndex: 0,
+            instruction: route.instructions[0],
+            maneuverPointIndex: 2,
+            distanceMeters: 220
+        )
+
+        XCTAssertEqual(
+            GuidancePresentationPolicy.stationaryBearing(
+                route: route, progress: progress, selection: selection
+            ),
+            0,
+            accuracy: 0.5
+        )
+    }
+
+    func testStationaryBearingSkipsDegenerateForwardPoint() throws {
         let origin = GeoPoint(latitude: 10, longitude: 106)
         let east = GeoPoint(latitude: 10, longitude: 106.001)
         let route = RoutePlan(

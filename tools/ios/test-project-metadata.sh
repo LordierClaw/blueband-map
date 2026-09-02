@@ -9,9 +9,9 @@ grep -Fq 'iOS: "17.0"' "$project"
 grep -Fq 'INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription:' "$project"
 grep -Fq 'INFOPLIST_KEY_NSLocationWhenInUseUsageDescription:' "$project"
 grep -Fq 'path: ../../packages/BlueBandKit' "$project"
-grep -Fq 'CURRENT_PROJECT_VERSION: 21' "$project"
-grep -Fq 'MARKETING_VERSION: 0.5.5' "$project"
-grep -Fq 'static let version = "0.5.5"' apps/ios/App/BlueBandMapApp.swift
+grep -Fq 'CURRENT_PROJECT_VERSION: 22' "$project"
+grep -Fq 'MARKETING_VERSION: 0.5.6' "$project"
+grep -Fq 'static let version = "0.5.6"' apps/ios/App/BlueBandMapApp.swift
 if grep -Eq 'VietmapRouteOverlay\.translated|offset: offset' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift; then
   echo "route overlay must use the snapshot camera projection without a private translation" >&2
   exit 1

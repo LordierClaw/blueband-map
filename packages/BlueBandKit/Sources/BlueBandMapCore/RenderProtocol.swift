@@ -122,18 +122,16 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
         guard distanceMeters >= 0 else { throw Error.invalidDistance }
         guard BandDisplaySafeMask.smartBand10PhotoEstimate.contains(
             center: ScreenPoint(x: x, y: y),
-            resourceWidth: 46,
-            resourceHeight: 54
+            resourceWidth: 30,
+            resourceHeight: 38
         ) else { throw Error.invalidMarker }
         guard (0..<8).contains(headingBucket) else { throw Error.invalidHeading }
         if destinationMode == .hidden {
             guard destinationX == 0, destinationY == 0 else { throw Error.invalidDestination }
         } else {
-            let width = destinationMode == .visible ? 28 : 1
-            let height = destinationMode == .visible ? 34 : 1
-            let mask = destinationMode == .edge
-                ? BandDisplaySafeMask.smartBand10PhotoEstimate.withoutVisualMargin
-                : BandDisplaySafeMask.smartBand10PhotoEstimate
+            let width = destinationMode == .visible ? 28 : 24
+            let height = destinationMode == .visible ? 34 : 24
+            let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
             guard mask.contains(
                 center: ScreenPoint(x: destinationX, y: destinationY),
                 resourceWidth: width,

@@ -61,7 +61,7 @@ const expectedFeatures = [
   { name: "system.file" }
 ]
 if (manifest.package !== "dev.lordierclaw.bluebandmap.band" || manifest.icon !== "/common/icon.png" ||
-    manifest.versionName !== "0.6.7" || manifest.versionCode !== 22 || manifest.minAPILevel !== 1 ||
+    manifest.versionName !== "0.6.8" || manifest.versionCode !== 23 || manifest.minAPILevel !== 1 ||
     manifest.config.designWidth !== 212 ||
     JSON.stringify(manifest.features) !== JSON.stringify(expectedFeatures)) {
   throw new Error("compiled manifest does not match Band 10 bundle contract")
@@ -79,8 +79,8 @@ for (const name of [
 ]) {
   const asset = files.get(`common/${name}`)
   const marker = name.startsWith("marker-")
-  const expectedWidth = marker ? 46 : 34
-  const expectedHeight = marker ? 54 : 34
+  const expectedWidth = marker ? 30 : 24
+  const expectedHeight = marker ? 38 : 24
   if (asset.readUInt32BE(16) !== expectedWidth || asset.readUInt32BE(20) !== expectedHeight || asset[25] !== 6) {
     throw new Error(`compiled ${name} must be ${expectedWidth}x${expectedHeight} RGBA`)
   }

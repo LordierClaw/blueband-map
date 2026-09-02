@@ -85,12 +85,12 @@ public enum GuidancePresentationPolicy {
     public static func stationaryBearing(
         route: RoutePlan,
         progress: RouteProgress,
-        selection: GuidanceSelection?
+        selection _: GuidanceSelection?
     ) -> Double {
         guard route.points.count >= 2 else { return 0 }
         let startIndex = min(progress.matchedSegmentIndex, route.points.count - 2)
         let origin = progress.matchedLocation ?? route.points[startIndex]
-        guard let forward = forwardPoint(route: route, progress: progress, selection: selection) else { return 0 }
+        guard let forward = forwardPoint(route: route, progress: progress, selection: nil) else { return 0 }
         return bearing(origin, forward)
     }
 

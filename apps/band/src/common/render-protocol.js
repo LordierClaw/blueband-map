@@ -68,14 +68,14 @@ function validPreview(preview) {
     ["straight", "left", "right", "uTurn", "roundabout", "arrive"].includes(preview.maneuver) &&
     validInteger(preview.distanceM) && preview.distanceM >= 0 &&
     typeof preview.street === "string" && utf8Length(preview.street) <= 48 &&
-    validInteger(preview.x) && validInteger(preview.y) && safeCenter(preview.x, preview.y, 46, 54) &&
+    validInteger(preview.x) && validInteger(preview.y) && safeCenter(preview.x, preview.y, 30, 38) &&
     validInteger(preview.heading) && preview.heading >= 0 && preview.heading < 8 &&
     ["visible", "edge", "hidden"].includes(preview.destinationMode) &&
     validInteger(preview.destinationX) && validInteger(preview.destinationY) &&
     (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
       safeCenter(preview.destinationX, preview.destinationY,
-        preview.destinationMode === "visible" ? 20 : 1,
-        preview.destinationMode === "visible" ? 24 : 1, preview.destinationMode === "edge" ? 0 : 6))
+        preview.destinationMode === "visible" ? 28 : 24,
+        preview.destinationMode === "visible" ? 34 : 24, 6))
 }
 
 function validatePrepare(body, options = {}) {

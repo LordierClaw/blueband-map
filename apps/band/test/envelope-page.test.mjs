@@ -207,7 +207,7 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
   assert.equal(page.navStatus, "ARRIVED")
   assert.equal(page.navArrowPath, "/common/maneuver-arrive.png")
   assert.equal(page.navMarkerPath, "/common/marker-0.png")
-  assert.equal(page.navMarkerStyle, "left:83px;top:347px;")
+  assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   assert.equal(page.navStatusVisible, true)
   page.receiveMessage({ data: envelope("nav-5", "nav.update", {
     ...navigation({ seq: 5, x: 104, y: 296, heading: 3, distanceM: 120, street: "Next Road" })
@@ -242,7 +242,7 @@ test("preview and live guidance share compact metre and kilometre labels", async
     page.receiveMessage({ data: envelope(`nav-distance-${seq}`, "nav.update", navigation({ seq, distanceM })) })
     assert.equal(page.navDistance, label)
     assert.equal(page.navMarkerPath, "/common/marker-0.png")
-    assert.equal(page.navMarkerStyle, "left:83px;top:347px;")
+    assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   })
 })
 
@@ -252,8 +252,8 @@ test("destination overlay switches atomically and stays inside the curved safe m
   assert.equal(page.destinationDirection(106, 374, 190, 290), 1)
   assert.equal(page.destinationDirection(106, 374, 199, 260), 1)
   assert.equal(page.destinationDirection(106, 374, 22, 374), 6)
-  assert.deepEqual(page.destinationOverlay("edge", 12, 260), {
-    path: "/common/destination-edge-7.png", style: "left:-5px;top:243px;width:34px;height:34px;"
+  assert.deepEqual(page.destinationOverlay("edge", 30, 260), {
+    path: "/common/destination-edge-7.png", style: "left:18px;top:248px;width:24px;height:24px;"
   })
   publish(page)
   page.receiveMessage({ data: envelope("visible", "nav.update", navigation({
@@ -264,10 +264,10 @@ test("destination overlay switches atomically and stays inside the curved safe m
   assert.equal(page.navDestinationStyle, "left:92px;top:103px;")
 
   page.receiveMessage({ data: envelope("edge", "nav.update", navigation({
-    seq: 2, destinationMode: "edge", destinationX: 199, destinationY: 260
+    seq: 2, destinationMode: "edge", destinationX: 182, destinationY: 260
   })) })
   assert.equal(page.navDestinationPath, "/common/destination-edge-1.png")
-  assert.equal(page.navDestinationStyle, "left:182px;top:243px;width:34px;height:34px;")
+  assert.equal(page.navDestinationStyle, "left:170px;top:248px;width:24px;height:24px;")
 
   page.receiveMessage({ data: envelope("visible-too-close", "nav.update", navigation({
     seq: 3, destinationMode: "visible", destinationX: 190, destinationY: 260
@@ -307,10 +307,10 @@ test("render.prepare shows compact guidance before the map arrives", async () =>
   assert.equal(page.navDestinationVisible, false)
 })
 
-test("render.prepare accepts an edge destination whose chevron tip reaches the contour", async () => {
+test("render.prepare accepts an edge destination whose full chevron stays inside the visual mask", async () => {
   const { page, sent } = await harness()
   page.receiveMessage({ data: envelope("prepare-edge", "render.prepare", prepare({
-    preview: preview({ destinationMode: "edge", destinationX: 199, destinationY: 260 })
+    preview: preview({ destinationMode: "edge", destinationX: 182, destinationY: 260 })
   })) })
 
   assert.equal(sent.find(message => message.topic === "render.reject"), undefined)
@@ -331,7 +331,7 @@ test("first raster promotes its staged marker and destination atomically", async
   page.mapComplete(page.pendingPublication.token)
   assert.equal(page.navMarkerVisible, true)
   assert.equal(page.navMarkerPath, "/common/marker-0.png")
-  assert.equal(page.navMarkerStyle, "left:83px;top:347px;")
+  assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   assert.equal(page.navDestinationVisible, true)
   assert.equal(page.navDestinationPath, "/common/destination-pin.png")
   assert.equal(page.navDestinationStyle, "left:92px;top:103px;")

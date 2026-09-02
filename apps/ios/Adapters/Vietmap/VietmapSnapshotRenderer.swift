@@ -83,8 +83,8 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
             if forward.y < user.y,
                mask.contains(
                 center: ScreenPoint(x: Int(user.x.rounded()), y: Int(user.y.rounded())),
-                resourceWidth: 46,
-                resourceHeight: 54
+                resourceWidth: 30,
+                resourceHeight: 38
                ),
                mask.contains(
                 center: ScreenPoint(x: Int(forward.x.rounded()), y: Int(forward.y.rounded())),

@@ -201,19 +201,20 @@ function paintPixelRGBA(bitmap, imageWidth, imageHeight, x, y, color) {
   bitmap.set(color, (y * imageWidth + x) * 4)
 }
 
-function paintSymmetricTriangleRGBA(bitmap, imageWidth, imageHeight, top, bottom, radius, color) {
-  for (let y = top; y <= bottom; y += 1) {
-    const halfWidth = 1 + Math.floor((y - top) * (radius - 1) / (bottom - top))
+function paintOpposedTrianglesRGBA(bitmap, imageWidth, imageHeight, color) {
+  for (let y = 1; y <= 36; y += 1) {
+    const halfWidth = y <= 25
+      ? 1 + Math.floor((y - 1) * 13 / 24)
+      : 1 + Math.floor((36 - y) * 13 / 10)
     const left = imageWidth / 2 - halfWidth
     const right = imageWidth / 2 + halfWidth - 1
     for (let x = left; x <= right; x += 1) paintPixelRGBA(bitmap, imageWidth, imageHeight, x, y, color)
   }
 }
 
-const marker = new Uint8Array(46 * 54 * 4)
-paintSymmetricTriangleRGBA(marker, 46, 54, 2, 51, 18, [238, 255, 242, 255])
-paintSymmetricTriangleRGBA(marker, 46, 54, 7, 47, 15, [74, 255, 112, 255])
-const markerPNG = rgbaPNG(46, 54, marker)
+const marker = new Uint8Array(30 * 38 * 4)
+paintOpposedTrianglesRGBA(marker, 30, 38, [39, 199, 111, 255])
+const markerPNG = rgbaPNG(30, 38, marker)
 for (let bucket = 0; bucket < 8; bucket += 1) {
   await writeFile(new URL(`../src/common/marker-${bucket}.png`, import.meta.url), markerPNG)
 }
@@ -264,11 +265,11 @@ function paintLineRGBA(bitmap, imageWidth, imageHeight, from, to, radius, color)
 }
 
 for (let direction = 0; direction < 8; direction += 1) {
-  const chevron = new Uint8Array(34 * 34 * 4)
-  const [left, tip, right] = rotate([[4, 19], [17, -5], [30, 19]], direction, 17)
-  for (const [radius, color] of [[3, [5, 18, 25, 255]], [1.7, [255, 190, 50, 255]]]) {
-    paintLineRGBA(chevron, 34, 34, left, tip, radius, color)
-    paintLineRGBA(chevron, 34, 34, tip, right, radius, color)
+  const chevron = new Uint8Array(24 * 24 * 4)
+  const [left, tip, right] = rotate([[5, 15], [12, 4], [19, 15]], direction, 12)
+  for (const [radius, color] of [[2.2, [5, 18, 25, 255]], [1.2, [255, 190, 50, 255]]]) {
+    paintLineRGBA(chevron, 24, 24, left, tip, radius, color)
+    paintLineRGBA(chevron, 24, 24, tip, right, radius, color)
   }
-  await writeRGBA(`destination-edge-${direction}.png`, 34, 34, chevron)
+  await writeRGBA(`destination-edge-${direction}.png`, 24, 24, chevron)
 }

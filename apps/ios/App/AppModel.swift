@@ -802,9 +802,7 @@ final class AppModel: ObservableObject {
             y: Int(max(-100_000, min(100_000, projected.y)).rounded())
         )
         if mask.contains(center: target, resourceWidth: 28, resourceHeight: 34) { return (.visible, target) }
-        return (.edge, mask.withoutVisualMargin.edgePoint(
-            from: marker, toward: target, resourceWidth: 1, resourceHeight: 1
-        ))
+        return (.edge, mask.destinationEdgePoint(from: marker, toward: target))
     }
 
     static func initialRouteHeading(courseDegrees: Double, speedMetersPerSecond: Double) -> Int? {
