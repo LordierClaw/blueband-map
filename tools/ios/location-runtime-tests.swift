@@ -107,6 +107,18 @@ Task { @MainActor in
     }
     check(probe.reads == readsBeforeHealth,
           "UI and GPS diagnostics read cached service health without synchronous system probes")
+
+    let disabledManager = CLLocationManager()
+    let disabled = ForegroundLocationClient(manager: disabledManager, servicesEnabled: { false })
+    var disabledIterator = disabled.locations().makeAsyncIterator()
+    do {
+        _ = try await disabledIterator.next()
+        check(false, "globally disabled services terminate navigation with an explicit error")
+    } catch {
+        check(disabled.needsSettings && !disabledManager.updating &&
+              disabled.diagnostic.contains("error=servicesDisabled"),
+              "background service probe reports disabled GPS and releases its owner")
+    }
     exit(failures == 0 ? 0 : 1)
 }
 dispatchMain()
