@@ -110,7 +110,7 @@ struct ContentView: View {
                     }
                 }
             }
-            Text("Ảnh preview dùng cùng snapshot PNG và scene với Smart Band.")
+            Text("Ảnh preview dùng cùng snapshot đã nén và scene với Smart Band.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

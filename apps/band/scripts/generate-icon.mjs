@@ -226,10 +226,35 @@ function paintAntialiasedPolygonRGBA(bitmap, imageWidth, imageHeight, points, co
   }
 }
 
-const marker = new Uint8Array(30 * 38 * 4)
-paintAntialiasedPolygonRGBA(marker, 30, 38,
+const markerFill = new Uint8Array(30 * 38 * 4)
+paintAntialiasedPolygonRGBA(markerFill, 30, 38,
   [[15.18, 2], [28, 30.97], [15.03, 26.12], [2, 30.78]], [20, 128, 74, 255])
-await writeRGBA("marker-cursor-v3.png", 30, 38, marker)
+const marker = new Uint8Array(30 * 38 * 4)
+for (let y = 0; y < 38; y += 1) {
+  for (let x = 0; x < 30; x += 1) {
+    var touchesFill = false
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const neighborX = x + dx, neighborY = y + dy
+        if (neighborX >= 0 && neighborX < 30 && neighborY >= 0 && neighborY < 38 &&
+            markerFill[(neighborY * 30 + neighborX) * 4 + 3] > 0) touchesFill = true
+      }
+    }
+    if (touchesFill) paintPixelRGBA(marker, 30, 38, x, y, [255, 255, 255, 255])
+  }
+}
+for (let y = 0; y < 38; y += 1) {
+  for (let x = 0; x < 30; x += 1) {
+    const offset = (y * 30 + x) * 4, alpha = markerFill[offset + 3]
+    if (!alpha) continue
+    const ratio = alpha / 255
+    marker[offset] = Math.round(markerFill[offset] * ratio + 255 * (1 - ratio))
+    marker[offset + 1] = Math.round(markerFill[offset + 1] * ratio + 255 * (1 - ratio))
+    marker[offset + 2] = Math.round(markerFill[offset + 2] * ratio + 255 * (1 - ratio))
+    marker[offset + 3] = 255
+  }
+}
+await writeRGBA("marker-cursor-v4.png", 30, 38, marker)
 
 const destinationPalette = [[0, 0, 0], [55, 32, 3], [255, 178, 24], [255, 244, 194]]
 const destinationPin = new Uint8Array(28 * 34)

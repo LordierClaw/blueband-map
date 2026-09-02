@@ -29,8 +29,8 @@ test("manifest pins BlueBandMap identity and a single Band 10 page", async () =>
   const manifest = JSON.parse(await readFile(new URL("src/manifest.json", root), "utf8"))
   assert.equal(manifest.package, "dev.lordierclaw.bluebandmap.band")
   assert.equal(manifest.name, "BlueBandMap")
-  assert.equal(manifest.versionName, "0.6.9")
-  assert.equal(manifest.versionCode, 24)
+  assert.equal(manifest.versionName, "0.6.10")
+  assert.equal(manifest.versionCode, 25)
   assert.equal(manifest.minAPILevel, 1)
   assert.equal(manifest.config.designWidth, 212)
   assert.deepEqual(Object.keys(manifest.router.pages), ["pages/index"])
@@ -60,7 +60,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /@system\.crypto|crypto\.atob|crypto\.hashDigest/)
   assert.doesNotMatch(page, /transform:rotate\(|transform-origin:/)
   assert.doesNotMatch(page, /transform:\s*JSON\.stringify\(\{\s*rotate:/)
-  assert.match(page, /RPK 0\.6\.9/)
+  assert.match(page, /RPK 0\.6\.10/)
   assert.match(page, /<input[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ mapPath \}\}"[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ pendingMapPath \}\}"[^>]+@complete="mapComplete\(pendingMapToken\)"[^>]+@error="mapError\(pendingMapToken\)"[^>]+\/>/)
@@ -69,7 +69,8 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /\.map\s*\{[^}]*object-fit:\s*contain;/s)
   assert.match(page, /\.map-frame\s*\{[^}]*width:\s*212px;[^}]*height:\s*520px;/s)
   assert.doesNotMatch(page, /nav-shade\.png|class="nav-shade"|class="nav-panel(?:-shadow)?"/)
-  assert.match(page, /navMarkerPath:\s*["']\/common\/marker-cursor-v3\.png["']/)
+  assert.match(page, /navMarkerPath:\s*["']\/common\/marker-cursor-v4\.png["']/)
+  assert.doesNotMatch(page, /marker-cursor-v3\.png/)
   assert.doesNotMatch(page, /\/common\/marker-[0-7]\.png/)
   assert.match(page, /<image class="nav-arrow"[^>]+src="\{\{ navArrowPath \}\}"/)
   assert.match(page, /<image class="nav-marker"[^>]+src="\{\{ navMarkerPath \}\}"/)
@@ -93,7 +94,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
 test("generated HUD resources use the required PNG format at their display size", async () => {
   const expected = {
     "maneuver-right.png": [44, 56, 3],
-    "marker-cursor-v3.png": [30, 38, 6],
+    "marker-cursor-v4.png": [30, 38, 6],
     "destination-pin.png": [28, 34, 3],
     "destination-edge.png": [28, 28, 3],
     ...Object.fromEntries(Array.from({ length: 8 }, (_, direction) => [`destination-edge-${direction}.png`, [24, 24, 6]]))
@@ -106,28 +107,31 @@ test("generated HUD resources use the required PNG format at their display size"
   }
 })
 
-test("cursor marker is dark green without a border and aligns its tip-notch axis to route centre", async () => {
-  const png = await readFile(new URL("src/common/marker-cursor-v3.png", root))
+test("cursor marker keeps its accepted geometry with a one-pixel white outline", async () => {
+  const png = await readFile(new URL("src/common/marker-cursor-v4.png", root))
   assert.equal(png[25], 6)
   const { width, height, pixel } = rgbaPixels(png)
   assert.deepEqual([width, height], [30, 38])
-  const opaque = []
+  const opaque = [], white = [], greenPixels = []
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const [red, green, blue, alpha] = pixel(x, y)
       if (alpha !== 0) {
         opaque.push([x, y])
-        assert.deepEqual([red, green, blue], [20, 128, 74])
+        if (red >= 245 && green >= 245 && blue >= 245) white.push([x, y])
+        if (red === 20 && green === 128 && blue === 74) greenPixels.push([x, y])
       }
     }
   }
   assert.ok(pixel(15, 2)[3] > 0, "sharp cursor tip must lie on the route centre")
   assert.ok(pixel(15, 26)[3] > 0, "cursor notch vertex must lie on the route centre")
-  assert.equal(pixel(15, 29)[3], 0, "concave cursor notch must remain visibly open")
-  assert.ok(Math.min(...opaque.map(([x]) => x)) >= 1)
-  assert.ok(Math.max(...opaque.map(([x]) => x)) <= 28)
-  assert.ok(Math.min(...opaque.map(([, y]) => y)) >= 1)
-  assert.ok(Math.max(...opaque.map(([, y]) => y)) <= 32)
+  assert.equal(pixel(15, 32)[3], 0, "concave cursor notch must remain visibly open")
+  assert.ok(white.length > 0, "white outline is required")
+  assert.ok(greenPixels.length > white.length, "outline must not replace the green cursor")
+  assert.ok(Math.min(...opaque.map(([x]) => x)) >= 0)
+  assert.ok(Math.max(...opaque.map(([x]) => x)) <= 29)
+  assert.ok(Math.min(...opaque.map(([, y]) => y)) >= 0)
+  assert.ok(Math.max(...opaque.map(([, y]) => y)) <= 33)
 })
 
 test("destination edge icons are contained 24px two-colour RGBA chevrons", async () => {
@@ -165,7 +169,7 @@ test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 },
   const diagnostics = result.stdout + result.stderr
   assert.equal(result.status, 0, diagnostics)
   assert.doesNotMatch(diagnostics, /unsupport(?:ed)? attribute|unsupported (?:attribute|property)/i)
-  assert.match(result.stdout, /verified .*\.0\.6\.9\.rpk/)
+  assert.match(result.stdout, /verified .*\.0\.6\.10\.rpk/)
 
   const compiledEntry = await readFile(new URL("build/pages/index/index.js", root), "utf8")
   assert.doesNotMatch(compiledEntry, /\.\/src\/common\/(?:render-protocol|vector-scene)\.js/, "page load must not start a custom module graph")

@@ -48,20 +48,26 @@ test("matching prepare admits begin and stale or missing preparation is rejected
   assert.equal(validateAssetBegin({ ...body, run: "nav-run-stale", scene: body.sceneId }, result.prepared).code, "notPrepared")
 })
 
+test("prepare accepts PNG and JPEG raster bytes but rejects unknown image formats", () => {
+  assert.equal(validatePrepare(prepare({ format: "image/png" })).ok, true)
+  assert.equal(validatePrepare(prepare({ format: "image/jpeg" })).ok, true)
+  assert.equal(validatePrepare(prepare({ format: "image/webp" })).ok, false)
+})
+
 test("prepare admits a bounded navigation preview", () => {
   const preview = {
     maneuver: "right", distanceM: 88, street: "Chu Huy Man",
     x: 106, y: 374, heading: 3,
-    destinationMode: "edge", destinationX: 180, destinationY: 260
+    destinationMode: "edge", destinationX: 200, destinationY: 260
   }
   const result = validatePrepare(prepare({ preview }))
   assert.equal(result.ok, true)
   assert.deepEqual(result.prepared.preview, preview)
   assert.equal(validatePrepare(prepare({ preview: {
-    ...preview, destinationX: 186, destinationY: 260
+    ...preview, destinationX: 200, destinationY: 260
   } })).ok, true)
   assert.equal(validatePrepare(prepare({ preview: {
-    ...preview, destinationMode: "visible", destinationX: 186, destinationY: 260
+    ...preview, destinationMode: "visible", destinationX: 200, destinationY: 260
   } })).ok, false)
 
   for (const invalid of [

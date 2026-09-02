@@ -561,61 +561,26 @@ final class AppModel: ObservableObject {
             progress: progress,
             selection: selection
         ) ?? route.points[maneuverIndex]
-        var prepared: (snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)?
-        var candidates: [(snapshot: VietmapSnapshotOutput, encoded: SnapshotPNGOutput)] = []
-        var rejectedSnapshots: [(snapshot: VietmapSnapshotOutput, profile: SnapshotPaletteProfile)] = []
-        var rejectedBytes = 0
-        for profile in SnapshotPaletteProfile.transferOptimizedOrder {
-            let snapshot = try await snapshotRenderer.render(VietmapSnapshotRequest(
-                route: route,
-                matchedPosition: progress.matchedLocation ?? location.geoPoint,
-                overlayGeometry: selection.map {
-                    RouteOverlayGeometry.make(route: route, progress: progress, selection: $0)
-                } ?? RouteOverlayGeometry(
-                    subdued: route.points,
-                    traveled: Array(route.points.prefix(progress.pointIndex + 1)),
-                    active: Array(route.points.dropFirst(progress.pointIndex)),
-                    context: []
-                ),
-                headingDegrees: bearingDegrees,
-                nextManeuver: forwardPoint,
-                tileMapKey: tileMapKey,
-                profile: profile
-            ))
-            do {
-                let encoded = try SnapshotPNGEncoder.encode(snapshot.image, profiles: [profile])
-                candidates.append((snapshot, encoded))
-                if encoded.data.count <= SnapshotPayloadAdmission.preferredMaximumBytes {
-                    prepared = (snapshot, encoded)
-                    break
-                }
-            } catch let SnapshotPNGEncoder.Error.payloadTooLarge(bytes) {
-                rejectedBytes = bytes
-                rejectedSnapshots.append((snapshot, profile))
-            }
-        }
-        if prepared == nil,
-           let selected = SnapshotPayloadAdmission.choose(candidates.map { ($0.encoded.profile, $0.encoded.data.count) }) {
-            prepared = candidates.first { $0.encoded.profile == selected }
-        }
-        if prepared == nil {
-            for rejected in rejectedSnapshots {
-                do {
-                    prepared = (rejected.snapshot, try SnapshotPNGEncoder.encode(
-                        rejected.snapshot.image,
-                        profiles: [rejected.profile],
-                        blockSizes: [2, 4, 8]
-                    ))
-                    break
-                } catch let SnapshotPNGEncoder.Error.payloadTooLarge(bytes) {
-                    rejectedBytes = bytes
-                }
-            }
-        }
-        guard let prepared else { throw SnapshotPNGEncoder.Error.payloadTooLarge(rejectedBytes) }
-        let snapshot = prepared.snapshot, encoded = prepared.encoded
+        let snapshot = try await snapshotRenderer.render(VietmapSnapshotRequest(
+            route: route,
+            matchedPosition: progress.matchedLocation ?? location.geoPoint,
+            overlayGeometry: selection.map {
+                RouteOverlayGeometry.make(route: route, progress: progress, selection: $0)
+            } ?? RouteOverlayGeometry(
+                subdued: route.points,
+                traveled: Array(route.points.prefix(progress.pointIndex + 1)),
+                active: Array(route.points.dropFirst(progress.pointIndex)),
+                context: []
+            ),
+            headingDegrees: bearingDegrees,
+            nextManeuver: forwardPoint,
+            tileMapKey: tileMapKey,
+            profile: .colors16Labels
+        ))
+        let encoded = try SnapshotImageEncoder.encode(snapshot.image)
         let asset = try RenderAsset(
             kind: .raster,
+            format: encoded.format,
             formatVersion: RenderProtocol.formatVersion,
             width: RenderProtocol.viewportWidth,
             height: RenderProtocol.viewportHeight,
@@ -624,7 +589,8 @@ final class AppModel: ObservableObject {
         )
         logNavigation(
             "map.rendered",
-            "bytes=\(asset.byteCount) palette=\(encoded.colorCount) pixelBlock=\(encoded.pixelBlockSize) zoom=\(Int(snapshot.zoom)) " +
+            "bytes=\(asset.byteCount) format=\(encoded.format.rawValue) jpegQuality=\(encoded.jpegQuality ?? 0) " +
+            "palette=\(encoded.colorCount) pixelBlock=\(encoded.pixelBlockSize) zoom=\(Int(snapshot.zoom)) " +
             "layers=\(snapshot.retainedFillLayers)/\(snapshot.retainedLineLayers)/\(snapshot.retainedSymbolLayers) " +
             "styleMs=\(snapshot.styleLoadMilliseconds) snapshotMs=\(snapshot.snapshotMilliseconds) encodeMs=\(encoded.durationMilliseconds)"
         )
@@ -802,7 +768,7 @@ final class AppModel: ObservableObject {
             y: Int(max(-100_000, min(100_000, projected.y)).rounded())
         )
         if mask.contains(center: target, resourceWidth: 28, resourceHeight: 34) { return (.visible, target) }
-        return (.edge, mask.withVisualMargin(2).destinationEdgePoint(from: marker, toward: target))
+        return (.edge, mask.destinationEdge.destinationEdgePoint(from: marker, toward: target))
     }
 
     static func initialRouteHeading(courseDegrees: Double, speedMetersPerSecond: Double) -> Int? {
@@ -986,7 +952,7 @@ final class AppModel: ObservableObject {
         case VietmapSnapshotRenderer.Error.invalidRequest: "MAP_INVALID_REQUEST"
         case VietmapSnapshotRenderer.Error.styleLoadFailed: "MAP_STYLE_FAILED"
         case VietmapSnapshotRenderer.Error.snapshotFailed, VietmapSnapshotRenderer.Error.imageUnavailable: "MAP_SNAPSHOT_FAILED"
-        case SnapshotPNGEncoder.Error.payloadTooLarge: "MAP_PAYLOAD_TOO_LARGE"
+        case SnapshotImageEncoder.Error.payloadTooLarge: "MAP_PAYLOAD_TOO_LARGE"
         case NavigationRuntimeError.bandDisplayFailed: "BAND_DISPLAY_FAILED"
         default: "NAVIGATION_ERROR"
         }
@@ -994,7 +960,7 @@ final class AppModel: ObservableObject {
 
     private static func navigationErrorDetail(for error: Swift.Error) -> String {
         switch error {
-        case let SnapshotPNGEncoder.Error.payloadTooLarge(bytes):
+        case let SnapshotImageEncoder.Error.payloadTooLarge(bytes):
             "encodedBytes=\(bytes) budgetBytes=\(RenderProtocol.maximumPayloadBytes)"
         case let NavigationRuntimeError.bandDisplayFailed(code):
             "terminal=\(safeErrorCode(code))"

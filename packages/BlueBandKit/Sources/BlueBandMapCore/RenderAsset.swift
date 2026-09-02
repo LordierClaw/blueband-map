@@ -25,6 +25,7 @@ public struct RenderAsset: Equatable, Sendable {
 
     public init(
         kind: RenderKind,
+        format: RenderFormat = .png,
         formatVersion: Int,
         width: Int,
         height: Int,
@@ -44,7 +45,7 @@ public struct RenderAsset: Equatable, Sendable {
         }
 
         self.kind = kind
-        self.format = .raster
+        self.format = format
         self.formatVersion = formatVersion
         self.width = width
         self.height = height

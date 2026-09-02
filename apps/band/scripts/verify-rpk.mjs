@@ -47,7 +47,7 @@ for (const required of [
   "common/maneuver-uTurn.png",
   "common/maneuver-roundabout.png",
   "common/maneuver-arrive.png",
-  "common/marker-cursor-v3.png",
+  "common/marker-cursor-v4.png",
   "common/destination-pin.png",
   "common/destination-edge.png",
   ...Array.from({ length: 8 }, (_, index) => `common/destination-edge-${index}.png`)
@@ -61,7 +61,7 @@ const expectedFeatures = [
   { name: "system.file" }
 ]
 if (manifest.package !== "dev.lordierclaw.bluebandmap.band" || manifest.icon !== "/common/icon.png" ||
-    manifest.versionName !== "0.6.9" || manifest.versionCode !== 24 || manifest.minAPILevel !== 1 ||
+    manifest.versionName !== "0.6.10" || manifest.versionCode !== 25 || manifest.minAPILevel !== 1 ||
     manifest.config.designWidth !== 212 ||
     JSON.stringify(manifest.features) !== JSON.stringify(expectedFeatures)) {
   throw new Error("compiled manifest does not match Band 10 bundle contract")
@@ -74,11 +74,11 @@ if (icon.readUInt32BE(16) !== 256 || icon.readUInt32BE(20) !== 256 || icon[25] !
   throw new Error("compiled launcher icon must be 256x256 RGBA")
 }
 for (const name of [
-  "marker-cursor-v3.png",
+  "marker-cursor-v4.png",
   ...Array.from({ length: 8 }, (_, index) => `destination-edge-${index}.png`)
 ]) {
   const asset = files.get(`common/${name}`)
-  const marker = name === "marker-cursor-v3.png"
+  const marker = name === "marker-cursor-v4.png"
   const expectedWidth = marker ? 30 : 24
   const expectedHeight = marker ? 38 : 24
   if (asset.readUInt32BE(16) !== expectedWidth || asset.readUInt32BE(20) !== expectedHeight || asset[25] !== 6) {

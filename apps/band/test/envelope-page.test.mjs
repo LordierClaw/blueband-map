@@ -166,6 +166,21 @@ test("publishes only a prepared 212x520 raster snapshot and one aggregate result
   })
 })
 
+test("stores and publishes a prepared JPEG with a jpg extension", async () => {
+  const { page, file } = await harness()
+  page.receiveMessage({ data: envelope("prepare-jpeg", "render.prepare", prepare({ format: "image/jpeg" })) })
+  page.receiveMessage({ data: envelope("begin-jpeg", "map.asset.begin", begin({ format: "image/jpeg", mime: "image/jpeg" })) })
+  page.receiveMessage({ data: envelope("chunk-jpeg", "map.asset.chunk", {
+    asset: ASSET, run: RUN, scene: SCENE, offset: 0, data: Buffer.from(BYTES).toString("base64")
+  }) })
+  page.receiveMessage({ data: envelope("end-jpeg", "map.asset.end", { asset: ASSET, run: RUN, scene: SCENE }) })
+
+  assert.equal(page.pendingMapPath, `internal://files/${ASSET}.jpg`)
+  assert.deepEqual(file.storage.get(page.pendingMapPath), BYTES)
+  page.mapComplete(page.pendingPublication.token)
+  assert.equal(page.mapPath, `internal://files/${ASSET}.jpg`)
+})
+
 test("rejects vector, oversized and unprepared assets before file allocation", async () => {
   const { page, sent, file } = await harness()
   page.receiveMessage({ data: envelope("vector", "render.prepare", prepare({ renderer: "vector" })) })
@@ -206,7 +221,7 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
 
   assert.equal(page.navStatus, "ARRIVED")
   assert.equal(page.navArrowPath, "/common/maneuver-arrive.png")
-  assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
+  assert.equal(page.navMarkerPath, "/common/marker-cursor-v4.png")
   assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   assert.equal(page.navStatusVisible, true)
   page.receiveMessage({ data: envelope("nav-5", "nav.update", {
@@ -241,7 +256,7 @@ test("preview and live guidance share compact metre and kilometre labels", async
   cases.forEach(([distanceM, label], seq) => {
     page.receiveMessage({ data: envelope(`nav-distance-${seq}`, "nav.update", navigation({ seq, distanceM })) })
     assert.equal(page.navDistance, label)
-    assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
+    assert.equal(page.navMarkerPath, "/common/marker-cursor-v4.png")
     assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   })
 })
@@ -252,8 +267,8 @@ test("destination overlay switches atomically and stays inside the curved safe m
   assert.equal(page.destinationDirection(106, 374, 190, 290), 1)
   assert.equal(page.destinationDirection(106, 374, 199, 260), 1)
   assert.equal(page.destinationDirection(106, 374, 22, 374), 6)
-  assert.deepEqual(page.destinationOverlay("edge", 30, 260), {
-    path: "/common/destination-edge-7.png", style: "left:18px;top:248px;width:24px;height:24px;"
+  assert.deepEqual(page.destinationOverlay("edge", 12, 260), {
+    path: "/common/destination-edge-7.png", style: "left:0px;top:248px;width:24px;height:24px;"
   })
   publish(page)
   page.receiveMessage({ data: envelope("visible", "nav.update", navigation({
@@ -264,10 +279,10 @@ test("destination overlay switches atomically and stays inside the curved safe m
   assert.equal(page.navDestinationStyle, "left:92px;top:103px;")
 
   page.receiveMessage({ data: envelope("edge", "nav.update", navigation({
-    seq: 2, destinationMode: "edge", destinationX: 182, destinationY: 260
+    seq: 2, destinationMode: "edge", destinationX: 200, destinationY: 260
   })) })
   assert.equal(page.navDestinationPath, "/common/destination-edge-1.png")
-  assert.equal(page.navDestinationStyle, "left:170px;top:248px;width:24px;height:24px;")
+  assert.equal(page.navDestinationStyle, "left:188px;top:248px;width:24px;height:24px;")
 
   page.receiveMessage({ data: envelope("visible-too-close", "nav.update", navigation({
     seq: 3, destinationMode: "visible", destinationX: 190, destinationY: 260
@@ -330,7 +345,7 @@ test("first raster promotes its staged marker and destination atomically", async
   assert.equal(page.navDestinationVisible, false)
   page.mapComplete(page.pendingPublication.token)
   assert.equal(page.navMarkerVisible, true)
-  assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
+  assert.equal(page.navMarkerPath, "/common/marker-cursor-v4.png")
   assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   assert.equal(page.navDestinationVisible, true)
   assert.equal(page.navDestinationPath, "/common/destination-pin.png")
@@ -428,7 +443,7 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   })) })
   assert.equal(page.mapPath, oldURI)
   assert.equal(page.confirmedMap.uri, oldURI)
-  assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
+  assert.equal(page.navMarkerPath, "/common/marker-cursor-v4.png")
 
   page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", {
     asset: nextAsset, run: RUN, scene: nextScene, offset: 0,
@@ -451,7 +466,7 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   page.mapComplete(page.pendingPublication.token)
   assert.equal(page.confirmedMap.scene, nextScene)
   assert.equal(page.mapPath, `internal://files/${nextAsset}.png`)
-  assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
+  assert.equal(page.navMarkerPath, "/common/marker-cursor-v4.png")
   assert.equal(page.navDestinationPath, "/common/destination-edge-1.png")
 })
 

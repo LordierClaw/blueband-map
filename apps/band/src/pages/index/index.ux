@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.9</text>
+      <text class="version">RPK 0.6.10</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -26,7 +26,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.6.9 • ENV V1</text>
+        <text class="version">RPK 0.6.10 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -61,21 +61,23 @@ function decodeBase64Bytes(value) {
   return outputIndex === output.length ? output : null
 }
 
-function safeMaskPixel(x, y) {
-  if (x < 12 || x > 200 || y < 12 || y > 508) return false
+function safeMaskPixel(x, y, inset) {
+  if (inset === undefined) inset = 12
+  if (x < inset || x > 212 - inset || y < inset || y > 520 - inset) return false
   if (y < 106) return Math.sqrt((x - 106) * (x - 106) + (y - 106) * (y - 106)) <= 94
   if (y > 413) return Math.sqrt((x - 106) * (x - 106) + (y - 413) * (y - 413)) <= 94
   return true
 }
 
-function safeMaskContains(centerX, centerY, resourceWidth, resourceHeight, margin) {
+function safeMaskContains(centerX, centerY, resourceWidth, resourceHeight, margin, inset) {
   if (margin === undefined) margin = 6
+  if (inset === undefined) inset = 12
   var halfWidth = resourceWidth / 2 + margin
   var halfHeight = resourceHeight / 2 + margin
-  return safeMaskPixel(centerX - halfWidth, centerY - halfHeight) &&
-    safeMaskPixel(centerX + halfWidth, centerY - halfHeight) &&
-    safeMaskPixel(centerX - halfWidth, centerY + halfHeight) &&
-    safeMaskPixel(centerX + halfWidth, centerY + halfHeight)
+  return safeMaskPixel(centerX - halfWidth, centerY - halfHeight, inset) &&
+    safeMaskPixel(centerX + halfWidth, centerY - halfHeight, inset) &&
+    safeMaskPixel(centerX - halfWidth, centerY + halfHeight, inset) &&
+    safeMaskPixel(centerX + halfWidth, centerY + halfHeight, inset)
 }
 
 function safeMaskClamp(desiredX, desiredY, resourceWidth, resourceHeight, margin) {
@@ -272,7 +274,8 @@ function renderProtocolValidPreview(preview) {
       safeMaskContains(preview.destinationX, preview.destinationY,
         preview.destinationMode === "visible" ? 28 : 24,
         preview.destinationMode === "visible" ? 34 : 24,
-        preview.destinationMode === "edge" ? 2 : 6))
+        preview.destinationMode === "edge" ? 0 : 6,
+        preview.destinationMode === "edge" ? 0 : 12))
 }
 
 function renderProtocolValidatePrepare(body, options) {
@@ -281,7 +284,7 @@ function renderProtocolValidatePrepare(body, options) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return renderProtocolReject("unsupportedRenderer")
   if (body.renderer !== "raster") return renderProtocolReject("unsupportedRenderer")
   if (body.formatVersion !== renderProtocolLimits.formatVersion) return renderProtocolReject("unsupportedFormatVersion")
-  if (body.format !== "image/png") {
+  if (body.format !== "image/png" && body.format !== "image/jpeg") {
     return renderProtocolReject("unsupportedFormatVersion")
   }
   if (body.width !== renderProtocolLimits.width || body.height !== renderProtocolLimits.height) {
@@ -377,7 +380,7 @@ export default {
     navStatus: "WAITING",
     navStatusVisible: false,
     startupStatus: "IOS CONNECTED • WAITING ROUTE",
-    navMarkerPath: "/common/marker-cursor-v3.png",
+    navMarkerPath: "/common/marker-cursor-v4.png",
     navMarkerStyle: "left:91px;top:355px;",
     navMarkerVisible: false,
     navDestinationVisible: false,
@@ -705,13 +708,14 @@ export default {
         (body.destinationMode !== "hidden" && safeMaskContains(
           body.destinationX, body.destinationY, body.destinationMode === "visible" ? 28 : 24,
           body.destinationMode === "visible" ? 34 : 24,
-          body.destinationMode === "edge" ? 2 : 6)))
+          body.destinationMode === "edge" ? 0 : 6,
+          body.destinationMode === "edge" ? 0 : 12)))
     if (valid) {
       var labels = { navigating: "NAVIGATING", gpsLow: "GPS LOW", limitedMap: "LIMITED MAP", rerouting: "REROUTING", arrived: "ARRIVED" }
       this.navScene = body.scene
       this.navSequence = body.seq
       this.navMarkerVisible = true
-      this.navMarkerPath = "/common/marker-cursor-v3.png"
+      this.navMarkerPath = "/common/marker-cursor-v4.png"
       var navigation = {
         arrowPath: "/common/maneuver-" + body.maneuver + ".png",
         distance: body.status === "arrived" ? "ARRIVED" : this.formatDistance(body.distanceM),
@@ -835,7 +839,7 @@ export default {
     return this.isRouteCardBeginBody(body) && typeof body.asset === "string" &&
       /^nav-[0-9a-f]{16}$/.test(body.asset) &&
       renderProtocol.validateAssetBegin(body, this.preparedRender).ok &&
-      body.mime === body.format && body.mime === "image/png" && this.validRun(body.run)
+      body.mime === body.format && (body.mime === "image/png" || body.mime === "image/jpeg") && this.validRun(body.run)
   },
 
   beginAsset(message) {
@@ -850,9 +854,10 @@ export default {
       this.failAsset(message, "ASSET_BUSY")
       return
     }
-    var baseURI = "internal://files/" + body.asset + ".png"
+    var extension = body.mime === "image/jpeg" ? ".jpg" : ".png"
+    var baseURI = "internal://files/" + body.asset + extension
     var transferURI = this.confirmedMap && this.confirmedMap.uri === baseURI ?
-      "internal://files/" + body.asset + "-" + body.scene + ".png" : baseURI
+      "internal://files/" + body.asset + "-" + body.scene + extension : baseURI
     var transfer = {
       asset: body.asset,
       bytes: body.bytes,
@@ -863,7 +868,7 @@ export default {
       run: body.run,
       routeCard: true,
       renderer: "raster",
-      format: "image/png",
+      format: body.format,
       formatVersion: 1,
       primitives: 0,
       scene: body.scene,
@@ -1396,7 +1401,7 @@ export default {
       return
     }
     this.navMarkerVisible = true
-    this.navMarkerPath = "/common/marker-cursor-v3.png"
+    this.navMarkerPath = "/common/marker-cursor-v4.png"
     this.navMarkerStyle = "left:91px;top:355px;"
     this.navDestinationVisible = preview.destinationMode !== "hidden"
     if (this.navDestinationVisible) {

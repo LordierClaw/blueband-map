@@ -32,7 +32,7 @@ final class RenderProtocolTests: XCTestCase {
         XCTAssertEqual(prepare.runID, runID)
         XCTAssertEqual(prepare.sceneID, sceneID)
         XCTAssertEqual(prepare.renderer, .raster)
-        XCTAssertEqual(prepare.format, RenderFormat.raster.rawValue)
+        XCTAssertEqual(prepare.format, RenderFormat.png.rawValue)
         XCTAssertEqual(prepare.formatVersion, 1)
         XCTAssertEqual(prepare.width, 212)
         XCTAssertEqual(prepare.height, 520)
@@ -91,7 +91,7 @@ final class RenderProtocolTests: XCTestCase {
     }
 
     func testNavigationPreviewRejectsNegativeDistance() {
-        let edge = BandDisplaySafeMask.smartBand10PhotoEstimate.withVisualMargin(2).destinationEdgePoint(
+        let edge = BandDisplaySafeMask.smartBand10PhotoEstimate.destinationEdge.destinationEdgePoint(
             from: ScreenPoint(x: 106, y: 374), toward: ScreenPoint(x: 500, y: 260)
         )
         XCTAssertThrowsError(try RenderNavigationPreview(
@@ -191,6 +191,28 @@ final class RenderProtocolTests: XCTestCase {
         }
     }
 
+    func testRasterAssetCarriesAnExplicitPNGOrJPEGFormat() throws {
+        let png = try RenderAsset(
+            kind: .raster, format: .png, formatVersion: 1,
+            width: 212, height: 520, data: Data([0x89, 0x50]), primitives: 0
+        )
+        let jpeg = try RenderAsset(
+            kind: .raster, format: .jpeg, formatVersion: 1,
+            width: 212, height: 520, data: Data([0xff, 0xd8]), primitives: 0
+        )
+
+        XCTAssertEqual(png.format.rawValue, "image/png")
+        XCTAssertEqual(jpeg.format.rawValue, "image/jpeg")
+        XCTAssertEqual(try RenderPrepareBody(runID: runID, sceneID: sceneID, asset: jpeg).format, "image/jpeg")
+        XCTAssertThrowsError(try RenderProtocol.validate(
+            runID: runID, sceneID: sceneID, renderer: .raster, format: "image/webp",
+            formatVersion: 1, width: 212, height: 520, bytes: 2,
+            sha256: String(repeating: "a", count: 64), primitives: 0
+        )) { error in
+            XCTAssertEqual(error as? RenderProtocolError, .invalidFormat)
+        }
+    }
+
     func testRenderTransferStepsStayWithinEnvelopeAndReconstructData() throws {
         let data = Data(repeating: 0x37, count: 8_192)
         let asset = try RenderAsset(
@@ -223,7 +245,7 @@ final class RenderProtocolTests: XCTestCase {
         }
         XCTAssertEqual(reconstructed, data)
         XCTAssertEqual(steps.first?.body["renderer"], .string("raster"))
-        XCTAssertEqual(steps.first?.body["format"], .string(RenderFormat.raster.rawValue))
+        XCTAssertEqual(steps.first?.body["format"], .string(RenderFormat.png.rawValue))
         XCTAssertEqual(steps.first?.body["primitives"], .number(0))
     }
 

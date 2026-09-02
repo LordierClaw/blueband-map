@@ -50,17 +50,17 @@ function reject(code) {
   return { ok: false, code }
 }
 
-function safePixel(x, y) {
-  if (x < 12 || x > 200 || y < 12 || y > 508) return false
+function safePixel(x, y, inset = 12) {
+  if (x < inset || x > 212 - inset || y < inset || y > 520 - inset) return false
   if (y < 106) return Math.hypot(x - 106, y - 106) <= 94
   if (y > 413) return Math.hypot(x - 106, y - 413) <= 94
   return true
 }
 
-function safeCenter(x, y, width, height, margin = 6) {
+function safeCenter(x, y, width, height, margin = 6, inset = 12) {
   const halfWidth = width / 2 + margin, halfHeight = height / 2 + margin
-  return safePixel(x - halfWidth, y - halfHeight) && safePixel(x + halfWidth, y - halfHeight) &&
-    safePixel(x - halfWidth, y + halfHeight) && safePixel(x + halfWidth, y + halfHeight)
+  return safePixel(x - halfWidth, y - halfHeight, inset) && safePixel(x + halfWidth, y - halfHeight, inset) &&
+    safePixel(x - halfWidth, y + halfHeight, inset) && safePixel(x + halfWidth, y + halfHeight, inset)
 }
 
 function validPreview(preview) {
@@ -76,7 +76,8 @@ function validPreview(preview) {
       safeCenter(preview.destinationX, preview.destinationY,
         preview.destinationMode === "visible" ? 28 : 24,
         preview.destinationMode === "visible" ? 34 : 24,
-        preview.destinationMode === "edge" ? 2 : 6))
+        preview.destinationMode === "edge" ? 0 : 6,
+        preview.destinationMode === "edge" ? 0 : 12))
 }
 
 function validatePrepare(body, options = {}) {
@@ -84,7 +85,7 @@ function validatePrepare(body, options = {}) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return reject("unsupportedRenderer")
   if (body.renderer !== "raster") return reject("unsupportedRenderer")
   if (body.formatVersion !== LIMITS.formatVersion) return reject("unsupportedFormatVersion")
-  if (body.format !== "image/png") {
+  if (body.format !== "image/png" && body.format !== "image/jpeg") {
     return reject("unsupportedFormatVersion")
   }
   if (body.width !== LIMITS.width || body.height !== LIMITS.height) return reject("invalidDimensions")

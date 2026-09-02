@@ -6,7 +6,7 @@ This protocol is above the unchanged Xiaomi transport and application envelope v
 
 | Field | Value |
 |---|---|
-| Renderer / MIME | `raster` / `image/png` |
+| Renderer / MIME | `raster` / `image/jpeg` preferred, `image/png` fallback |
 | Format version | `1` |
 | Dimensions | `212×520` |
 | Payload | `1…8,192` bytes |
@@ -14,7 +14,7 @@ This protocol is above the unchanged Xiaomi transport and application envelope v
 | Envelope ceiling | 1,024 encoded bytes |
 | Transfer window | 1, 2, or 4 application ACKs |
 
-The iPhone sends `render.prepare` and waits for matching `render.ready`; then sends ordered `map.asset.begin`, windowed `map.asset.chunk` messages, and ordered `map.asset.end`. Each chunk has a unique message ID and the exact next byte offset. Base64 chunk size is selected from the real encoded envelope, not a fixed data size.
+The iPhone selects the highest JPEG quality that fits the complete 8,192-byte payload, or falls back to the bounded indexed PNG encoder. It sends `render.prepare` and waits for matching `render.ready`; then sends ordered `map.asset.begin`, windowed `map.asset.chunk` messages, and ordered `map.asset.end`. Each chunk has a unique message ID and the exact next byte offset. Base64 chunk size is selected from the real encoded envelope, not a fixed data size.
 
 If the user stops before transfer begins, `render.cancel` releases the matching prepared run/scene. A missing `render.ready` or final `render.result` reaches a bounded timeout; transfer-phase cancellation requires reconnect cleanup.
 

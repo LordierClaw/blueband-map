@@ -13,9 +13,13 @@ bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")
 minimum_os=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$plist")
 bluetooth=$(/usr/libexec/PlistBuddy -c 'Print :NSBluetoothAlwaysUsageDescription' "$plist")
 executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
+short_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+build_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
 
 [[ "$bundle_id" == "dev.lordierclaw.bluebandmap" ]]
 [[ "$minimum_os" == "17.0" ]]
+[[ "$short_version" == "0.5.8" ]]
+[[ "$build_version" == "24" ]]
 [[ -n "$bluetooth" ]]
 if /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$plist" >/dev/null 2>&1; then
   echo "UIBackgroundModes must be absent" >&2

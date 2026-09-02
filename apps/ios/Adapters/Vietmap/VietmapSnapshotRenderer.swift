@@ -141,6 +141,11 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
 }
 
 enum VietmapStyleLayerPolicy {
+    static func isRoadLabel(id: String) -> Bool {
+        let id = id.lowercased()
+        return id.hasPrefix("road_") && id.contains("label")
+    }
+
     static func keeps(
         id: String,
         type: String,
@@ -161,7 +166,7 @@ enum VietmapStyleLayerPolicy {
                 .contains { id.contains($0) }
         case "line": return ["road", "tunnel", "bridge"].contains { id.contains($0) }
         case "symbol":
-            if id.hasPrefix("road_"), id.contains("label") {
+            if isRoadLabel(id: id) {
                 if ["minor", "service", "street", "residential"].contains(where: id.contains) {
                     return profile.keepsLowPriorityLabels && zoom >= 16
                 }
@@ -172,6 +177,11 @@ enum VietmapStyleLayerPolicy {
         default: return false
         }
     }
+}
+
+enum VietmapRoadLabelStyle {
+    static let textSize = 14.0
+    static let haloWidth = 1.25
 }
 
 enum VietmapDarkStyle {
@@ -382,6 +392,10 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
             if let layer = layer as? MGLSymbolStyleLayer {
                 layer.textColor = color
                 layer.textHaloColor = NSExpression(forConstantValue: VietmapDarkStyle.color(id: "background", type: "background"))
+                if VietmapStyleLayerPolicy.isRoadLabel(id: layer.identifier) {
+                    layer.textFontSize = NSExpression(forConstantValue: VietmapRoadLabelStyle.textSize)
+                    layer.textHaloWidth = NSExpression(forConstantValue: VietmapRoadLabelStyle.haloWidth)
+                }
             }
             if type == "fill" { retainedFillLayers += 1 }
             if type == "line" { retainedLineLayers += 1 }

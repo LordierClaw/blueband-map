@@ -46,6 +46,19 @@ public struct BandDisplaySafeMask: Equatable, Sendable {
         withVisualMargin(0)
     }
 
+    public var destinationEdge: Self {
+        Self(
+            width: width,
+            height: height,
+            inset: 0,
+            topCenterY: topCenterY,
+            bottomCenterY: bottomCenterY,
+            topRadius: topRadius,
+            bottomRadius: bottomRadius,
+            visualMargin: 0
+        )
+    }
+
     public func withVisualMargin(_ margin: Double) -> Self {
         Self(
             width: width,

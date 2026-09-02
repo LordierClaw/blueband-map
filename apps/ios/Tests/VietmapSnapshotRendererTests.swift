@@ -8,6 +8,13 @@ import BlueBandMapCore
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
 
+    func testRoadLabelsUseReadableSnapshotTypography() {
+        XCTAssertTrue(VietmapStyleLayerPolicy.isRoadLabel(id: "road_primary_label"))
+        XCTAssertFalse(VietmapStyleLayerPolicy.isRoadLabel(id: "poi_school"))
+        XCTAssertEqual(VietmapRoadLabelStyle.textSize, 14)
+        XCTAssertEqual(VietmapRoadLabelStyle.haloWidth, 1.25)
+    }
+
     func testSanitizedDarkStyleKeepsOnlyWearableMapContext() throws {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "vietmap-light-style-layers", withExtension: "json"))
         let layers = try JSONDecoder().decode([Layer].self, from: Data(contentsOf: url))

@@ -6,7 +6,8 @@ public enum RenderKind: String, Codable, CaseIterable, Sendable {
 }
 
 public enum RenderFormat: String, Codable, Sendable {
-    case raster = "image/png"
+    case png = "image/png"
+    case jpeg = "image/jpeg"
 }
 
 public enum RenderRejectCode: String, Codable, CaseIterable, Sendable {
@@ -75,7 +76,7 @@ public enum RenderProtocol {
         guard width == viewportWidth, height == viewportHeight else {
             throw RenderProtocolError.invalidDimensions
         }
-        guard renderer == .raster, format == RenderFormat.raster.rawValue else {
+        guard renderer == .raster, RenderFormat(rawValue: format) != nil else {
             throw RenderProtocolError.invalidFormat
         }
         guard formatVersion == Self.formatVersion else {
@@ -132,7 +133,7 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
             let width = destinationMode == .visible ? 28 : 24
             let height = destinationMode == .visible ? 34 : 24
             let baseMask = BandDisplaySafeMask.smartBand10PhotoEstimate
-            let mask = destinationMode == .edge ? baseMask.withVisualMargin(2) : baseMask
+            let mask = destinationMode == .edge ? baseMask.destinationEdge : baseMask
             guard mask.contains(
                 center: ScreenPoint(x: destinationX, y: destinationY),
                 resourceWidth: width,

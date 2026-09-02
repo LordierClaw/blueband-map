@@ -76,4 +76,20 @@ final class BandDisplaySafeMaskTests: XCTestCase {
             hypot(Double(oldTip.x - marker.x), Double(oldTip.y - marker.y))
         )
     }
+
+    func testDestinationEdgeMaskReachesStraightEdgeAndKeepsCurvedCornersContained() {
+        let mask = BandDisplaySafeMask.smartBand10PhotoEstimate.destinationEdge
+        let origin = ScreenPoint(x: 106, y: 374)
+        let left = mask.destinationEdgePoint(from: origin, toward: ScreenPoint(x: -500, y: 374))
+        let right = mask.destinationEdgePoint(from: origin, toward: ScreenPoint(x: 500, y: 374))
+        let corner = mask.destinationEdgePoint(from: origin, toward: ScreenPoint(x: -500, y: -500))
+
+        XCTAssertEqual(left.x, 12)
+        XCTAssertEqual(right.x, 200)
+        XCTAssertTrue(mask.contains(center: corner, resourceWidth: 24, resourceHeight: 24))
+        XCTAssertFalse(mask.contains(
+            center: ScreenPoint(x: corner.x - 1, y: corner.y - 1),
+            resourceWidth: 24, resourceHeight: 24
+        ))
+    }
 }
