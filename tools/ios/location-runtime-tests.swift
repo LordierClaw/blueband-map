@@ -69,6 +69,15 @@ Task { @MainActor in
           "expired Allow Once releases previously authorized services")
     permissions.stop()
     withExtendedLifetime(permissionStream) {}
+
+    let revoked = ForegroundLocationClient()
+    let revokedManager = CLLocationManager.latest!
+    let revokedStream = revoked.locations()
+    revoked.locationManager(revokedManager, didUpdateLocations: [CLLocation()])
+    revokedManager.authorizationStatus = .denied
+    check(revoked.recentLocation() == nil, "cached fix cannot bypass revoked permission")
+    revoked.stop()
+    withExtendedLifetime(revokedStream) {}
     exit(failures == 0 ? 0 : 1)
 }
 dispatchMain()

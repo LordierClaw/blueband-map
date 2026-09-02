@@ -78,7 +78,10 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     }
 
     func recentLocation(now: Date = Date()) -> CLLocation? {
-        guard let cachedLocation,
+        guard servicesEnabled(),
+              manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse,
+              manager.accuracyAuthorization == .fullAccuracy,
+              let cachedLocation,
               ReusableLocationPolicy.isReusable(
                 horizontalAccuracyMeters: cachedLocation.horizontalAccuracy,
                 ageSeconds: now.timeIntervalSince(cachedLocation.timestamp)
@@ -185,7 +188,7 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
         }
         if manager.accuracyAuthorization == .reducedAccuracy { return "Vị trí gần đúng. Bật Vị trí chính xác để điều hướng." }
         guard let cachedLocation else { return "Đã cấp quyền vị trí chính xác; đang chờ GPS." }
-        return "GPS \(rawFixCount) • ±\(Int(cachedLocation.horizontalAccuracy)) m • \(max(0, Int(Date().timeIntervalSince(cachedLocation.timestamp)))) giây trước • \(navigationActive ? "đang chạy" : "đã dừng")"
+        return "GPS \(rawFixCount) • ±\(Int(cachedLocation.horizontalAccuracy)) m • \(max(0, Int(Date().timeIntervalSince(cachedLocation.timestamp)))) giây trước • \(navigationActive ? "điều hướng" : prewarming ? "chuẩn bị" : "đã dừng")"
     }
 
     var diagnostic: String {

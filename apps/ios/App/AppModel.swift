@@ -70,6 +70,7 @@ final class AppModel: ObservableObject {
     private let session: BandSession
     private let routeClient: VietmapRouteClient
     private let snapshotRenderer: VietmapSnapshotRenderer
+    private let snapshotRender: @MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput
     private let locationClient: ForegroundLocationClient
     private let renderCoordinator: RouteCardRenderCoordinator
     private let updateClock: any BlueBandClock
@@ -82,6 +83,7 @@ final class AppModel: ObservableObject {
     private var rerouteTask: Task<Void, Never>?
     private var pendingReroute: RoutePlan?
     private var applicationState = "active"
+    private var displayedFixTimestamp: Date?
     private var updateTask: Task<Void, Never>?
     private var updateCoalescer = NavigationUpdateCoalescer()
     private var updateSequence = 0
@@ -109,6 +111,7 @@ final class AppModel: ObservableObject {
         snapshotRenderer: VietmapSnapshotRenderer,
         locationClient: ForegroundLocationClient,
         routeCardSession: (any RouteCardSessionSending)? = nil,
+        snapshotRender: (@MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput)? = nil,
         updateClock: any BlueBandClock = ContinuousBlueBandClock(),
         defaults: UserDefaults = .standard,
         scanDuration: Duration = .seconds(15)
@@ -121,6 +124,7 @@ final class AppModel: ObservableObject {
         self.session = session
         self.routeClient = routeClient
         self.snapshotRenderer = snapshotRenderer
+        self.snapshotRender = snapshotRender ?? { try await snapshotRenderer.render($0) }
         self.locationClient = locationClient
         self.updateClock = updateClock
         self.defaults = defaults
@@ -399,6 +403,7 @@ final class AppModel: ObservableObject {
                 generation: generation
             )
             try checkNavigationOwner(generation)
+            let first = locationClient.recentLocation() ?? first
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
             var selection = GuidancePresentationPolicy.select(
@@ -610,7 +615,7 @@ final class AppModel: ObservableObject {
             progress: progress,
             selection: selection
         ) ?? route.points[maneuverIndex]
-        let snapshot = try await snapshotRenderer.render(VietmapSnapshotRequest(
+        let snapshot = try await snapshotRender(VietmapSnapshotRequest(
             route: route,
             matchedPosition: progress.matchedLocation ?? location.geoPoint,
             overlayGeometry: selection.map {
@@ -684,6 +689,7 @@ final class AppModel: ObservableObject {
         activeSceneID = sceneID
         routePreviewPNG = asset.data
         lastMapFixAgeMilliseconds = Int(max(0, Date().timeIntervalSince(location.timestamp) * 1000))
+        displayedFixTimestamp = location.timestamp
         if lastMapFixAgeMilliseconds! >= 5_000 { latencyViolations += 1 }
         activeSnapshotConfiguration = snapshot.configuration
         activeSnapshotAnchor = progress.matchedLocation ?? location.geoPoint
@@ -892,7 +898,8 @@ final class AppModel: ObservableObject {
                 "app": applicationState,
                 "location": locationClient.diagnostic,
                 "locationHealth": locationClient.healthText,
-                "mapLatency": "fixToDisplayMs=\(lastMapFixAgeMilliseconds.map(String.init) ?? "none") violations=\(latencyViolations)"
+                "mapLatency": "fixToDisplayMs=\(lastMapFixAgeMilliseconds.map(String.init) ?? "none") violations=\(latencyViolations)",
+                "mapFreshness": "displayedFixAgeMs=\(displayedFixTimestamp.map { Int(max(0, Date().timeIntervalSince($0) * 1000)) }.map(String.init) ?? "none")"
             ]
         )
     }
@@ -902,6 +909,7 @@ final class AppModel: ObservableObject {
         gpsWaitMilliseconds = 0
         routeRequestMilliseconds = 0
         lastMapFixAgeMilliseconds = nil
+        displayedFixTimestamp = nil
         latencyViolations = 0
         navigationDebugSequence = 0
         navigationDebugEntries = []

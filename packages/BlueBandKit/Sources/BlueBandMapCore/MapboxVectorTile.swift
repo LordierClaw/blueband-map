@@ -164,13 +164,13 @@ public struct MapboxVectorTile: Equatable, Sendable {
 
         let geometryType = GeometryType(rawValue: UInt8(exactly: rawGeometryType) ?? 0) ?? .unknown
         let properties = try decodeProperties(tags: tags, keys: keys, values: values)
-        guard geometryType == .lineString else {
+        guard geometryType != .unknown else {
             return Feature(geometryType: geometryType, properties: properties, lines: [])
         }
         return Feature(
             geometryType: geometryType,
             properties: properties,
-            lines: try decodeLines(geometry, extent: extent)
+            lines: try decodeLines(geometry, extent: extent, type: geometryType)
         )
     }
 
@@ -189,7 +189,7 @@ public struct MapboxVectorTile: Equatable, Sendable {
         return properties
     }
 
-    private static func decodeLines(_ data: Data, extent: Int) throws -> [[TilePoint]] {
+    private static func decodeLines(_ data: Data, extent: Int, type: GeometryType) throws -> [[TilePoint]] {
         var reader = Reader(data: data)
         var lines = [[TilePoint]]()
         var currentLine = [TilePoint]()
@@ -201,6 +201,7 @@ public struct MapboxVectorTile: Equatable, Sendable {
             let command = try reader.readVarint()
             let commandID = command & 0x07
             let count = command >> 3
+            guard count > 0 else { throw Error.unsupportedGeometryCommand }
             guard count <= UInt64(maximumGeometryCommands - commandCount) else {
                 throw Error.tooManyGeometryCommands
             }
@@ -208,6 +209,9 @@ public struct MapboxVectorTile: Equatable, Sendable {
 
             switch commandID {
             case 1:
+                if type == .polygon, count != 1 || !currentLine.isEmpty {
+                    throw Error.unsupportedGeometryCommand
+                }
                 guard count <= UInt64(Int.max) else { throw Error.tooManyGeometryCommands }
                 for _ in 0..<Int(count) {
                     if !currentLine.isEmpty { lines.append(currentLine) }
@@ -218,6 +222,7 @@ public struct MapboxVectorTile: Equatable, Sendable {
                     currentLine.append(TilePoint(x: currentX, y: currentY))
                 }
             case 2:
+                guard type != .point else { throw Error.unsupportedGeometryCommand }
                 guard !currentLine.isEmpty, count <= UInt64(Int.max) else {
                     throw Error.unsupportedGeometryCommand
                 }
@@ -228,12 +233,21 @@ public struct MapboxVectorTile: Equatable, Sendable {
                     currentLine.append(TilePoint(x: currentX, y: currentY))
                 }
             case 7:
+                if type == .polygon {
+                    guard count == 1, currentLine.count >= 3, let first = currentLine.first else {
+                        throw Error.unsupportedGeometryCommand
+                    }
+                    currentLine.append(first)
+                } else if type == .point {
+                    throw Error.unsupportedGeometryCommand
+                }
                 if !currentLine.isEmpty { lines.append(currentLine) }
                 currentLine.removeAll(keepingCapacity: true)
             default:
                 throw Error.unsupportedGeometryCommand
             }
         }
+        if type == .polygon, !currentLine.isEmpty { throw Error.unsupportedGeometryCommand }
         if !currentLine.isEmpty { lines.append(currentLine) }
         return lines
     }

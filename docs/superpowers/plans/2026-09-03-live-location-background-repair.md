@@ -181,7 +181,42 @@ make test-ios-metadata
 git diff --check
 ```
 
-The diagnostic currently reproduces the two lifecycle failures. The existing refresh-policy test passes; that result is deliberately not presented as a fix.
+The original diagnostic above is historical red evidence. The canonical replacement is now `make test-location-runtime`: it executes the production location adapter with Apple-type shims and verifies recovery, session ownership, permission transitions, and cache rejection after permission revocation. It does not emulate iOS background execution.
+
+## 4.1 Implementation evidence and outstanding gate (2026-09-03)
+
+- `7ebb963`: session-owned cleanup, recoverable `locationUnknown`, explicit authorization/precision health, background ownership, asynchronous rerouting, latest-pending refresh, safe render errors/deadline, and GPS-to-Band publication metrics.
+- [GitHub Actions 33687031077](https://github.com/LordierClaw/blueband-map/actions/runs/33687031077): 68 iOS XCTest cases passed and an unsigned arm64 IPA was built/inspected. That intermediate build retains version 0.5.9 (25); it is **not** the new handoff.
+- Follow-up adds a moving-navigation integration test through the actual AppModel, an injected delayed image renderer and Band receiver; it asserts two confirmed scene publications and a latest-fix trailing refresh. Hardware timing remains separate from this injected timing.
+- The portable MVT decoder previously discarded all non-LineString geometry. The CPU experiment exposed this omission in dense urban tiles. Independent polygon/hole and multipoint fixtures failed first, then passed after decoding those command types with bounded validation. Existing road geometry behavior and wire bytes are unchanged.
+- `make test` passed after the decoder change: 168 portable Swift tests, 28 Band tests, 19 protocol-lab tests, metadata/runtime/script checks. `make lint`, the secret scan, and `git diff --check` also passed. iOS follow-up CI is tracked separately from these Linux checks.
+
+### Isolated CPU visual experiment — not integrated
+
+Reproduce locally (keys and provider responses stay under ignored `local/`):
+
+```bash
+make -f local/diagnostics/cpu-map/Makefile inputs decode render
+make -f local/diagnostics/cpu-map/Makefile inputs decode render CPU_MAP_CASE=hcm
+```
+
+Use only `decode render` to reuse already downloaded tiles. The experiment uses real Vietmap DM style, Route v4, and vector tiles; the decoder is the production Swift decoder. Bitmap drawing currently uses desktop Skia CPU, **not** iOS Core Graphics. Its projection/style reproduction is not yet a shared native implementation. No OpenGL/Metal path is exercised by this experiment.
+
+Corrected dense-HCM final JPEG results:
+
+| Heading | Encoded bytes | JPEG quality | Desktop draw/encode/decode ms |
+|---|---:|---:|---:|
+| 0° | 8089 | 40 | 1242 |
+| 45° | 7947 | 50 | 889 |
+| 90° | 8134 | 35 | 864 |
+| 180° | 7619 | 30 | 869 |
+| 270° | 7991 | 40 | 795 |
+
+These timings exclude network fetch, Swift tile decoding, iPhone scheduling, and BLE. They do **not** establish the five-second target. Final decoded comparison images are `local/diagnostics/cpu-map/comparison.png` and `local/diagnostics/cpu-map/hcm/comparison.png`. The marker in the contact sheet is the existing Band PNG, added only for orientation. Fixed test headings deliberately do not follow the route bearing.
+
+Open experiment gaps: native Core Graphics/Core Text parity, POI symbols, provider attribution review, curved-label placement, tile-boundary/turn replay, cancellation/deadline and memory tests, and locked-device timing. No renderer selection is authorized by machine timings alone.
+
+**Current runtime boundary:** the native SDK renderer now refuses new background renders with `MAP_BACKGROUND_UNAVAILABLE` and cancels when the application becomes inactive. GPS acquisition can continue, but the map keeps its last confirmed frame. The CPU experiment has **not** been wired into navigation. This is not yet a locked-screen realtime-map release; do not replace the accepted handoff or describe <5 s as achieved at this checkpoint.
 
 ## 5. Primary references
 

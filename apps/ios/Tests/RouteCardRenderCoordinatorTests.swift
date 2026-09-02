@@ -140,7 +140,7 @@ private struct ImmediateRouteCardClock: BlueBandClock {
     func sleep(for duration: Duration) async throws {}
 }
 
-private actor WindowedRouteCardSession: RouteCardSessionSending {
+actor WindowedRouteCardSession: RouteCardSessionSending {
     typealias Receiver = @MainActor @Sendable (ApplicationEnvelope) -> Void
 
     private var receiver: Receiver?

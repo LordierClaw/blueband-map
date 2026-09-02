@@ -1,4 +1,6 @@
 import Foundation
+import CoreGraphics
+import CoreLocation
 import XCTest
 import BlueBandCore
 import BlueBandCrypto
@@ -8,6 +10,60 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testMovingGPSIsNotBlockedByRenderingAndFinalFixPublishesAfterCooldown() async throws {
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        let sender = WindowedRouteCardSession()
+        var requests: [VietmapSnapshotRequest] = []
+        let renderedTwice = expectation(description: "newest GPS snapshot after cooldown")
+        let model = makeModel(
+            central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
+            routeTransport: ReplayRouteTransport(), sender: sender,
+            render: { request in
+                requests.append(request)
+                if requests.count == 1 { try await Task.sleep(for: .milliseconds(200)) }
+                if requests.count == 2 { renderedTwice.fulfill() }
+                let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                                        bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                let configuration = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0,
+                    retainedLineLayers: 0, retainedSymbolLayers: 0, zoom: configuration.zoom,
+                    styleLoadMilliseconds: 0, snapshotMilliseconds: 200, cacheState: "test",
+                    configuration: configuration)
+            }
+        )
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.destinationLatitudeInput = "0.002"
+        model.destinationLongitudeInput = "0.001"
+        model.consume(.connected)
+        model.startNavigation()
+        await waitUntil { manager.updating }
+        func fix(_ latitude: Double) -> CLLocation {
+            CLLocation(coordinate: .init(latitude: latitude, longitude: 0), altitude: 0,
+                       horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())
+        }
+        location.locationManager(manager, didUpdateLocations: [fix(0)])
+        await waitUntil { requests.count == 1 }
+        location.locationManager(manager, didUpdateLocations: [fix(0.0001), fix(0.0002)])
+        await waitUntil { model.navigationDebugEntries.contains { $0.stage == "guidance.fix" } }
+        XCTAssertEqual(requests.count, 1, "guidance must consume movement before slow render finishes")
+        XCTAssertEqual(location.acceptedFixCount, 3)
+        await fulfillment(of: [renderedTwice], timeout: 3)
+        await waitUntil { model.navigationDebugEntries.filter { $0.stage == "band.displayed" }.count == 2 }
+        XCTAssertNotNil(model.routePreviewPNG)
+        XCTAssertNotNil(model.lastMapFixAgeMilliseconds)
+        XCTAssertLessThan(model.lastMapFixAgeMilliseconds ?? .max, 5_000)
+        XCTAssertEqual(requests.last?.matchedPosition.latitude ?? -1, 0.0002, accuracy: 0.00001)
+        for request in requests {
+            let config = try VietmapSnapshotConfiguration.make(request)
+            let marker = config.point(for: request.matchedPosition)
+            XCTAssertEqual(marker.x, 106, accuracy: 0.5)
+            XCTAssertEqual(marker.y, 374, accuracy: 0.5)
+        }
+        model.stopNavigation()
+    }
+
     func testCancelledNavigationEpilogueCannotStopRestartedGPS() async {
         let central = PickerCentral()
         let manager = TestLocationManager()
@@ -119,7 +175,10 @@ final class AppModelPickerTests: XCTestCase {
         central: PickerCentral,
         authMode: PickerAuthKeyStore.Mode,
         location: ForegroundLocationClient? = nil,
-        navigationConfigured: Bool = false
+        navigationConfigured: Bool = false,
+        routeTransport: (any MapHTTPTransport)? = nil,
+        sender: (any RouteCardSessionSending)? = nil,
+        render: (@MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput)? = nil
     ) -> AppModel {
         let cipher = PickerCipher()
         let trustStore = PickerTrustStore()
@@ -137,9 +196,11 @@ final class AppModelPickerTests: XCTestCase {
             trustedRPKStore: trustStore,
             central: central,
             session: session,
-            routeClient: VietmapRouteClient(transport: transport),
+            routeClient: VietmapRouteClient(transport: routeTransport ?? transport),
             snapshotRenderer: VietmapSnapshotRenderer(),
             locationClient: location ?? ForegroundLocationClient(),
+            routeCardSession: sender,
+            snapshotRender: render,
             scanDuration: .seconds(3_600)
         )
     }
@@ -158,9 +219,10 @@ final class AppModelPickerTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {
-        for _ in 0..<200 {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
             if await condition() { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("Condition was not met", file: file, line: line)
     }
@@ -233,4 +295,10 @@ private actor PickerCentral: BandCentralProtocol {
 
 private enum PickerCentralError: Swift.Error {
     case unexpectedConnect
+}
+
+private struct ReplayRouteTransport: MapHTTPTransport {
+    func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
+        MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: Data(#"{"code":"OK","paths":[{"distance":270,"points_encoded":true,"points":"??gE?gEgE","instructions":[{"distance":111,"heading":0,"sign":0,"interval":[0,1],"street_name":"Đường A"},{"distance":157,"heading":45,"sign":2,"interval":[1,2],"street_name":"Đường B"},{"distance":0,"heading":0,"sign":4,"interval":[2,2],"street_name":""}]}]}"#.utf8))
+    }
 }

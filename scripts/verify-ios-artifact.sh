@@ -13,16 +13,18 @@ bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")
 minimum_os=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$plist")
 bluetooth=$(/usr/libexec/PlistBuddy -c 'Print :NSBluetoothAlwaysUsageDescription' "$plist")
 location=$(/usr/libexec/PlistBuddy -c 'Print :NSLocationWhenInUseUsageDescription' "$plist")
+precision=$(/usr/libexec/PlistBuddy -c 'Print :NSLocationTemporaryUsageDescriptionDictionary:Navigation' "$plist")
 executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
 short_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
 build_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
 
 [[ "$bundle_id" == "dev.lordierclaw.bluebandmap" ]]
 [[ "$minimum_os" == "17.0" ]]
-[[ "$short_version" == "0.5.9" ]]
-[[ "$build_version" == "25" ]]
+[[ "$short_version" == "0.5.10" ]]
+[[ "$build_version" == "26" ]]
 [[ -n "$bluetooth" ]]
 [[ -n "$location" ]]
+[[ -n "$precision" ]]
 
 background_modes=$(plutil -extract UIBackgroundModes json -o - "$plist")
 python3 - "$background_modes" <<'PY'

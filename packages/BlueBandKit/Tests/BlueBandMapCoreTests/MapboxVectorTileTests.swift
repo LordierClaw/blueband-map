@@ -3,6 +3,35 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class MapboxVectorTileTests: XCTestCase {
+    func testPolygonPreservesExteriorAndHoleRingsForCPUFills() throws {
+        // Independent MVT commands: outer clockwise square and inner counterclockwise hole.
+        let data = geometryTile(type: 3, commands: [
+            9, 0, 0, 26, 20, 0, 0, 20, 19, 0, 15,
+            9, 6, 13, 26, 0, 8, 8, 0, 0, 7, 15,
+        ])
+        let feature = try XCTUnwrap(MapboxVectorTile.decode(data).layers.first?.features.first)
+        XCTAssertEqual(feature.lines.count, 2, "buildings/water must not be discarded as non-road geometry")
+        XCTAssertEqual(feature.lines.first?.map { [$0.x, $0.y] }, [[0,0],[10,0],[10,10],[0,10],[0,0]])
+        XCTAssertEqual(feature.lines.last?.map { [$0.x, $0.y] }, [[3,3],[3,7],[7,7],[7,3],[3,3]])
+    }
+
+    func testPointFeaturesKeepTheirCoordinates() throws {
+        let tile = try MapboxVectorTile.decode(geometryTile(type: 1, commands: [17,6,8,4,4]))
+        XCTAssertEqual(tile.layers.first?.features.first?.lines.map { $0.map { [$0.x, $0.y] } }, [[[3,4]],[[5,6]]])
+    }
+
+    func testRejectsUnclosedOrInvalidPolygonRing() {
+        for commands: [UInt8] in [[9,0,0,26,20,0,0,20,19,0], [9,0,0,10,20,0,15], [9,0,0,26,20,0,0,20,19,0,23]] {
+            XCTAssertThrowsError(try MapboxVectorTile.decode(geometryTile(type: 3, commands: commands)))
+        }
+    }
+
+    private func geometryTile(type: UInt8, commands: [UInt8]) -> Data {
+        let feature = [UInt8(0x18), type, 0x22, UInt8(commands.count)] + commands
+        let layer = [UInt8(0x0a), 8] + Array("building".utf8) + [0x12, UInt8(feature.count)] + feature
+        return Data([0x1a, UInt8(layer.count)] + layer)
+    }
+
     func testVietmapDecoderAcceptsCurrentRawVectorTiles() throws {
         let raw = VectorTileFixture.lineTile(
             points: [VectorTileFixture.Point(x: 1_000, y: 2_000), VectorTileFixture.Point(x: 2_000, y: 2_000)]
