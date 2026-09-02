@@ -58,10 +58,10 @@ test("prepare admits a bounded navigation preview", () => {
   assert.equal(result.ok, true)
   assert.deepEqual(result.prepared.preview, preview)
   assert.equal(validatePrepare(prepare({ preview: {
-    ...preview, destinationX: 182, destinationY: 260
+    ...preview, destinationX: 186, destinationY: 260
   } })).ok, true)
   assert.equal(validatePrepare(prepare({ preview: {
-    ...preview, destinationMode: "visible", destinationX: 182, destinationY: 260
+    ...preview, destinationMode: "visible", destinationX: 186, destinationY: 260
   } })).ok, false)
 
   for (const invalid of [

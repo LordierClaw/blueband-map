@@ -75,7 +75,8 @@ function validPreview(preview) {
     (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
       safeCenter(preview.destinationX, preview.destinationY,
         preview.destinationMode === "visible" ? 28 : 24,
-        preview.destinationMode === "visible" ? 34 : 24, 6))
+        preview.destinationMode === "visible" ? 34 : 24,
+        preview.destinationMode === "edge" ? 2 : 6))
 }
 
 function validatePrepare(body, options = {}) {

@@ -24,7 +24,7 @@ final class NavigationUpdateTests: XCTestCase {
     }
 
     func testDestinationFieldsAreAtomicAndBounded() {
-        let edge = BandDisplaySafeMask.smartBand10PhotoEstimate.destinationEdgePoint(
+        let edge = BandDisplaySafeMask.smartBand10PhotoEstimate.withVisualMargin(2).destinationEdgePoint(
             from: ScreenPoint(x: 106, y: 374), toward: ScreenPoint(x: 500, y: 260)
         )
         XCTAssertNoThrow(try NavigationUpdate(

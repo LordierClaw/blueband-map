@@ -14,6 +14,7 @@ grep -Fq 'MARKETING_VERSION: 0.5.6' "$project"
 grep -Fq 'static let version = "0.5.6"' apps/ios/App/BlueBandMapApp.swift
 grep -Fq 'scale: 2,' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift
 grep -Fq '.interpolation(.high)' apps/ios/App/ContentView.swift
+grep -Fq 'mask.withVisualMargin(2).destinationEdgePoint' apps/ios/App/AppModel.swift
 if grep -Fq '.interpolation(.none)' apps/ios/App/ContentView.swift; then
   echo "route preview must not use nearest-neighbour interpolation" >&2
   exit 1

@@ -50,7 +50,8 @@ public struct NavigationUpdate: Equatable, Sendable {
         } else {
             let width = destinationMode == .visible ? 28 : 24
             let height = destinationMode == .visible ? 34 : 24
-            let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
+            let baseMask = BandDisplaySafeMask.smartBand10PhotoEstimate
+            let mask = destinationMode == .edge ? baseMask.withVisualMargin(2) : baseMask
             guard mask.contains(
                 center: ScreenPoint(x: destinationX, y: destinationY),
                 resourceWidth: width,

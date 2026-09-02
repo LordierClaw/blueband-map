@@ -271,7 +271,8 @@ function renderProtocolValidPreview(preview) {
     (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
       safeMaskContains(preview.destinationX, preview.destinationY,
         preview.destinationMode === "visible" ? 28 : 24,
-        preview.destinationMode === "visible" ? 34 : 24, 6))
+        preview.destinationMode === "visible" ? 34 : 24,
+        preview.destinationMode === "edge" ? 2 : 6))
 }
 
 function renderProtocolValidatePrepare(body, options) {
@@ -703,7 +704,8 @@ export default {
       ((body.destinationMode === "hidden" && body.destinationX === 0 && body.destinationY === 0) ||
         (body.destinationMode !== "hidden" && safeMaskContains(
           body.destinationX, body.destinationY, body.destinationMode === "visible" ? 28 : 24,
-          body.destinationMode === "visible" ? 34 : 24, 6)))
+          body.destinationMode === "visible" ? 34 : 24,
+          body.destinationMode === "edge" ? 2 : 6)))
     if (valid) {
       var labels = { navigating: "NAVIGATING", gpsLow: "GPS LOW", limitedMap: "LIMITED MAP", rerouting: "REROUTING", arrived: "ARRIVED" }
       this.navScene = body.scene

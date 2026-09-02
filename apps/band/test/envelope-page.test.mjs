@@ -310,7 +310,7 @@ test("render.prepare shows compact guidance before the map arrives", async () =>
 test("render.prepare accepts an edge destination whose full chevron stays inside the visual mask", async () => {
   const { page, sent } = await harness()
   page.receiveMessage({ data: envelope("prepare-edge", "render.prepare", prepare({
-    preview: preview({ destinationMode: "edge", destinationX: 182, destinationY: 260 })
+    preview: preview({ destinationMode: "edge", destinationX: 186, destinationY: 260 })
   })) })
 
   assert.equal(sent.find(message => message.topic === "render.reject"), undefined)

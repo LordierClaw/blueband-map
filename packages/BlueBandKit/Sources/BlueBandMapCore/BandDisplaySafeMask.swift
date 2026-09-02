@@ -43,6 +43,10 @@ public struct BandDisplaySafeMask: Equatable, Sendable {
     }
 
     public var withoutVisualMargin: Self {
+        withVisualMargin(0)
+    }
+
+    public func withVisualMargin(_ margin: Double) -> Self {
         Self(
             width: width,
             height: height,
@@ -51,7 +55,7 @@ public struct BandDisplaySafeMask: Equatable, Sendable {
             bottomCenterY: bottomCenterY,
             topRadius: topRadius,
             bottomRadius: bottomRadius,
-            visualMargin: 0
+            visualMargin: margin
         )
     }
 

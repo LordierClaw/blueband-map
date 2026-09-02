@@ -91,7 +91,7 @@ final class RenderProtocolTests: XCTestCase {
     }
 
     func testNavigationPreviewRejectsNegativeDistance() {
-        let edge = BandDisplaySafeMask.smartBand10PhotoEstimate.destinationEdgePoint(
+        let edge = BandDisplaySafeMask.smartBand10PhotoEstimate.withVisualMargin(2).destinationEdgePoint(
             from: ScreenPoint(x: 106, y: 374), toward: ScreenPoint(x: 500, y: 260)
         )
         XCTAssertThrowsError(try RenderNavigationPreview(

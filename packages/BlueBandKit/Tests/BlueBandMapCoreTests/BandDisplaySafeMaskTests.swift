@@ -59,15 +59,18 @@ final class BandDisplaySafeMaskTests: XCTestCase {
 
     func testDestinationEdgePointKeepsTheFull24PixelChevronInsideTheVisualMask() {
         let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
+        let edgeMask = mask.withVisualMargin(2)
         let marker = ScreenPoint(x: 106, y: 374)
         let target = ScreenPoint(x: 500, y: -500)
         let oldTip = mask.withoutVisualMargin.edgePoint(
             from: marker, toward: target, resourceWidth: 1, resourceHeight: 1
         )
 
-        let point = mask.destinationEdgePoint(from: marker, toward: target)
+        let point = edgeMask.destinationEdgePoint(from: marker, toward: target)
 
-        XCTAssertTrue(mask.contains(center: point, resourceWidth: 24, resourceHeight: 24))
+        XCTAssertTrue(edgeMask.contains(center: point, resourceWidth: 24, resourceHeight: 24))
+        XCTAssertFalse(mask.contains(center: point, resourceWidth: 24, resourceHeight: 24))
+        XCTAssertTrue(mask.withoutVisualMargin.contains(center: point, resourceWidth: 24, resourceHeight: 24))
         XCTAssertLessThan(
             hypot(Double(point.x - marker.x), Double(point.y - marker.y)),
             hypot(Double(oldTip.x - marker.x), Double(oldTip.y - marker.y))
