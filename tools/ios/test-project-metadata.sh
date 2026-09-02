@@ -6,9 +6,16 @@ test -f "$project"
 grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER: dev.lordierclaw.bluebandmap' "$project"
 grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER: dev.lordierclaw.bluebandmap.tests' "$project"
 grep -Fq 'iOS: "17.0"' "$project"
-grep -Fq 'INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription:' "$project"
-grep -Fq 'INFOPLIST_KEY_NSLocationWhenInUseUsageDescription:' "$project"
-grep -Fq 'INFOPLIST_KEY_UIBackgroundModes: [location, bluetooth-central]' "$project"
+grep -Fq 'path: Generated/BlueBandMap-Info.plist' "$project"
+grep -Fq 'NSBluetoothAlwaysUsageDescription:' "$project"
+grep -Fq 'NSLocationWhenInUseUsageDescription:' "$project"
+grep -Fq 'UIBackgroundModes:' "$project"
+grep -Fq -- '- location' "$project"
+grep -Fq -- '- bluetooth-central' "$project"
+if grep -Fq 'INFOPLIST_KEY_UIBackgroundModes' "$project"; then
+  echo "background modes must be written to the generated Info.plist" >&2
+  exit 1
+fi
 grep -Fq 'path: ../../packages/BlueBandKit' "$project"
 grep -Fq 'CURRENT_PROJECT_VERSION: 25' "$project"
 grep -Fq 'MARKETING_VERSION: 0.5.9' "$project"
