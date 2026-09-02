@@ -49,6 +49,7 @@ public enum GuidancePresentationPolicy {
         horizontalAccuracyMeters _: Double
     ) -> GuidanceSelection? {
         guard !route.instructions.isEmpty, route.points.count >= 2 else { return nil }
+        if let selection = distanceSelection(route: route, progress: progress) { return selection }
         let index = route.instructions.firstIndex {
             $0.interval.upperBound > progress.matchedSegmentIndex
         } ?? route.instructions.count - 1
@@ -59,6 +60,39 @@ public enum GuidancePresentationPolicy {
             instruction: route.instructions[actionIndex],
             maneuverPointIndex: maneuverPointIndex,
             distanceMeters: distance(to: maneuverPointIndex, route: route, progress: progress)
+        )
+    }
+
+    private static func distanceSelection(route: RoutePlan, progress: RouteProgress) -> GuidanceSelection? {
+        let geometryTotal = zip(route.points, route.points.dropFirst()).reduce(0.0) { $0 + meters($1.0, $1.1) }
+        let instructionTotal = route.instructions.reduce(0.0) { $0 + $1.distanceMeters }
+        guard geometryTotal > 0, instructionTotal > 0 else { return nil }
+
+        let segment = min(progress.matchedSegmentIndex, route.points.count - 2)
+        var geometryTraveled = 0.0
+        if segment > 0 {
+            for index in 0..<segment { geometryTraveled += meters(route.points[index], route.points[index + 1]) }
+        }
+        geometryTraveled += meters(route.points[segment], route.points[segment + 1]) * min(1, max(0, progress.matchedFraction))
+        let instructionTraveled = min(instructionTotal, geometryTraveled / geometryTotal * instructionTotal)
+
+        var boundary = 0.0
+        var currentIndex = route.instructions.count - 1
+        var remaining = 0.0
+        for (index, instruction) in route.instructions.enumerated() {
+            boundary += instruction.distanceMeters
+            if instructionTraveled < boundary - 0.5 || index == route.instructions.count - 1 {
+                currentIndex = index
+                remaining = max(0, boundary - instructionTraveled)
+                break
+            }
+        }
+        let actionIndex = min(currentIndex + 1, route.instructions.count - 1)
+        return GuidanceSelection(
+            instructionIndex: actionIndex,
+            instruction: route.instructions[actionIndex],
+            maneuverPointIndex: min(route.instructions[currentIndex].interval.upperBound, route.points.count - 1),
+            distanceMeters: remaining
         )
     }
 

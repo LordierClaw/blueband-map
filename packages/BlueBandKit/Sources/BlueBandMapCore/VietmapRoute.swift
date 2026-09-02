@@ -40,7 +40,7 @@ public struct RouteInstruction: Equatable, Sendable {
         self.headingDegrees = headingDegrees
         self.sign = sign
         self.interval = interval
-        self.streetName = streetName
+        self.streetName = streetName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public var maneuver: NavigationManeuver {

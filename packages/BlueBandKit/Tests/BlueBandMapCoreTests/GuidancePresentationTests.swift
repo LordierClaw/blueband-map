@@ -50,6 +50,57 @@ final class GuidancePresentationTests: XCTestCase {
         XCTAssertEqual(selected.maneuverPointIndex, 2)
     }
 
+    func testUsesProviderDistancesWhenInstructionIntervalsOverlap() throws {
+        let route = RoutePlan(
+            points: [
+                GeoPoint(latitude: 0, longitude: 0),
+                GeoPoint(latitude: 0, longitude: 0.001),
+                GeoPoint(latitude: 0, longitude: 0.002),
+                GeoPoint(latitude: 0, longitude: 0.003),
+            ],
+            instructions: [
+                RouteInstruction(distanceMeters: 37, headingDegrees: 0, sign: 0, interval: 0...0, streetName: ""),
+                RouteInstruction(distanceMeters: 109, headingDegrees: 90, sign: 2, interval: 0...1, streetName: "Yên Bình"),
+                RouteInstruction(distanceMeters: 11, headingDegrees: 0, sign: -2, interval: 1...1, streetName: "Yên Phúc"),
+                RouteInstruction(distanceMeters: 72, headingDegrees: 90, sign: 2, interval: 1...1, streetName: "Đường TT18"),
+                RouteInstruction(distanceMeters: 62, headingDegrees: 0, sign: -2, interval: 1...2, streetName: "Bạch Thái Bưởi"),
+                RouteInstruction(distanceMeters: 42, headingDegrees: 0, sign: 0, interval: 2...3, streetName: "Đích"),
+                RouteInstruction(distanceMeters: 0, headingDegrees: 0, sign: 4, interval: 3...3, streetName: ""),
+            ],
+            distanceMeters: 333
+        )
+        let start = RouteProgress(
+            pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0,
+            distanceFromRouteMeters: 0, matchedLocation: route.points[0],
+            shouldReroute: false, status: .navigating
+        )
+
+        let first = try XCTUnwrap(GuidancePresentationPolicy.select(
+            route: route, progress: start, horizontalAccuracyMeters: 5
+        ))
+
+        XCTAssertEqual(first.instructionIndex, 1)
+        XCTAssertEqual(first.instruction.maneuver, .right)
+        XCTAssertEqual(first.instruction.streetName, "Yên Bình")
+        XCTAssertEqual(first.distanceMeters, 37, accuracy: 0.1)
+
+        let afterFirstStep = RouteProgress(
+            pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0.4,
+            distanceFromRouteMeters: 0,
+            matchedLocation: GeoPoint(latitude: 0, longitude: 0.0004),
+            shouldReroute: false, status: .navigating
+        )
+        let second = try XCTUnwrap(GuidancePresentationPolicy.select(
+            route: route, progress: afterFirstStep, horizontalAccuracyMeters: 5
+        ))
+
+        XCTAssertEqual(second.instructionIndex, 2)
+        XCTAssertEqual(second.instruction.maneuver, .left)
+        XCTAssertEqual(second.instruction.streetName, "Yên Phúc")
+        XCTAssertGreaterThan(second.distanceMeters, 100)
+        XCTAssertLessThan(second.distanceMeters, 103)
+    }
+
     func testStationaryBearingFollowsMatchedRouteTangent() throws {
         let progress = RouteProgress(
             pointIndex: 2, matchedSegmentIndex: 2, matchedFraction: 0.25,

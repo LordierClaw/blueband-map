@@ -11,7 +11,7 @@ final class VietmapRouteTests: XCTestCase {
     }
 
     func testParsesBoundedRouteV4ResponseAndManeuvers() throws {
-        let body = Data(#"{"code":"OK","paths":[{"distance":2532.6,"points_encoded":true,"points":"??gE?gEgE","instructions":[{"distance":120,"heading":0,"sign":0,"interval":[0,1],"street_name":"Đường A"},{"distance":40,"heading":90,"sign":2,"interval":[1,2],"street_name":"Đường B"},{"distance":0,"heading":0,"sign":4,"interval":[2,2],"street_name":""}]}]}"#.utf8)
+        let body = Data(#"{"code":"OK","paths":[{"distance":2532.6,"points_encoded":true,"points":"??gE?gEgE","instructions":[{"distance":120,"heading":0,"sign":0,"interval":[0,1],"street_name":"Đường A"},{"distance":40,"heading":90,"sign":2,"interval":[1,2],"street_name":"  Đường B\n"},{"distance":0,"heading":0,"sign":4,"interval":[2,2],"street_name":""}]}]}"#.utf8)
 
         let route = try VietmapRouteClient.parse(body)
 
