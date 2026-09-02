@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.6</text>
+      <text class="version">RPK 0.6.7</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -15,6 +15,7 @@
         <image class="nav-destination" if="{{ mapReady && navDestinationVisible }}" src="{{ navDestinationPath }}" style="{{ navDestinationStyle }}" />
         <image class="nav-marker" if="{{ mapReady && navMarkerVisible }}" src="{{ navMarkerPath }}" style="{{ navMarkerStyle }}" />
       </div>
+      <div class="nav-panel-shadow" if="{{ mapReady || pendingPublication || preparedRender }}"></div>
       <div class="nav-panel" if="{{ mapReady || pendingPublication || preparedRender }}"></div>
       <div class="nav-header" if="{{ mapReady || pendingPublication || preparedRender }}">
         <image class="nav-arrow" src="{{ navArrowPath }}" />
@@ -27,7 +28,7 @@
         <text class="log">{{ logText }}</text>
         <input class="button" type="button" value="ECHO PING" @click="sendPing" />
         <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.6.6 • ENV V1</text>
+        <text class="version">RPK 0.6.7 • ENV V1</text>
       </div>
     </div>
   </div>
@@ -1509,7 +1510,8 @@ export default {
 .detail { margin-top: 14px; width: 180px; height: 76px; font-size: 15px; lines: 4; text-align: center; color: #a9bdd6; }
 .button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
-.nav-panel { position: absolute; left: 7px; top: 7px; width: 198px; height: 88px; border-radius: 17px; background-color: #0b2235; box-shadow: 0px 5px 12px #000000; }
+.nav-panel-shadow { position: absolute; left: 7px; top: 12px; width: 198px; height: 88px; border-radius: 17px; background-color: #000000; }
+.nav-panel { position: absolute; left: 7px; top: 7px; width: 198px; height: 88px; border-radius: 17px; background-color: #0b2235; }
 .nav-header { position: absolute; left: 0; top: 0; width: 212px; height: 96px; }
 .nav-arrow { position: absolute; left: 42px; top: 28px; width: 44px; height: 56px; }
 .nav-distance { position: absolute; left: 88px; top: 22px; width: 88px; font-size: 26px; font-weight: bold; text-align: right; color: #ffffff; }

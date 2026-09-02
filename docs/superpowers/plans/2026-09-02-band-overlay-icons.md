@@ -76,13 +76,13 @@ Expected: asset assertions pass; page assertions remain red until Task 3.
 
 - [ ] **Step 1: Replace the shade image**
 
-Insert `<div class="nav-panel" ...></div>` before `nav-header`; remove the `nav-shade` image and CSS.
+Insert `<div class="nav-panel-shadow" ...></div>` and `<div class="nav-panel" ...></div>` before `nav-header`; remove the `nav-shade` image and CSS.
 
 - [ ] **Step 2: Add visible native styling**
 
-Use an inset 198×88 dark panel with rounded corners, a contrasting border, and a black shadow. Leave header child positions unchanged.
+Use an inset 198×88 dark panel with rounded corners and a separate black layer offset 5 px downward. Leave header child positions unchanged.
 
-Set `minAPILevel` to `3` in the Band manifest and assert it in both source-contract and packaged-RPK verification.
+Set `minAPILevel` to `1`, forbid `box-shadow`, and assert both contracts in source and packaged-RPK verification. This replaces the rejected API-Level-3 `0.6.6` package.
 
 - [ ] **Step 3: Centre the larger edge asset**
 
@@ -110,7 +110,7 @@ Expected: 27 or more tests pass and the normal build verifies one RPK.
 
 - [ ] **Step 1: Bump only RPK**
 
-Set version name to `0.6.6`, version code to `21`, and visible RPK labels/build expectations to `0.6.6`. Do not change the iOS version.
+Set version name to `0.6.7`, version code to `22`, and visible RPK labels/build expectations to `0.6.7`. Do not change the iOS version.
 
 - [ ] **Step 2: Run canonical verification**
 
@@ -126,11 +126,11 @@ Expected: every command exits zero.
 
 - [ ] **Step 3: Inspect the produced RPK**
 
-Confirm its manifest is `0.6.6 (21)`, shade is absent, marker assets are 46×54 RGBA, destination edge assets are 34×34 RGBA, and packaged asset bytes equal source bytes.
+Confirm its manifest is `0.6.7 (22)` with `minAPILevel: 1`, shade is absent, marker assets are 46×54 RGBA, destination edge assets are 34×34 RGBA, and packaged asset bytes equal source bytes.
 
 - [ ] **Step 4: Replace the handoff RPK**
 
-Delete the older handoff RPK and copy the newly verified `0.6.6` RPK into `artifacts/handoff`; retain the unchanged current IPA.
+Delete the rejected `0.6.6` handoff RPK and copy the newly verified `0.6.7` RPK into `artifacts/handoff`; retain the unchanged current IPA.
 
 - [ ] **Step 5: Commit and push main**
 

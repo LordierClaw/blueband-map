@@ -26,9 +26,9 @@ The self marker is the approved upright navigation pointer: a long, closed trian
 
 Generate eight 34×34 RGBA destination edge icons. Each is a thick amber two-segment chevron with a dark outline, rotated offline in 45-degree increments. There is no filled body and no tip dot. The overlay keeps the current destination direction and contour projection, but centres the larger asset using a 17-pixel offset.
 
-Remove `nav-shade.png` from the page and bundle. Add a native `nav-panel` div behind `nav-header`, inset from the screen edge, with an explicit dark background, rounded corners, border, and shadow. Header content and maneuver icons remain unchanged.
+Remove `nav-shade.png` from the page and bundle. Add a native `nav-panel` div behind `nav-header`, inset from the screen edge, with an explicit dark background and rounded corners. Draw the visible shadow with a second offset black div behind the panel. Header content and maneuver icons remain unchanged.
 
-Declare `minAPILevel: 3`, the first Vela API level that supports `box-shadow`, and verify the compiled manifest retains it.
+Keep `minAPILevel: 1` and forbid `box-shadow`. RPK `0.6.6 (21)` raised the minimum to API Level 3 and the Band rejected it with AstroBox `InstallFailed`; the two-div panel preserves the visual without that compatibility gate.
 
 ## Non-goals
 
@@ -44,4 +44,4 @@ Repository verification is `make test`, `make lint`, and `git diff --check`. The
 
 ## Version and handoff
 
-Only the Band component changes, so bump RPK `0.6.5 (20)` to `0.6.6 (21)`. Do not bump or rebuild the unchanged iOS component. Merge and push the completed work to `main`, replace the old handoff RPK with the new one, and retain the current GitHub-Actions-built IPA.
+Only the Band component changes. The compatible correction is RPK `0.6.7 (22)`; do not ship rejected `0.6.6 (21)`. Do not bump or rebuild the unchanged iOS component. Merge and push the completed work to `main`, replace the old handoff RPK with the new one, and retain the current GitHub-Actions-built IPA.
