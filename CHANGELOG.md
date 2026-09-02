@@ -1,5 +1,12 @@
 # Changelog
 
+## iOS 0.5.7 / RPK 0.6.9 - 2026-09-02
+
+- Render heading-up Vietmap snapshots at 2× and downsample once before the existing 16-colour, 212×520, ≤8192-byte admission path; use high-quality interpolation in the iPhone preview.
+- Replace the cached triangular Band marker path with the approved dark-green, borderless cursor resource whose tip/notch axis is fixed on the route centreline.
+- Move only the off-screen destination chevron from a 6 px to a 2 px visual margin while retaining full curved-mask containment, and widen the transparent street label to x=198.
+- Bump iOS to `0.5.7 (23)` and RPK to `0.6.9 (24)` because both packaged components change. Xiaomi BLE/SPP/authentication bytes and the 8192-byte render protocol remain unchanged.
+
 ## iOS 0.5.1 / RPK 0.6.0 - 2026-09-01
 
 - Encode the existing 16-color snapshot palette at its native 4-bit indexed PNG depth instead of wasting 8 bits per pixel.

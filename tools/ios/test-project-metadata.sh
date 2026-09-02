@@ -9,9 +9,9 @@ grep -Fq 'iOS: "17.0"' "$project"
 grep -Fq 'INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription:' "$project"
 grep -Fq 'INFOPLIST_KEY_NSLocationWhenInUseUsageDescription:' "$project"
 grep -Fq 'path: ../../packages/BlueBandKit' "$project"
-grep -Fq 'CURRENT_PROJECT_VERSION: 22' "$project"
-grep -Fq 'MARKETING_VERSION: 0.5.6' "$project"
-grep -Fq 'static let version = "0.5.6"' apps/ios/App/BlueBandMapApp.swift
+grep -Fq 'CURRENT_PROJECT_VERSION: 23' "$project"
+grep -Fq 'MARKETING_VERSION: 0.5.7' "$project"
+grep -Fq 'static let version = "0.5.7"' apps/ios/App/BlueBandMapApp.swift
 grep -Fq 'scale: 2,' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift
 grep -Fq '.interpolation(.high)' apps/ios/App/ContentView.swift
 grep -Fq 'mask.withVisualMargin(2).destinationEdgePoint' apps/ios/App/AppModel.swift
