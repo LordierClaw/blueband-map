@@ -8,6 +8,7 @@ grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER: dev.lordierclaw.bluebandmap.tests' "$projec
 grep -Fq 'iOS: "17.0"' "$project"
 grep -Fq 'INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription:' "$project"
 grep -Fq 'INFOPLIST_KEY_NSLocationWhenInUseUsageDescription:' "$project"
+grep -Fq 'INFOPLIST_KEY_UIBackgroundModes: [location, bluetooth-central]' "$project"
 grep -Fq 'path: ../../packages/BlueBandKit' "$project"
 grep -Fq 'CURRENT_PROJECT_VERSION: 24' "$project"
 grep -Fq 'MARKETING_VERSION: 0.5.8' "$project"
@@ -23,9 +24,10 @@ if grep -Eq 'VietmapRouteOverlay\.translated|offset: offset' apps/ios/Adapters/V
   echo "route overlay must use the snapshot camera projection without a private translation" >&2
   exit 1
 fi
-if grep -Fq 'UIBackgroundModes' "$project"; then
-  echo "UIBackgroundModes must stay absent: the app is foreground-only" >&2
-  exit 1
-fi
+location_source="apps/ios/Adapters/Location/ForegroundLocationClient.swift"
+grep -Fq 'CLBackgroundActivitySession' "$location_source"
+grep -Fq 'manager.allowsBackgroundLocationUpdates = true' "$location_source"
+grep -Fq 'manager.allowsBackgroundLocationUpdates = false' "$location_source"
+grep -Fq 'backgroundActivitySession?.invalidate()' "$location_source"
 
 echo "iOS project metadata OK"

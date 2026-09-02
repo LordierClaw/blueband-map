@@ -44,8 +44,9 @@ targets:
         PRODUCT_NAME: BlueBandMap
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_CFBundleDisplayName: BlueBandMap
-        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: BlueBandMap uses Bluetooth only while open to communicate with your Xiaomi Smart Band 10.
-        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: BlueBandMap uses your location while open to show live route guidance on your band.
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: BlueBandMap uses Bluetooth during active navigation to keep your Xiaomi Smart Band 10 guidance current.
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: BlueBandMap uses your location during active navigation, including while iPhone is locked, to keep guidance current on your band.
+        INFOPLIST_KEY_UIBackgroundModes: [location, bluetooth-central]
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         TARGETED_DEVICE_FAMILY: 1

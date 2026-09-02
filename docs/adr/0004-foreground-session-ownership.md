@@ -1,6 +1,6 @@
 # ADR 0004: Foreground-only session ownership
 
-- Status: Accepted
+- Status: Superseded by ADR 0013
 - Date: 2026-08-29
 
 ## Decision

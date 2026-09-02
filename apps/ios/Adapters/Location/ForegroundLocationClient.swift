@@ -10,6 +10,8 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     private var continuation: AsyncThrowingStream<CLLocation, Swift.Error>.Continuation?
     private var cachedLocation: CLLocation?
     private var prewarming = false
+    private var navigationActive = false
+    private var backgroundActivitySession: CLBackgroundActivitySession?
 
     override init() {
         super.init()
@@ -24,6 +26,7 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
         AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             self.continuation?.finish()
             self.continuation = continuation
+            self.navigationActive = true
             if let recentLocation = self.recentLocation() { continuation.yield(recentLocation) }
             continuation.onTermination = { @Sendable [weak self] _ in
                 Task { @MainActor in self?.stop() }
@@ -31,7 +34,9 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
             switch manager.authorizationStatus {
             case .notDetermined: manager.requestWhenInUseAuthorization()
             case .restricted, .denied: continuation.finish(throwing: Error.permissionDenied)
-            default: manager.startUpdatingLocation()
+            default:
+                beginNavigationBackgroundActivity()
+                manager.startUpdatingLocation()
             }
         }
     }
@@ -60,14 +65,21 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     }
 
     func stop() {
+        navigationActive = false
         continuation?.finish()
         continuation = nil
+        manager.allowsBackgroundLocationUpdates = false
+        manager.showsBackgroundLocationIndicator = false
+        backgroundActivitySession?.invalidate()
+        backgroundActivitySession = nil
         if !prewarming { manager.stopUpdatingLocation() }
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         switch manager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse: manager.startUpdatingLocation()
+        case .authorizedAlways, .authorizedWhenInUse:
+            if navigationActive { beginNavigationBackgroundActivity() }
+            manager.startUpdatingLocation()
         case .restricted, .denied: continuation?.finish(throwing: Error.permissionDenied)
         default: break
         }
@@ -82,5 +94,12 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
         continuation?.finish(throwing: error)
+    }
+
+    private func beginNavigationBackgroundActivity() {
+        guard navigationActive else { return }
+        if backgroundActivitySession == nil { backgroundActivitySession = CLBackgroundActivitySession() }
+        manager.allowsBackgroundLocationUpdates = true
+        manager.showsBackgroundLocationIndicator = true
     }
 }

@@ -12,6 +12,7 @@ test -f "$plist"
 bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")
 minimum_os=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$plist")
 bluetooth=$(/usr/libexec/PlistBuddy -c 'Print :NSBluetoothAlwaysUsageDescription' "$plist")
+location=$(/usr/libexec/PlistBuddy -c 'Print :NSLocationWhenInUseUsageDescription' "$plist")
 executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")
 short_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
 build_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
@@ -21,10 +22,14 @@ build_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
 [[ "$short_version" == "0.5.8" ]]
 [[ "$build_version" == "24" ]]
 [[ -n "$bluetooth" ]]
-if /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$plist" >/dev/null 2>&1; then
-  echo "UIBackgroundModes must be absent" >&2
-  exit 1
-fi
+[[ -n "$location" ]]
+
+background_modes=$(plutil -extract UIBackgroundModes json -o - "$plist")
+python3 - "$background_modes" <<'PY'
+import json, sys
+assert set(json.loads(sys.argv[1])) == {"location", "bluetooth-central"}, \
+    "UIBackgroundModes must contain only location and bluetooth-central"
+PY
 
 families=$(plutil -extract UIDeviceFamily json -o - "$plist")
 python3 - "$families" <<'PY'

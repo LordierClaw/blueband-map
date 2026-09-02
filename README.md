@@ -11,7 +11,7 @@ The Xiaomi BLE v2, SPP v2, authentication, encrypted command, ThirdPartyApp, and
 - One iPhone companion and `dev.lordierclaw.bluebandmap.band` RPK.
 - Versioned, acknowledged application messages.
 - Foreground Vietmap Route v4 navigation rendered by the pinned Vietmap iOS Map SDK as a full-screen 212×520 indexed PNG.
-- No AuthKey extraction, cloud service, background BLE, or Mi Fitness replacement.
+- No AuthKey extraction, cloud service, automatic background reconnect, or Mi Fitness replacement.
 
 ## Development
 
