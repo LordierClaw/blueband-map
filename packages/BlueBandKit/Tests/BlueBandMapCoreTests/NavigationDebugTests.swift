@@ -2,6 +2,19 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class NavigationDebugTests: XCTestCase {
+    func testRuntimeHealthSurvivesAnEmptyEventRing() {
+        let output = NavigationDebugFormatter.export(
+            state: "navigating", start: nil, destination: nil, routeDistanceMeters: nil,
+            alternativePathCount: nil, instructions: [], entries: [], build: "0.test (26)",
+            runtime: ["location": "auth=whenInUse raw=200 accepted=198 event=locationUnknown",
+                      "mapLatency": "fixToDisplayMs=5400 violations=1", "app": "background\nforged"]
+        )
+        XCTAssertTrue(output.contains("build=0.test (26)"))
+        XCTAssertTrue(output.contains("accepted=198 event=locationUnknown"))
+        XCTAssertTrue(output.contains("fixToDisplayMs=5400 violations=1"))
+        XCTAssertTrue(output.contains("app=background forged"))
+        XCTAssertTrue(output.contains("events=none"))
+    }
     func testExportIncludesRouteStepsAndRedactsExactCoordinates() throws {
         let output = NavigationDebugFormatter.export(
             state: "navigating",
@@ -19,6 +32,7 @@ final class NavigationDebugTests: XCTestCase {
         )
 
         XCTAssertTrue(output.contains("state=navigating"))
+        XCTAssertTrue(output.contains("build=unknown"), "Exports must identify missing build metadata, not silently omit it")
         XCTAssertTrue(output.contains("start=10.123,106.988"))
         XCTAssertTrue(output.contains("destination=10.223,106.888"))
         XCTAssertTrue(output.contains("routeDistanceM=2428"))

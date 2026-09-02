@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 import BlueBandCore
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var model: AppModel
     @State private var isConfigPresented = false
     @State private var isBandPickerPresented = false
@@ -55,12 +56,27 @@ struct ContentView: View {
             ) { _ in }
             .onAppear { model.navigationScreenActive(true) }
             .onDisappear { model.navigationScreenActive(false) }
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                model.applicationStateChanged(phase == .active ? "active" : phase == .background ? "background" : "inactive")
+            }
         }
     }
 
     private var navigationSection: some View {
         Section("Live Route Card") {
             LabeledContent("Trạng thái", value: navigationLabel)
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                Text(model.liveLocationHealth).font(.caption)
+            }
+            if model.locationNeedsSettings {
+                Button("Mở Cài đặt vị trí") {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
+                }
+            }
+            if let age = model.lastMapFixAgeMilliseconds {
+                LabeledContent("GPS → Band", value: "\(age) ms • \(model.latencyViolations) lần ≥5s")
+            }
             LabeledContent("Điểm bắt đầu", value: model.navigationStartText)
             LabeledContent("Điểm đến", value: model.navigationDestinationText)
             LabeledContent("Chỉ dẫn", value: instructionLabel)

@@ -23,7 +23,11 @@ doctor:
 bootstrap:
 	docker compose pull swift node-rpk node-lab
 
-test: test-swift test-rpk test-lab test-ios-metadata test-vietmap-smoke test-handoff
+test: test-swift test-rpk test-lab test-ios-metadata test-location-runtime test-vietmap-smoke test-handoff
+
+.PHONY: test-location-runtime
+test-location-runtime:
+	bash tools/ios/test-location-runtime.sh
 
 test-swift:
 	docker compose run --rm -e SWIFT_TEST_ARGS="$(SWIFT_TEST_ARGS)" swift bash -lc 'swift test $${SWIFT_TEST_ARGS}'

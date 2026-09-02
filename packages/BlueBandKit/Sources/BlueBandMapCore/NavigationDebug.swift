@@ -22,10 +22,13 @@ public enum NavigationDebugFormatter {
         routeDistanceMeters: Double?,
         alternativePathCount: Int?,
         instructions: [RouteInstruction],
-        entries: [NavigationDebugEntry]
+        entries: [NavigationDebugEntry],
+        build: String = "unknown",
+        runtime: [String: String] = [:]
     ) -> String {
         var lines = [
             "BlueBandMap navigation debug",
+            "build=\(oneLine(build))",
             "state=\(oneLine(state))",
             "start=\(coordinateSummary(start))",
             "destination=\(coordinateSummary(destination))",
@@ -33,6 +36,9 @@ public enum NavigationDebugFormatter {
             "alternativePaths=\(alternativePathCount.map(String.init) ?? "—")",
             "instructionCount=\(instructions.count)",
         ]
+        for key in runtime.keys.sorted() {
+            lines.append("\(oneLine(key))=\(oneLine(runtime[key] ?? ""))")
+        }
         if entries.isEmpty {
             lines.append("events=none")
         } else {

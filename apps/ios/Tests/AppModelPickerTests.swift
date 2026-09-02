@@ -8,6 +8,25 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testCancelledNavigationEpilogueCannotStopRestartedGPS() async {
+        let central = PickerCentral()
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        let model = makeModel(central: central, authMode: .missing, location: location, navigationConfigured: true)
+        model.destinationLatitudeInput = "21.1"
+        model.destinationLongitudeInput = "106.1"
+        model.consume(.connected)
+        model.startNavigation()
+        await waitUntil { manager.updating }
+        model.stopNavigation()
+        model.startNavigation()
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertTrue(manager.updating, "old navigation defer must not stop the new session")
+        XCTAssertTrue(manager.backgroundEnabled)
+        XCTAssertEqual(model.navigationState, .waitingForGPS)
+        model.stopNavigation()
+    }
+
     func testNavigationMarkerIsFixedAtTheLowerCenter() {
         XCTAssertEqual(AppModel.fixedNavigationMarker, ScreenPoint(x: 106, y: 374))
     }
@@ -98,7 +117,9 @@ final class AppModelPickerTests: XCTestCase {
 
     private func makeModel(
         central: PickerCentral,
-        authMode: PickerAuthKeyStore.Mode
+        authMode: PickerAuthKeyStore.Mode,
+        location: ForegroundLocationClient? = nil,
+        navigationConfigured: Bool = false
     ) -> AppModel {
         let cipher = PickerCipher()
         let trustStore = PickerTrustStore()
@@ -111,14 +132,14 @@ final class AppModelPickerTests: XCTestCase {
         let transport = URLSessionHTTPTransport()
         return AppModel(
             keyStore: PickerAuthKeyStore(mode: authMode),
-            vietmapKeyStore: PickerVietmapKeyStore(),
+            vietmapKeyStore: PickerVietmapKeyStore(configured: navigationConfigured),
             bandStore: PickerRememberedBandStore(),
             trustedRPKStore: trustStore,
             central: central,
             session: session,
             routeClient: VietmapRouteClient(transport: transport),
             snapshotRenderer: VietmapSnapshotRenderer(),
-            locationClient: ForegroundLocationClient(),
+            locationClient: location ?? ForegroundLocationClient(),
             scanDuration: .seconds(3_600)
         )
     }
@@ -163,7 +184,8 @@ private struct PickerAuthKeyStore: AuthKeyStoreProtocol, Sendable {
 }
 
 private struct PickerVietmapKeyStore: VietmapKeyStoreProtocol, Sendable {
-    func load(_ kind: VietmapKeyKind) throws -> String? { nil }
+    var configured = false
+    func load(_ kind: VietmapKeyKind) throws -> String? { configured ? "test-provider-key" : nil }
     func save(_ value: String, kind: VietmapKeyKind) throws {}
     func delete(_ kind: VietmapKeyKind) throws {}
 }

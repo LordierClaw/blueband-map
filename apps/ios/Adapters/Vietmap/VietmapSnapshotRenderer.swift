@@ -283,7 +283,10 @@ struct VietmapSnapshotOutput: @unchecked Sendable {
 
 @MainActor
 final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
-    enum Error: Swift.Error { case invalidRequest, busy, styleLoadFailed, snapshotFailed, imageUnavailable }
+    enum Error: Swift.Error {
+        case invalidRequest, busy, styleLoadFailed, snapshotFailed, imageUnavailable, timedOut, backgroundUnavailable
+        case provider(stage: String, domain: String, code: Int)
+    }
 
     private var snapshotter: MGLMapSnapshotter?
     private var prewarmer: MGLMapSnapshotter?
@@ -297,9 +300,20 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     private var hasWarmStyle = false
     private var renderCacheState = "cold"
     private var profile: SnapshotPaletteProfile = .colors32Labels
+    private var applicationActive = true
+    private var deadlineTask: Task<Void, Never>?
+    private var renderGeneration = 0
+
+    func setApplicationActive(_ active: Bool) {
+        applicationActive = active
+        if !active {
+            stopPrewarming()
+            cancel()
+        }
+    }
 
     func prewarm(tileMapKey: String) {
-        guard prewarmer == nil,
+        guard applicationActive, prewarmer == nil,
               let styleURL = Self.styleURL(tileMapKey: tileMapKey) else { return }
         let camera = MGLMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 0, longitude: 0), altitude: 0, pitch: 0, heading: 0)
         let options = MGLMapSnapshotOptions(styleURL: styleURL, camera: camera, size: CGSize(width: 1, height: 1))
@@ -319,7 +333,11 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     }
 
     func render(_ request: VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput {
+        guard applicationActive else { throw Error.backgroundUnavailable }
+        try Task.checkCancellation()
         guard snapshotter == nil else { throw Error.busy }
+        renderGeneration += 1
+        let generation = renderGeneration
         let configuration = try VietmapSnapshotConfiguration.make(request)
         guard let styleURL = Self.styleURL(tileMapKey: request.tileMapKey) else { throw Error.invalidRequest }
         let camera = MGLMapCamera(
@@ -346,14 +364,23 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 self.continuation = continuation
+                deadlineTask = Task { @MainActor [weak self] in
+                    do { try await Task.sleep(for: .seconds(4)) } catch { return }
+                    guard self?.renderGeneration == generation else { return }
+                    self?.cancel(error: Error.timedOut)
+                }
                 snapshotter.start(overlayHandler: { overlay in
                     VietmapRouteOverlay.draw(request, on: overlay)
                 }, completionHandler: { [weak self] snapshot, error in
+                    guard self?.renderGeneration == generation else { return }
                     self?.complete(snapshot: snapshot, error: error)
                 })
             }
         } onCancel: {
-            Task { @MainActor [weak self] in self?.cancel() }
+            Task { @MainActor [weak self] in
+                guard self?.renderGeneration == generation else { return }
+                self?.cancel()
+            }
         }
     }
 
@@ -406,13 +433,20 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
 
     private func complete(snapshot: MGLMapSnapshot?, error: Swift.Error?) {
         guard let continuation else { return }
+        renderGeneration += 1
+        deadlineTask?.cancel()
+        deadlineTask = nil
         let now = nowMilliseconds()
         let finishedConfiguration = configuration
         self.continuation = nil
         self.snapshotter = nil
         self.configuration = nil
-        if error != nil {
-            continuation.resume(throwing: styleLoadedMilliseconds == 0 ? Error.styleLoadFailed : Error.snapshotFailed)
+        if let error {
+            let nsError = error as NSError
+            continuation.resume(throwing: Error.provider(
+                stage: styleLoadedMilliseconds == 0 ? "style" : "snapshot",
+                domain: nsError.domain, code: nsError.code
+            ))
         } else if let image = snapshot?.image.cgImage, let finishedConfiguration {
             hasWarmStyle = true
             continuation.resume(returning: VietmapSnapshotOutput(
@@ -431,12 +465,17 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
         }
     }
 
-    private func cancel() {
-        snapshotter?.cancel()
+    private func cancel(error: Swift.Error = CancellationError()) {
+        renderGeneration += 1
+        deadlineTask?.cancel()
+        deadlineTask = nil
+        let ended = continuation
+        let cancelled = snapshotter
         snapshotter = nil
         configuration = nil
-        continuation?.resume(throwing: CancellationError())
         continuation = nil
+        cancelled?.cancel()
+        ended?.resume(throwing: error)
     }
 
     private func nowMilliseconds() -> Int { Int(Date().timeIntervalSince1970 * 1_000) }

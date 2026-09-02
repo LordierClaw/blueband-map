@@ -57,6 +57,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var navigationInstructions: [RouteInstruction] = []
     @Published private(set) var navigationDebugEntries: [NavigationDebugEntry] = []
     @Published private(set) var errorMessage: String?
+    @Published private(set) var locationHealth = "Chưa bắt đầu định vị"
+    @Published private(set) var locationNeedsSettings = false
+    @Published private(set) var lastMapFixAgeMilliseconds: Int?
+    @Published private(set) var latencyViolations = 0
 
     private let keyStore: any AuthKeyStoreProtocol
     private let vietmapKeyStore: any VietmapKeyStoreProtocol
@@ -74,6 +78,10 @@ final class AppModel: ObservableObject {
     private var scanGeneration = 0
     private var eventTask: Task<Void, Never>?
     private var navigationTask: Task<Void, Never>?
+    private var navigationGeneration = 0
+    private var rerouteTask: Task<Void, Never>?
+    private var pendingReroute: RoutePlan?
+    private var applicationState = "active"
     private var updateTask: Task<Void, Never>?
     private var updateCoalescer = NavigationUpdateCoalescer()
     private var updateSequence = 0
@@ -124,6 +132,12 @@ final class AppModel: ObservableObject {
         do { hasSavedKey = try keyStore.load() != nil }
         catch { errorMessage = "Không đọc được AuthKey trong Keychain." }
         loadVietmapKeyHealth()
+        locationClient.onHealthChange = { [weak self] in
+            guard let self else { return }
+            locationHealth = locationClient.healthText
+            locationNeedsSettings = locationClient.needsSettings
+            logNavigation("gps.health", locationClient.diagnostic)
+        }
     }
 
     var pickerCandidates: [BandCandidate] { BandCandidateOrdering.order(candidates, remembered: rememberedBand) }
@@ -252,7 +266,8 @@ final class AppModel: ObservableObject {
     }
 
     func startNavigation() {
-        guard navigationTask == nil, rpkState == .ready else {
+        guard navigationTask == nil else { return }
+        guard rpkState == .ready else {
             resetNavigationDebug()
             navigationState = .failed("RPK_NOT_READY")
             errorMessage = "Navigation Failed (RPK_NOT_READY). Hãy kết nối và chờ xác thực band."
@@ -275,16 +290,23 @@ final class AppModel: ObservableObject {
             "destination=\(NavigationDebugFormatter.coordinateSummary(destination)) " +
             "serviceKey=present tileMapKey=\(tileMapAvailability)"
         )
+        navigationGeneration += 1
+        let generation = navigationGeneration
         navigationTask = Task { @MainActor [weak self] in
             await self?.runNavigation(
                 destination: destination,
                 serviceKey: serviceKey,
-                tileMapKey: self?.loadVietmapKey(.tileMap) ?? ""
+                tileMapKey: self?.loadVietmapKey(.tileMap) ?? "",
+                generation: generation
             )
         }
     }
 
     func stopNavigation() {
+        navigationGeneration += 1
+        rerouteTask?.cancel()
+        rerouteTask = nil
+        pendingReroute = nil
         renderCoordinator.cancel()
         snapshotRefreshTask?.cancel()
         snapshotRefreshTask = nil
@@ -309,8 +331,16 @@ final class AppModel: ObservableObject {
         updateNavigationPrewarming()
     }
 
+    func applicationStateChanged(_ state: String) {
+        applicationState = state
+        locationClient.applicationActive(state == "active")
+        snapshotRenderer.setApplicationActive(state == "active")
+        updateNavigationPrewarming()
+        logNavigation("app.state", state)
+    }
+
     private func updateNavigationPrewarming() {
-        if navigationScreenIsActive, rpkState == .ready {
+        if navigationScreenIsActive, rpkState == .ready, applicationState == "active" {
             locationClient.startPrewarming()
             if let key = loadVietmapKey(.tileMap) { snapshotRenderer.prewarm(tileMapKey: key) }
             else { snapshotRenderer.stopPrewarming() }
@@ -320,13 +350,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String) async {
+    private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String, generation: Int) async {
         defer {
-            locationClient.stop()
-            snapshotRefreshTask?.cancel()
-            snapshotRefreshTask = nil
-            pendingSnapshotRefresh = nil
-            navigationTask = nil
+            if generation == navigationGeneration {
+                locationClient.stop()
+                rerouteTask?.cancel()
+                rerouteTask = nil
+                pendingReroute = nil
+                snapshotRefreshTask?.cancel()
+                snapshotRefreshTask = nil
+                pendingSnapshotRefresh = nil
+                navigationTask = nil
+            }
         }
         let gpsStarted = Self.nowMilliseconds()
         navigationState = .waitingForGPS
@@ -360,8 +395,10 @@ final class AppModel: ObservableObject {
                 heading: Self.initialRouteHeading(
                     courseDegrees: first.course,
                     speedMetersPerSecond: first.speed
-                )
+                ),
+                generation: generation
             )
+            try checkNavigationOwner(generation)
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
             var selection = GuidancePresentationPolicy.select(
@@ -382,9 +419,9 @@ final class AppModel: ObservableObject {
                 confirmedBearingDegrees: initialRouteBearing,
                 secondsSinceRefresh: .infinity
             )
-            let limitedMap = try await publish(
+            scheduleRefresh(
                 route: route, progress: progress, location: first,
-                tileMapKey: tileMapKey, bearingDegrees: bearing.bearingDegrees
+                tileMapKey: tileMapKey, bearingDegrees: bearing.bearingDegrees, reason: "initial"
             )
             var lastReroute = Date.distantPast
             var lastGoodLocation = first.geoPoint
@@ -394,11 +431,17 @@ final class AppModel: ObservableObject {
                 location: first.geoPoint,
                 headingDegrees: first.course,
                 horizontalAccuracyMeters: first.horizontalAccuracy,
-                status: limitedMap ? .limitedMap : .navigating
+                status: .navigating
             )
 
             while let location = try await iterator.next() {
-                guard !Task.isCancelled else { return }
+                try checkNavigationOwner(generation)
+                if let replacement = pendingReroute {
+                    pendingReroute = nil
+                    route = replacement
+                    tracker = RouteProgressTracker()
+                    activeSnapshotAnchor = nil
+                }
                 progress = tracker.update(route: route, location: location.geoPoint, horizontalAccuracyMeters: location.horizontalAccuracy)
                 let goodFix = location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 25
                 if goodFix { lastGoodLocation = location.geoPoint }
@@ -426,38 +469,28 @@ final class AppModel: ObservableObject {
                     sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, horizontalAccuracyMeters: location.horizontalAccuracy, status: .arrived)
                     return
                 }
-                var contextRefreshed = false
-                if progress.shouldReroute, Date().timeIntervalSince(lastReroute) >= 15 {
+                if progress.shouldReroute, rerouteTask == nil, Date().timeIntervalSince(lastReroute) >= 15 {
                     navigationState = .rerouting
                     sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, horizontalAccuracyMeters: location.horizontalAccuracy, status: .rerouting)
-                    route = try await makeRoute(
-                        from: location,
-                        to: destination,
-                        serviceKey: serviceKey,
-                        heading: Self.routeHeading(courseDegrees: location.course)
-                    )
-                    tracker = RouteProgressTracker()
-                    progress = tracker.update(route: route, location: location.geoPoint, horizontalAccuracyMeters: location.horizontalAccuracy)
-                    let rerouteSelection = GuidancePresentationPolicy.select(
-                        route: route,
-                        progress: progress,
-                        horizontalAccuracyMeters: location.horizontalAccuracy
-                    )
-                    selection = rerouteSelection
-                    let rerouteRouteBearing = GuidancePresentationPolicy.stationaryBearing(
-                        route: route,
-                        progress: progress,
-                        selection: rerouteSelection
-                    )
-                    let rerouteBearing = bearing.source == .course ? bearing.bearingDegrees : rerouteRouteBearing
-                    scheduleRefresh(
-                        route: route, progress: progress, location: location,
-                        tileMapKey: tileMapKey, bearingDegrees: rerouteBearing, reason: "reroute"
-                    )
                     lastReroute = Date()
-                    contextRefreshed = true
+                    rerouteTask = Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        defer { if generation == navigationGeneration { rerouteTask = nil } }
+                        do {
+                            let replacement = try await makeRoute(
+                                from: location, to: destination, serviceKey: serviceKey,
+                                heading: Self.routeHeading(courseDegrees: location.course), generation: generation
+                            )
+                            try checkNavigationOwner(generation)
+                            pendingReroute = replacement
+                        } catch is CancellationError {
+                        } catch {
+                            guard generation == navigationGeneration else { return }
+                            logNavigation("route.reroute.failed", "code=\(Self.navigationErrorCode(for: error))")
+                        }
+                    }
                 }
-                let status: NavigationStatus = progress.status == .gpsLow ? .gpsLow : (limitedMap ? .limitedMap : .navigating)
+                let status: NavigationStatus = progress.status == .gpsLow ? .gpsLow : .navigating
                 let instruction = selection?.instruction
                 let markerPoint = activeSnapshotConfiguration?.point(for: displayedLocation)
                 let nextManeuverVisible = instruction.flatMap {
@@ -472,9 +505,12 @@ final class AppModel: ObservableObject {
                     nextManeuverVisible: nextManeuverVisible
                 )
                 let viewportShouldRefresh = SnapshotRefreshPolicy.shouldRefresh(refreshContext)
-                let refreshReason = contextRefreshed ? "reroute" : status == .gpsLow ? "gpsLow" :
+                let refreshReason = status == .gpsLow ? "gpsLow" :
                     bearing.shouldRefresh ? "bearing" : viewportShouldRefresh ? "viewport" : "none"
-                if !contextRefreshed && status != .gpsLow && (bearing.shouldRefresh || viewportShouldRefresh) {
+                // Keep the newest fix even inside the cooldown. The drain waits until due,
+                // so the final fix is not lost if the user stops before another callback.
+                if status != .gpsLow && (bearing.shouldRefresh || viewportShouldRefresh ||
+                    refreshContext.distanceFromAnchorMeters >= 1 || snapshotRefreshTask != nil) {
                     scheduleRefresh(
                         route: route, progress: progress, location: location,
                         tileMapKey: tileMapKey, bearingDegrees: bearing.bearingDegrees, reason: refreshReason
@@ -496,6 +532,7 @@ final class AppModel: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
+            guard generation == navigationGeneration else { return }
             let code = Self.navigationErrorCode(for: error)
             navigationState = .failed(code)
             errorMessage = "Navigation Failed (\(code)). Mở Debug log để xem từng bước."
@@ -517,7 +554,8 @@ final class AppModel: ObservableObject {
         from location: CLLocation,
         to destination: GeoPoint,
         serviceKey: String,
-        heading: Int?
+        heading: Int?,
+        generation: Int
     ) async throws -> RoutePlan {
         navigationState = .routing
         let started = Self.nowMilliseconds()
@@ -534,6 +572,7 @@ final class AppModel: ObservableObject {
             serviceKey: serviceKey,
             headingDegrees: heading
         )
+        try checkNavigationOwner(generation)
         routeRequestMilliseconds += max(0, Self.nowMilliseconds() - started)
         navigationRouteDistanceMeters = Int(route.distanceMeters.rounded())
         navigationAlternativePathCount = route.alternativePathCount
@@ -551,11 +590,14 @@ final class AppModel: ObservableObject {
         progress: RouteProgress,
         location: CLLocation,
         tileMapKey: String,
-        bearingDegrees: Double
+        bearingDegrees: Double,
+        generation: Int
     ) async throws -> Bool {
+        try checkNavigationOwner(generation)
         navigationState = .transferring
         let snapshotStartedAt = Date()
         lastSnapshotRefreshStartedAt = snapshotStartedAt
+        logNavigation("map.render.start", "session=\(generation) fixAgeMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1000))) app=\(applicationState)")
         let selection = GuidancePresentationPolicy.select(
             route: route,
             progress: progress,
@@ -584,6 +626,7 @@ final class AppModel: ObservableObject {
             tileMapKey: tileMapKey,
             profile: .colors16Labels
         ))
+        try checkNavigationOwner(generation)
         let encoded = try SnapshotImageEncoder.encode(snapshot.image)
         let asset = try RenderAsset(
             kind: .raster,
@@ -601,7 +644,6 @@ final class AppModel: ObservableObject {
             "layers=\(snapshot.retainedFillLayers)/\(snapshot.retainedLineLayers)/\(snapshot.retainedSymbolLayers) " +
             "styleMs=\(snapshot.styleLoadMilliseconds) snapshotMs=\(snapshot.snapshotMilliseconds) encodeMs=\(encoded.durationMilliseconds)"
         )
-        routePreviewPNG = asset.data
         let safeMask = BandDisplaySafeMask.smartBand10PhotoEstimate
         let marker = Self.fixedNavigationMarker
         let destination = destinationPresentation(
@@ -621,6 +663,7 @@ final class AppModel: ObservableObject {
             destinationX: destination.point.x,
             destinationY: destination.point.y
         )
+        logNavigation("map.transfer.start", "session=\(generation) bytes=\(asset.byteCount)")
         await renderCoordinator.start(asset: asset, diagnostics: RouteCardRenderDiagnostics(
             gpsWaitMilliseconds: gpsWaitMilliseconds,
             routeRequestMilliseconds: routeRequestMilliseconds,
@@ -633,11 +676,15 @@ final class AppModel: ObservableObject {
             retainedSymbolLayers: snapshot.retainedSymbolLayers,
             cacheState: snapshot.cacheState
         ), preview: preview)
+        try checkNavigationOwner(generation)
         guard case .displayed = renderCoordinator.state,
               let sceneID = renderCoordinator.lastDisplayedSceneID else {
             throw NavigationRuntimeError.bandDisplayFailed(renderCoordinator.failureCode ?? "BAND_RESULT_MISSING")
         }
         activeSceneID = sceneID
+        routePreviewPNG = asset.data
+        lastMapFixAgeMilliseconds = Int(max(0, Date().timeIntervalSince(location.timestamp) * 1000))
+        if lastMapFixAgeMilliseconds! >= 5_000 { latencyViolations += 1 }
         activeSnapshotConfiguration = snapshot.configuration
         activeSnapshotAnchor = progress.matchedLocation ?? location.geoPoint
         navigationManeuver = instruction?.maneuver ?? .straight
@@ -675,13 +722,19 @@ final class AppModel: ObservableObject {
             "fixAgeMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1_000).rounded())) queued=\(queued)"
         )
         guard snapshotRefreshTask == nil else { return }
+        let generation = navigationGeneration
         snapshotRefreshTask = Task { @MainActor [weak self] in
-            await self?.drainSnapshotRefreshes()
+            await self?.drainSnapshotRefreshes(generation: generation)
         }
     }
 
-    private func drainSnapshotRefreshes() async {
-        while !Task.isCancelled, let request = pendingSnapshotRefresh {
+    private func drainSnapshotRefreshes(generation: Int) async {
+        defer { if generation == navigationGeneration { snapshotRefreshTask = nil } }
+        while !Task.isCancelled, generation == navigationGeneration, pendingSnapshotRefresh != nil {
+            let delay = max(0, 1 - (lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? 1))
+            do { if delay > 0 { try await Task.sleep(for: .seconds(delay)) } } catch { return }
+            guard generation == navigationGeneration, !Task.isCancelled,
+                  let request = pendingSnapshotRefresh else { return }
             pendingSnapshotRefresh = nil
             do {
                 _ = try await publish(
@@ -689,7 +742,8 @@ final class AppModel: ObservableObject {
                     progress: request.progress,
                     location: request.location,
                     tileMapKey: request.tileMapKey,
-                    bearingDegrees: request.bearingDegrees
+                    bearingDegrees: request.bearingDegrees,
+                    generation: generation
                 )
                 sendNavigationUpdate(
                     route: request.route,
@@ -702,6 +756,7 @@ final class AppModel: ObservableObject {
             } catch is CancellationError {
                 if Task.isCancelled { break }
             } catch {
+                guard generation == navigationGeneration else { return }
                 navigationState = .limitedMap
                 sendNavigationUpdate(
                     route: request.route,
@@ -711,10 +766,13 @@ final class AppModel: ObservableObject {
                     horizontalAccuracyMeters: request.location.horizontalAccuracy,
                     status: .limitedMap
                 )
-                logNavigation("map.refresh.failed", "code=LIMITED_MAP")
+                logNavigation("map.refresh.failed", "code=\(Self.navigationErrorCode(for: error)) \(Self.navigationErrorDetail(for: error))")
             }
         }
-        snapshotRefreshTask = nil
+    }
+
+    private func checkNavigationOwner(_ generation: Int) throws {
+        guard generation == navigationGeneration, !Task.isCancelled else { throw CancellationError() }
     }
 
     private func sendNavigationUpdate(
@@ -760,7 +818,8 @@ final class AppModel: ObservableObject {
             "destination=\(update.destinationMode.rawValue),\(update.destinationX),\(update.destinationY)"
         )
         guard let first = updateCoalescer.enqueue(update), updateTask == nil else { return }
-        updateTask = Task { @MainActor [weak self] in await self?.drainUpdates(first) }
+        let generation = navigationGeneration
+        updateTask = Task { @MainActor [weak self] in await self?.drainUpdates(first, generation: generation) }
     }
 
     static func headingBucket(_ degrees: Double) -> Int {
@@ -801,6 +860,7 @@ final class AppModel: ObservableObject {
     }
 
     var navigationStartText: String { Self.fullCoordinate(navigationStart) }
+    var liveLocationHealth: String { locationClient.healthText }
     var navigationDestinationText: String { Self.fullCoordinate(navigationDestination) }
 
     var navigationStateCode: String {
@@ -826,7 +886,14 @@ final class AppModel: ObservableObject {
             routeDistanceMeters: navigationRouteDistanceMeters.map(Double.init),
             alternativePathCount: navigationAlternativePathCount,
             instructions: navigationInstructions,
-            entries: navigationDebugEntries
+            entries: navigationDebugEntries,
+            build: "\(BlueBandProduct.version) (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))",
+            runtime: [
+                "app": applicationState,
+                "location": locationClient.diagnostic,
+                "locationHealth": locationClient.healthText,
+                "mapLatency": "fixToDisplayMs=\(lastMapFixAgeMilliseconds.map(String.init) ?? "none") violations=\(latencyViolations)"
+            ]
         )
     }
 
@@ -834,6 +901,8 @@ final class AppModel: ObservableObject {
         navigationStartedMilliseconds = Self.nowMilliseconds()
         gpsWaitMilliseconds = 0
         routeRequestMilliseconds = 0
+        lastMapFixAgeMilliseconds = nil
+        latencyViolations = 0
         navigationDebugSequence = 0
         navigationDebugEntries = []
         navigationStart = nil
@@ -862,19 +931,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func drainUpdates(_ first: NavigationUpdate) async {
+    private func drainUpdates(_ first: NavigationUpdate, generation: Int) async {
+        defer { if generation == navigationGeneration { updateTask = nil } }
         var next: NavigationUpdate? = first
-        while let update = next, !Task.isCancelled {
+        while let update = next, !Task.isCancelled, generation == navigationGeneration {
             do {
                 _ = try await session.sendAwaitingAcknowledgement(topic: NavigationUpdate.topic, body: update.jsonBody())
                 try await updateClock.sleep(for: .seconds(1))
+                try checkNavigationOwner(generation)
             } catch {
+                guard generation == navigationGeneration else { return }
                 updateCoalescer.reset()
+                if !Task.isCancelled { logNavigation("nav.delivery.failed", "scene=\(update.scene)") }
                 break
             }
             next = updateCoalescer.completed()
         }
-        updateTask = nil
     }
 
     func sendEcho() async {
@@ -902,7 +974,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func consume(_ event: InterconnectEvent) {
+    func consume(_ event: InterconnectEvent) {
         switch event {
         case .connected:
             renderCoordinator.reconnected()
@@ -968,6 +1040,10 @@ final class AppModel: ObservableObject {
         case VietmapRouteClient.Error.invalidResponse: "ROUTE_RESPONSE_INVALID"
         case let VietmapRouteClient.Error.provider(code): "ROUTE_PROVIDER_\(safeErrorCode(code))"
         case ForegroundLocationClient.Error.unavailable: "GPS_UNAVAILABLE"
+        case ForegroundLocationClient.Error.permissionDenied: "GPS_PERMISSION_DENIED"
+        case VietmapSnapshotRenderer.Error.backgroundUnavailable: "MAP_BACKGROUND_UNAVAILABLE"
+        case VietmapSnapshotRenderer.Error.timedOut: "MAP_RENDER_TIMEOUT"
+        case VietmapSnapshotRenderer.Error.provider: "MAP_PROVIDER_FAILED"
         case VietmapSnapshotRenderer.Error.invalidRequest: "MAP_INVALID_REQUEST"
         case VietmapSnapshotRenderer.Error.styleLoadFailed: "MAP_STYLE_FAILED"
         case VietmapSnapshotRenderer.Error.snapshotFailed, VietmapSnapshotRenderer.Error.imageUnavailable: "MAP_SNAPSHOT_FAILED"
@@ -983,6 +1059,8 @@ final class AppModel: ObservableObject {
             "encodedBytes=\(bytes) budgetBytes=\(RenderProtocol.maximumPayloadBytes)"
         case let NavigationRuntimeError.bandDisplayFailed(code):
             "terminal=\(safeErrorCode(code))"
+        case let VietmapSnapshotRenderer.Error.provider(stage, domain, code):
+            "stage=\(safeErrorCode(stage)) domain=\(safeErrorCode(domain)) code=\(code)"
         default: ""
         }
     }

@@ -6,14 +6,34 @@ import BlueBandMapCore
 final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     enum Error: Swift.Error { case permissionDenied, unavailable }
 
-    private let manager = CLLocationManager()
+    private let manager: CLLocationManager
     private var continuation: AsyncThrowingStream<CLLocation, Swift.Error>.Continuation?
     private var cachedLocation: CLLocation?
     private var prewarming = false
     private var navigationActive = false
     private var backgroundActivitySession: CLBackgroundActivitySession?
+    private var generation = 0
+    private var applicationActive = true
+    private var requestedPrecision = false
+    private let makeBackgroundActivity: @MainActor () -> CLBackgroundActivitySession?
+    private let servicesEnabled: @MainActor () -> Bool
+    private(set) var rawFixCount = 0
+    private(set) var acceptedFixCount = 0
+    private(set) var lastEvent = "idle"
+    var onHealthChange: (() -> Void)?
 
-    override init() {
+    override convenience init() {
+        self.init(manager: CLLocationManager())
+    }
+
+    init(
+        manager: CLLocationManager,
+        makeBackgroundActivity: @escaping @MainActor () -> CLBackgroundActivitySession? = { CLBackgroundActivitySession() },
+        servicesEnabled: @escaping @MainActor () -> Bool = { CLLocationManager.locationServicesEnabled() }
+    ) {
+        self.manager = manager
+        self.makeBackgroundActivity = makeBackgroundActivity
+        self.servicesEnabled = servicesEnabled
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
@@ -23,36 +43,38 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     }
 
     func locations() -> AsyncThrowingStream<CLLocation, Swift.Error> {
-        AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
-            self.continuation?.finish()
+        stop(reason: "replaced")
+        generation += 1
+        let owner = generation
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             self.continuation = continuation
             self.navigationActive = true
+            self.requestedPrecision = false
             if let recentLocation = self.recentLocation() { continuation.yield(recentLocation) }
             continuation.onTermination = { @Sendable [weak self] _ in
-                Task { @MainActor in self?.stop() }
+                Task { @MainActor in
+                    guard self?.generation == owner else { return }
+                    self?.stop(reason: "consumerEnded")
+                }
             }
-            switch manager.authorizationStatus {
-            case .notDetermined: manager.requestWhenInUseAuthorization()
-            case .restricted, .denied: continuation.finish(throwing: Error.permissionDenied)
-            default:
-                beginNavigationBackgroundActivity()
-                manager.startUpdatingLocation()
-            }
+            reconcileAuthorization()
         }
     }
 
     func startPrewarming() {
         prewarming = true
-        switch manager.authorizationStatus {
-        case .notDetermined: manager.requestWhenInUseAuthorization()
-        case .authorizedAlways, .authorizedWhenInUse: manager.startUpdatingLocation()
-        default: break
-        }
+        reconcileAuthorization()
     }
 
     func stopPrewarming() {
         prewarming = false
         if continuation == nil { manager.stopUpdatingLocation() }
+    }
+
+    func applicationActive(_ active: Bool) {
+        applicationActive = active
+        if active { reconcileAuthorization() }
+        onHealthChange?()
     }
 
     func recentLocation(now: Date = Date()) -> CLLocation? {
@@ -64,41 +86,127 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
         return cachedLocation
     }
 
-    func stop() {
+    func stop(reason: String = "stopped") {
+        generation += 1
         navigationActive = false
-        continuation?.finish()
+        let ended = continuation
         continuation = nil
         manager.allowsBackgroundLocationUpdates = false
         manager.showsBackgroundLocationIndicator = false
         backgroundActivitySession?.invalidate()
         backgroundActivitySession = nil
         if !prewarming { manager.stopUpdatingLocation() }
+        ended?.finish()
+        record(reason)
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        reconcileAuthorization()
+    }
+
+    private func reconcileAuthorization() {
+        guard prewarming || navigationActive else { onHealthChange?(); return }
+        guard servicesEnabled() else { fail(Error.unavailable, reason: "servicesDisabled"); return }
         switch manager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
             if navigationActive { beginNavigationBackgroundActivity() }
             manager.startUpdatingLocation()
-        case .restricted, .denied: continuation?.finish(throwing: Error.permissionDenied)
-        default: break
+            if navigationActive, applicationActive, manager.accuracyAuthorization == .reducedAccuracy,
+               !requestedPrecision {
+                requestedPrecision = true
+                manager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "Navigation")
+            }
+            record(manager.accuracyAuthorization == .reducedAccuracy ? "reducedAccuracy" : "updating")
+        case .notDetermined:
+            manager.stopUpdatingLocation()
+            manager.allowsBackgroundLocationUpdates = false
+            manager.showsBackgroundLocationIndicator = false
+            backgroundActivitySession?.invalidate()
+            backgroundActivitySession = nil
+            record("awaitingPermission")
+            if applicationActive { manager.requestWhenInUseAuthorization() }
+        case .restricted, .denied: fail(Error.permissionDenied, reason: "permissionDenied")
+        @unknown default: fail(Error.unavailable, reason: "unknownAuthorization")
         }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        for location in locations where location.horizontalAccuracy >= 0 {
-            if cachedLocation == nil || location.timestamp >= cachedLocation!.timestamp { cachedLocation = location }
+        guard prewarming || navigationActive else { return }
+        for location in locations {
+            rawFixCount += 1
+            let age = Date().timeIntervalSince(location.timestamp)
+            guard location.horizontalAccuracy.isFinite, location.horizontalAccuracy >= 0,
+                  (-1...5).contains(age),
+                  cachedLocation == nil || location.timestamp >= cachedLocation!.timestamp else {
+                record("fixRejected")
+                continue
+            }
+            cachedLocation = location
+            if location.horizontalAccuracy <= 25 { acceptedFixCount += 1 }
             continuation?.yield(location)
+            record(location.horizontalAccuracy <= 25 ? "fix" : "poorAccuracy")
         }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
-        continuation?.finish(throwing: error)
+        guard prewarming || navigationActive else { return }
+        let code = error as NSError
+        if code.domain == kCLErrorDomain, code.code == CLError.Code.locationUnknown.rawValue {
+            record("locationUnknown")
+            return
+        }
+        fail(error, reason: "locationError:\(code.code)")
+    }
+
+    private func fail(_ error: Swift.Error, reason: String) {
+        let ended = continuation
+        continuation = nil
+        stop(reason: reason)
+        manager.stopUpdatingLocation()
+        ended?.finish(throwing: error)
+    }
+
+    private func record(_ event: String) {
+        lastEvent = event
+        onHealthChange?()
+    }
+
+    var needsSettings: Bool {
+        !servicesEnabled() || manager.authorizationStatus == .denied ||
+            manager.authorizationStatus == .restricted || manager.accuracyAuthorization == .reducedAccuracy
+    }
+
+    var healthText: String {
+        if !servicesEnabled() { return "Dịch vụ vị trí đang tắt. Mở Cài đặt để bật." }
+        switch manager.authorizationStatus {
+        case .denied, .restricted: return "Chưa được phép truy cập vị trí. Kiểm tra Cài đặt."
+        case .notDetermined: return "Chờ cấp quyền vị trí khi bắt đầu điều hướng."
+        default: break
+        }
+        if manager.accuracyAuthorization == .reducedAccuracy { return "Vị trí gần đúng. Bật Vị trí chính xác để điều hướng." }
+        guard let cachedLocation else { return "Đã cấp quyền vị trí chính xác; đang chờ GPS." }
+        return "GPS \(rawFixCount) • ±\(Int(cachedLocation.horizontalAccuracy)) m • \(max(0, Int(Date().timeIntervalSince(cachedLocation.timestamp)))) giây trước • \(navigationActive ? "đang chạy" : "đã dừng")"
+    }
+
+    var diagnostic: String {
+        "session=\(generation) auth=\(authorizationName) precise=\(manager.accuracyAuthorization == .fullAccuracy) services=\(servicesEnabled()) " +
+        "raw=\(rawFixCount) accepted=\(acceptedFixCount) bg=\(manager.allowsBackgroundLocationUpdates) event=\(lastEvent)"
+    }
+
+    private var authorizationName: String {
+        switch manager.authorizationStatus {
+        case .authorizedAlways: "always"
+        case .authorizedWhenInUse: "whenInUse"
+        case .denied: "denied"
+        case .restricted: "restricted"
+        case .notDetermined: "notDetermined"
+        @unknown default: "unknown"
+        }
     }
 
     private func beginNavigationBackgroundActivity() {
         guard navigationActive else { return }
-        if backgroundActivitySession == nil { backgroundActivitySession = CLBackgroundActivitySession() }
+        if backgroundActivitySession == nil { backgroundActivitySession = makeBackgroundActivity() }
         manager.allowsBackgroundLocationUpdates = true
         manager.showsBackgroundLocationIndicator = true
     }

@@ -46,6 +46,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSBluetoothAlwaysUsageDescription: BlueBandMap uses Bluetooth during active navigation to keep your Xiaomi Smart Band 10 guidance current.
         NSLocationWhenInUseUsageDescription: BlueBandMap uses your location during active navigation, including while iPhone is locked, to keep guidance current on your band.
+        NSLocationTemporaryUsageDescriptionDictionary:
+          Navigation: Precise location is needed to follow your route and update turns on your band while navigating.
         UIBackgroundModes:
           - location
           - bluetooth-central
