@@ -1,3 +1,10 @@
+final class LocationServiceProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var reads: Int { lock.withLock { count } }
+    func read() -> Bool { lock.withLock { count += 1 }; return true }
+}
+
 Task { @MainActor in
     var failures = 0
     func check(_ passed: Bool, _ name: String) {
@@ -78,6 +85,28 @@ Task { @MainActor in
     check(revoked.recentLocation() == nil, "cached fix cannot bypass revoked permission")
     revoked.stop()
     withExtendedLifetime(revokedStream) {}
+
+    let failed = ForegroundLocationClient()
+    let failedManager = CLLocationManager.latest!
+    let failedStream = failed.locations()
+    failed.locationManager(failedManager, didFailWithError: NSError(domain: kCLErrorDomain, code: 42))
+    failed.stop()
+    check(failed.diagnostic.contains("error=locationError:42"),
+          "normal cleanup must not erase the last location error from exported health")
+    withExtendedLifetime(failedStream) {}
+
+    let probe = LocationServiceProbe()
+    let health = ForegroundLocationClient(manager: CLLocationManager(), servicesEnabled: { probe.read() })
+    health.applicationActive(true)
+    try? await Task.sleep(for: .milliseconds(20))
+    let readsBeforeHealth = probe.reads
+    for _ in 0..<100 {
+        _ = health.healthText
+        _ = health.needsSettings
+        _ = health.diagnostic
+    }
+    check(probe.reads == readsBeforeHealth,
+          "UI and GPS diagnostics read cached service health without synchronous system probes")
     exit(failures == 0 ? 0 : 1)
 }
 dispatchMain()

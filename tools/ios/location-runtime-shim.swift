@@ -12,8 +12,8 @@ enum CLError { enum Code: Int { case locationUnknown = 0, denied = 1, network = 
 protocol CLLocationManagerDelegate: AnyObject {}
 @MainActor class CLLocationManager {
     static var latest: CLLocationManager?
-    static var servicesEnabled = true
-    static func locationServicesEnabled() -> Bool { servicesEnabled }
+    nonisolated(unsafe) static var servicesEnabled = true
+    nonisolated static func locationServicesEnabled() -> Bool { servicesEnabled }
     weak var delegate: CLLocationManagerDelegate?
     var authorizationStatus = CLAuthorizationStatus.authorizedWhenInUse
     var accuracyAuthorization = CLAccuracyAuthorization.fullAccuracy

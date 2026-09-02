@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class ForegroundLocationClientTests: XCTestCase {
+    func testServiceAvailabilityProbeDoesNotBlockMainActorOrRepeatForHealthReads() async {
+        let manager = TestLocationManager()
+        let probeFinished = expectation(description: "background service probe")
+        let client = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: {
+            XCTAssertFalse(Thread.isMainThread, "Core Location's global service query must not block GPS/UI")
+            probeFinished.fulfill()
+            return true
+        })
+        client.applicationActive(true)
+        await fulfillment(of: [probeFinished], timeout: 2)
+        for _ in 0..<100 {
+            _ = client.healthText
+            _ = client.needsSettings
+            _ = client.diagnostic
+        }
+        XCTAssertFalse(manager.updating, "a health probe without a navigation owner cannot start GPS")
+    }
+
     func testTemporaryGPSFailureStillDeliversTheNextFix() async throws {
         let manager = TestLocationManager()
         let client = makeClient(manager)
@@ -51,6 +69,8 @@ final class ForegroundLocationClientTests: XCTestCase {
             XCTAssertFalse(manager.updating)
             XCTAssertFalse(manager.backgroundEnabled)
         }
+        client.stop()
+        XCTAssertTrue(client.diagnostic.contains("error=permissionDenied"))
     }
 
     func testReducedAccuracyAndExpiredAllowOnce() {

@@ -16,10 +16,14 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     private var applicationActive = true
     private var requestedPrecision = false
     private let makeBackgroundActivity: @MainActor () -> CLBackgroundActivitySession?
-    private let servicesEnabled: @MainActor () -> Bool
+    private let servicesEnabled: @Sendable () -> Bool
+    private var servicesAvailable: Bool?
+    private var servicesCheckTask: Task<Void, Never>?
+    private var servicesCheckPending = false
     private(set) var rawFixCount = 0
     private(set) var acceptedFixCount = 0
     private(set) var lastEvent = "idle"
+    private var lastError = "none"
     var onHealthChange: (() -> Void)?
 
     override convenience init() {
@@ -29,7 +33,7 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     init(
         manager: CLLocationManager,
         makeBackgroundActivity: @escaping @MainActor () -> CLBackgroundActivitySession? = { CLBackgroundActivitySession() },
-        servicesEnabled: @escaping @MainActor () -> Bool = { CLLocationManager.locationServicesEnabled() }
+        servicesEnabled: @escaping @Sendable () -> Bool = { CLLocationManager.locationServicesEnabled() }
     ) {
         self.manager = manager
         self.makeBackgroundActivity = makeBackgroundActivity
@@ -57,12 +61,14 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
                     self?.stop(reason: "consumerEnded")
                 }
             }
+            refreshServicesAvailability()
             reconcileAuthorization()
         }
     }
 
     func startPrewarming() {
         prewarming = true
+        refreshServicesAvailability()
         reconcileAuthorization()
     }
 
@@ -73,12 +79,15 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
 
     func applicationActive(_ active: Bool) {
         applicationActive = active
-        if active { reconcileAuthorization() }
+        if active {
+            refreshServicesAvailability()
+            reconcileAuthorization()
+        }
         onHealthChange?()
     }
 
     func recentLocation(now: Date = Date()) -> CLLocation? {
-        guard servicesEnabled(),
+        guard servicesAvailable != false,
               manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse,
               manager.accuracyAuthorization == .fullAccuracy,
               let cachedLocation,
@@ -104,12 +113,33 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        refreshServicesAvailability()
         reconcileAuthorization()
+    }
+
+    private func refreshServicesAvailability() {
+        servicesCheckPending = true
+        servicesAvailable = nil
+        guard servicesCheckTask == nil else { return }
+        // Core Location's synchronous global query may block. Never run it for each
+        // fix or UI tick, and coalesce overlapping lifecycle requests into one probe.
+        servicesCheckTask = Task { @MainActor [weak self, servicesEnabled] in
+            repeat {
+                self?.servicesCheckPending = false
+                let available = await Task.detached(priority: .utility) { servicesEnabled() }.value
+                guard let self else { return }
+                if !servicesCheckPending {
+                    servicesAvailable = available
+                    reconcileAuthorization()
+                }
+            } while self?.servicesCheckPending == true
+            self?.servicesCheckTask = nil
+        }
     }
 
     private func reconcileAuthorization() {
         guard prewarming || navigationActive else { onHealthChange?(); return }
-        guard servicesEnabled() else { fail(Error.unavailable, reason: "servicesDisabled"); return }
+        guard servicesAvailable != false else { fail(Error.unavailable, reason: "servicesDisabled"); return }
         switch manager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
             if navigationActive { beginNavigationBackgroundActivity() }
@@ -155,6 +185,7 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
         guard prewarming || navigationActive else { return }
         let code = error as NSError
         if code.domain == kCLErrorDomain, code.code == CLError.Code.locationUnknown.rawValue {
+            lastError = "locationUnknown"
             record("locationUnknown")
             return
         }
@@ -162,6 +193,7 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     }
 
     private func fail(_ error: Swift.Error, reason: String) {
+        lastError = reason
         let ended = continuation
         continuation = nil
         stop(reason: reason)
@@ -175,12 +207,12 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     }
 
     var needsSettings: Bool {
-        !servicesEnabled() || manager.authorizationStatus == .denied ||
+        servicesAvailable == false || manager.authorizationStatus == .denied ||
             manager.authorizationStatus == .restricted || manager.accuracyAuthorization == .reducedAccuracy
     }
 
     var healthText: String {
-        if !servicesEnabled() { return "Dịch vụ vị trí đang tắt. Mở Cài đặt để bật." }
+        if servicesAvailable == false { return "Dịch vụ vị trí đang tắt. Mở Cài đặt để bật." }
         switch manager.authorizationStatus {
         case .denied, .restricted: return "Chưa được phép truy cập vị trí. Kiểm tra Cài đặt."
         case .notDetermined: return "Chờ cấp quyền vị trí khi bắt đầu điều hướng."
@@ -192,8 +224,8 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     }
 
     var diagnostic: String {
-        "session=\(generation) auth=\(authorizationName) precise=\(manager.accuracyAuthorization == .fullAccuracy) services=\(servicesEnabled()) " +
-        "raw=\(rawFixCount) accepted=\(acceptedFixCount) bg=\(manager.allowsBackgroundLocationUpdates) event=\(lastEvent)"
+        "session=\(generation) auth=\(authorizationName) precise=\(manager.accuracyAuthorization == .fullAccuracy) services=\(servicesAvailable.map(String.init) ?? "checking") " +
+        "raw=\(rawFixCount) accepted=\(acceptedFixCount) bg=\(manager.allowsBackgroundLocationUpdates) error=\(lastError) event=\(lastEvent)"
     }
 
     private var authorizationName: String {

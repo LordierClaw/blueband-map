@@ -114,11 +114,11 @@ Proposed behavior when the user starts navigation:
 
 **Files:** `apps/ios/Adapters/Location/ForegroundLocationClient.swift`, `apps/ios/App/AppModel.swift`; new `apps/ios/Tests/ForegroundLocationClientTests.swift` and moving-navigation tests.
 
-- [ ] Introduce the smallest injectable manager/background-session seam needed to test the production adapter, not a second implementation of its logic.
+- [x] Introduce the smallest injectable manager/background-session seam needed to test the production adapter, not a second implementation of its logic.
 - [ ] Add failing cases: temporary `locationUnknown` followed by a valid fix; denied authorization; normal cancellation; stop/start before old termination runs; old task completion after a new session starts; prewarming stopped during navigation; authorization callback while idle.
-- [ ] Keep the stream alive for documented recoverable errors and publish temporary GPS health. Terminate for actual denied/restricted authorization or explicit session stop; never silently continue an unknown error without recording/classifying it.
-- [ ] Give each stream/navigation run an identity. An old termination/defer callback may only release resources with the identity it owns. Detach the owned continuation and clear ownership before finishing it, so reentrant termination cannot act on the replacement.
-- [ ] Only start services from an authorization callback when a prewarm or navigation owner exists. Separate foreground prewarm ownership from active navigation ownership.
+- [x] Keep the stream alive for documented recoverable errors and publish temporary GPS health. Terminate for actual denied/restricted authorization or explicit session stop; never silently continue an unknown error without recording/classifying it.
+- [x] Give each stream/navigation run an identity. An old termination/defer callback may only release resources with the identity it owns. Detach the owned continuation and clear ownership before finishing it, so reentrant termination cannot act on the replacement.
+- [x] Only start services from an authorization callback when a prewarm or navigation owner exists. Separate foreground prewarm ownership from active navigation ownership.
 - [ ] Maintain continuous latest-fix acquisition while rerouting/rendering/transferring. Reroute failures keep the last valid route and report the failure; they do not destroy GPS delivery.
 - [ ] Preserve the latest fix during the refresh cooldown and issue its trailing refresh at the due time even if no further location callback arrives after the user stops moving.
 - [ ] Repeat start/stop/start and transient-error recovery in simulator tests using injected updates. Confirm the new session still receives the next fix and background activity is released exactly once on stop.
@@ -129,8 +129,8 @@ Proposed behavior when the user starts navigation:
 
 **Files:** `ForegroundLocationClient.swift`, `ContentView.swift`, `apps/ios/project.yml`, `scripts/verify-ios-artifact.sh`, `tools/ios/test-project-metadata.sh`, new authorization behavior tests.
 
-- [ ] Implement the six authorization decisions above and declare the temporary-full-accuracy purpose text in the generated plist.
-- [ ] Show current GPS age/precision/health independently from the route-origin label.
+- [x] Implement the six authorization decisions above and declare the temporary-full-accuracy purpose text in the generated plist.
+- [x] Show current GPS age/precision/health independently from the route-origin label.
 - [ ] Test not-determined, When-In-Use, denied, restricted, reduced accuracy, permission revoked mid-route, and expired Allow Once. Do not request a system prompt while backgrounded.
 - [ ] Inspect the built IPA again, not only YAML. Keep `location` and `bluetooth-central` and the existing bundle identity.
 
@@ -188,6 +188,9 @@ The original diagnostic above is historical red evidence. The canonical replacem
 - `7ebb963`: session-owned cleanup, recoverable `locationUnknown`, explicit authorization/precision health, background ownership, asynchronous rerouting, latest-pending refresh, safe render errors/deadline, and GPS-to-Band publication metrics.
 - [GitHub Actions 33687031077](https://github.com/LordierClaw/blueband-map/actions/runs/33687031077): 68 iOS XCTest cases passed and an unsigned arm64 IPA was built/inspected. That intermediate build retains version 0.5.9 (25); it is **not** the new handoff.
 - Follow-up adds a moving-navigation integration test through the actual AppModel, an injected delayed image renderer and Band receiver; it asserts two confirmed scene publications and a latest-fix trailing refresh. Hardware timing remains separate from this injected timing.
+- CI `33689235299` rejected a duplicate Swift binding before tests ran; `f528b3c` fixes the compile error. Never count this failed run as behavioral evidence.
+- A further production-adapter test exposed cleanup erasing the previous GPS error. The last error is now retained separately in exported health.
+- CI `33689564190` compiled and ran 69 iOS tests; the moving test alone exceeded its three-second expectation deadline, although its later scene-publication assertions passed. The app emitted repeated Core Location main-thread performance warnings. Inspection found the new health/UI paths synchronously calling `locationServicesEnabled()` on every read. A behavioral test reproduced those repeated calls. Service checks now run off-main, are coalesced across lifecycle events, and expose cached health; the same three-second moving-test deadline is retained. The canonical runtime harness now has 14 passing assertions. Native follow-up CI must confirm the timing result; this evidence does not assign every simulator delay to that one API.
 - The portable MVT decoder previously discarded all non-LineString geometry. The CPU experiment exposed this omission in dense urban tiles. Independent polygon/hole and multipoint fixtures failed first, then passed after decoding those command types with bounded validation. Existing road geometry behavior and wire bytes are unchanged.
 - `make test` passed after the decoder change: 168 portable Swift tests, 28 Band tests, 19 protocol-lab tests, metadata/runtime/script checks. `make lint`, the secret scan, and `git diff --check` also passed. iOS follow-up CI is tracked separately from these Linux checks.
 
