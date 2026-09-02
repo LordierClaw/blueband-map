@@ -194,10 +194,10 @@ final class GuidancePresentationTests: XCTestCase {
         XCTAssertEqual(fallback.source, .route)
     }
 
-    func testRefreshThresholdUsesCircularDifferenceAndTwelveSeconds() {
+    func testRefreshThresholdUsesCircularDifferenceAndOneSecond() {
         XCTAssertEqual(GuidanceBearingPolicy.angularDifference(350, 10), 20, accuracy: 0.001)
-        XCTAssertFalse(GuidanceBearingPolicy.shouldRefresh(preferred: 30, confirmed: 0, secondsSinceRefresh: 11.9))
-        XCTAssertTrue(GuidanceBearingPolicy.shouldRefresh(preferred: 30, confirmed: 0, secondsSinceRefresh: 12))
+        XCTAssertFalse(GuidanceBearingPolicy.shouldRefresh(preferred: 30, confirmed: 0, secondsSinceRefresh: 0.9))
+        XCTAssertTrue(GuidanceBearingPolicy.shouldRefresh(preferred: 30, confirmed: 0, secondsSinceRefresh: 1))
         XCTAssertFalse(GuidanceBearingPolicy.shouldRefresh(preferred: 29, confirmed: 0, secondsSinceRefresh: 20))
     }
 

@@ -206,7 +206,7 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         XCTAssertLessThan(immediate.y, user.y)
     }
 
-    func testOverlayCommandsKeepRouteGeometryAndManeuverAboveRoads() throws {
+    func testOverlayCommandsKeepRouteGeometryAboveRoadsWithoutManeuverDot() throws {
         let route = RoutePlan(
             points: [GeoPoint(latitude: 10, longitude: 106), GeoPoint(latitude: 10.01, longitude: 106.01), GeoPoint(latitude: 10.02, longitude: 106.02)],
             instructions: [RouteInstruction(distanceMeters: 500, headingDegrees: 45, sign: 0, interval: 0...2, streetName: "Road")],
@@ -222,9 +222,9 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         )
 
         XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.kind), [
-            .subdued, .traveled, .context, .activeCasing, .active, .maneuver,
+            .subdued, .traveled, .context, .activeCasing, .active,
         ])
-        XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [3, 4, 4, 10, 6, 9])
+        XCTAssertEqual(VietmapRouteOverlay.commands(for: request).map(\.width), [3, 4, 4, 10, 6])
         XCTAssertEqual(VietmapRouteOverlay.traveledColorHex, "#41516b")
         XCTAssertEqual(VietmapRouteOverlay.activeColorHex, "#168cff")
     }

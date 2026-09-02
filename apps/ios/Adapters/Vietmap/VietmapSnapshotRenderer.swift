@@ -221,7 +221,7 @@ enum VietmapDarkStyle {
 }
 
 struct VietmapRouteOverlay {
-    enum Kind: Equatable { case subdued, traveled, context, activeCasing, active, maneuver }
+    enum Kind: Equatable { case subdued, traveled, context, activeCasing, active }
     struct Command: Equatable { let kind: Kind; let width: CGFloat }
     static let subduedColorHex = "#243852"
     static let traveledColorHex = "#41516b"
@@ -232,8 +232,7 @@ struct VietmapRouteOverlay {
     static func commands(for request: VietmapSnapshotRequest) -> [Command] {
         [Command(kind: .subdued, width: 3), Command(kind: .traveled, width: 4),
          Command(kind: .context, width: 4), Command(kind: .activeCasing, width: 10),
-         Command(kind: .active, width: 6),
-         Command(kind: .maneuver, width: 9)]
+         Command(kind: .active, width: 6)]
     }
 
     static func draw(_ request: VietmapSnapshotRequest, on overlay: MGLMapSnapshotOverlay) {
@@ -246,10 +245,6 @@ struct VietmapRouteOverlay {
         drawPath(request.overlayGeometry.context, color: VietmapDarkStyle.color(hex: contextColorHex).cgColor, width: 4, overlay: overlay)
         drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeCasingColorHex).cgColor, width: 10, overlay: overlay)
         drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeColorHex).cgColor, width: 6, overlay: overlay)
-        let point = overlay.point(for: coordinate(request.nextManeuver))
-        context.setStrokeColor(VietmapDarkStyle.color(hex: activeColorHex).cgColor)
-        context.setLineWidth(3)
-        context.strokeEllipse(in: CGRect(x: point.x - 4.5, y: point.y - 4.5, width: 9, height: 9))
         context.restoreGState()
     }
 

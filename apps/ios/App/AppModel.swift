@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
         let location: CLLocation
         let tileMapKey: String
         let bearingDegrees: Double
+        let reason: String
     }
     @Published var authKeyInput = ""
     @Published var tileMapKeyInput = ""
@@ -449,7 +450,10 @@ final class AppModel: ObservableObject {
                         selection: rerouteSelection
                     )
                     let rerouteBearing = bearing.source == .course ? bearing.bearingDegrees : rerouteRouteBearing
-                    scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey, bearingDegrees: rerouteBearing)
+                    scheduleRefresh(
+                        route: route, progress: progress, location: location,
+                        tileMapKey: tileMapKey, bearingDegrees: rerouteBearing, reason: "reroute"
+                    )
                     lastReroute = Date()
                     contextRefreshed = true
                 }
@@ -471,7 +475,10 @@ final class AppModel: ObservableObject {
                 let refreshReason = contextRefreshed ? "reroute" : status == .gpsLow ? "gpsLow" :
                     bearing.shouldRefresh ? "bearing" : viewportShouldRefresh ? "viewport" : "none"
                 if !contextRefreshed && status != .gpsLow && (bearing.shouldRefresh || viewportShouldRefresh) {
-                    scheduleRefresh(route: route, progress: progress, location: location, tileMapKey: tileMapKey, bearingDegrees: bearing.bearingDegrees)
+                    scheduleRefresh(
+                        route: route, progress: progress, location: location,
+                        tileMapKey: tileMapKey, bearingDegrees: bearing.bearingDegrees, reason: refreshReason
+                    )
                 }
                 navigationState = Self.state(status)
                 sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, horizontalAccuracyMeters: location.horizontalAccuracy, status: status)
@@ -637,7 +644,12 @@ final class AppModel: ObservableObject {
         navigationDistanceMeters = max(0, Int((selection?.distanceMeters ?? 0).rounded()))
         navigationStreet = instruction?.streetName ?? ""
         navigationState = .navigating
-        logNavigation("band.displayed", "scene=\(sceneID) status=\(navigationStateCode)")
+        logNavigation(
+            "band.displayed",
+            "scene=\(sceneID) status=\(navigationStateCode) bearing=\(Int(bearingDegrees.rounded())) " +
+            "fixAgeMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1_000).rounded())) " +
+            "publishMs=\(Int(max(0, Date().timeIntervalSince(snapshotStartedAt) * 1_000).rounded()))"
+        )
         return false
     }
 
@@ -646,14 +658,22 @@ final class AppModel: ObservableObject {
         progress: RouteProgress,
         location: CLLocation,
         tileMapKey: String,
-        bearingDegrees: Double
+        bearingDegrees: Double,
+        reason: String
     ) {
+        let queued = snapshotRefreshTask != nil
         pendingSnapshotRefresh = SnapshotRefreshRequest(
             route: route,
             progress: progress,
             location: location,
             tileMapKey: tileMapKey,
-            bearingDegrees: bearingDegrees
+            bearingDegrees: bearingDegrees,
+            reason: reason
+        )
+        logNavigation(
+            "map.refresh.scheduled",
+            "reason=\(reason) bearing=\(Int(bearingDegrees.rounded())) " +
+            "fixAgeMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1_000).rounded())) queued=\(queued)"
         )
         guard snapshotRefreshTask == nil else { return }
         snapshotRefreshTask = Task { @MainActor [weak self] in

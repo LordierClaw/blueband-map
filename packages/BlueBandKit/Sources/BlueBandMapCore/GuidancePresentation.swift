@@ -212,6 +212,6 @@ public struct GuidanceBearingPolicy: Sendable {
     }
 
     public static func shouldRefresh(preferred: Double, confirmed: Double, secondsSinceRefresh: Double) -> Bool {
-        angularDifference(preferred, confirmed) >= 30 && secondsSinceRefresh >= 12
+        angularDifference(preferred, confirmed) >= 30 && secondsSinceRefresh >= 1
     }
 }

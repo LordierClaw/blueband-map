@@ -112,8 +112,8 @@ public struct SnapshotRefreshContext: Equatable, Sendable {
 
 public enum SnapshotRefreshPolicy {
     public static let defaultSafeViewport = ScreenRect(x: 36, y: 144, width: 140, height: 320)
-    public static let minimumRefreshSeconds = 12.0
-    public static let movementMeters = 175.0
+    public static let minimumRefreshSeconds = 1.0
+    public static let movementMeters = 1.0
 
     public static func shouldRefresh(_ context: SnapshotRefreshContext) -> Bool {
         if context.rerouteSucceeded { return true }
