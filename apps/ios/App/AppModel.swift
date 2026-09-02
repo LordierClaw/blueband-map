@@ -384,7 +384,7 @@ final class AppModel: ObservableObject {
                 }
             }
             guard !Task.isCancelled else { return }
-            guard let first else { throw ForegroundLocationClient.Error.unavailable }
+            guard var first else { throw ForegroundLocationClient.Error.unavailable }
             gpsWaitMilliseconds = max(0, Self.nowMilliseconds() - gpsStarted)
             navigationStart = first.geoPoint
             logNavigation(
@@ -403,7 +403,7 @@ final class AppModel: ObservableObject {
                 generation: generation
             )
             try checkNavigationOwner(generation)
-            let first = locationClient.recentLocation() ?? first
+            first = locationClient.recentLocation() ?? first
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
             var selection = GuidancePresentationPolicy.select(
