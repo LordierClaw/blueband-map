@@ -12,6 +12,12 @@ grep -Fq 'path: ../../packages/BlueBandKit' "$project"
 grep -Fq 'CURRENT_PROJECT_VERSION: 22' "$project"
 grep -Fq 'MARKETING_VERSION: 0.5.6' "$project"
 grep -Fq 'static let version = "0.5.6"' apps/ios/App/BlueBandMapApp.swift
+grep -Fq 'scale: 2,' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift
+grep -Fq '.interpolation(.high)' apps/ios/App/ContentView.swift
+if grep -Fq '.interpolation(.none)' apps/ios/App/ContentView.swift; then
+  echo "route preview must not use nearest-neighbour interpolation" >&2
+  exit 1
+fi
 if grep -Eq 'VietmapRouteOverlay\.translated|offset: offset' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift; then
   echo "route overlay must use the snapshot camera projection without a private translation" >&2
   exit 1

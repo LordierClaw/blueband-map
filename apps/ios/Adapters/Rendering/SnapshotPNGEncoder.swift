@@ -25,21 +25,23 @@ enum SnapshotPNGEncoder {
         profiles: [SnapshotPaletteProfile] = SnapshotPaletteProfile.allCases,
         blockSizes: [Int] = [1]
     ) throws -> SnapshotPNGOutput {
-        guard image.width == RenderProtocol.viewportWidth,
-              image.height == RenderProtocol.viewportHeight,
+        let width = RenderProtocol.viewportWidth
+        let height = RenderProtocol.viewportHeight
+        guard (image.width == width && image.height == height) ||
+              (image.width == width * 2 && image.height == height * 2),
               !profiles.isEmpty, !blockSizes.isEmpty,
               blockSizes.allSatisfy({ $0 > 0 }) else { throw Error.unsupportedImage }
         let started = nowMilliseconds()
-        let pixels = try rgbaPixels(image)
+        let pixels = try rgbaPixels(image, width: width, height: height)
         var lastSize = 0
         for profile in profiles {
             let palette = palette(for: profile)
             let indices = quantize(pixels, palette: palette)
             for blockSize in blockSizes {
                 let reduced = blockSize == 1 ? indices : IndexedPixelPacking.blocked(
-                    indices, width: image.width, height: image.height, blockSize: blockSize
+                    indices, width: width, height: height, blockSize: blockSize
                 )
-                let data = try encodeIndexed(reduced, width: image.width, height: image.height, palette: palette)
+                let data = try encodeIndexed(reduced, width: width, height: height, palette: palette)
                 lastSize = data.count
                 if data.count <= RenderProtocol.maximumPayloadBytes {
                     return SnapshotPNGOutput(
@@ -55,19 +57,19 @@ enum SnapshotPNGEncoder {
         throw Error.payloadTooLarge(lastSize)
     }
 
-    private static func rgbaPixels(_ image: CGImage) throws -> [UInt8] {
-        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+    private static func rgbaPixels(_ image: CGImage, width: Int, height: Int) throws -> [UInt8] {
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
         guard let context = CGContext(
             data: &pixels,
-            width: image.width,
-            height: image.height,
+            width: width,
+            height: height,
             bitsPerComponent: 8,
-            bytesPerRow: image.width * 4,
+            bytesPerRow: width * 4,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { throw Error.unsupportedImage }
-        context.interpolationQuality = .none
-        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return pixels
     }
 

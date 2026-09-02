@@ -69,7 +69,7 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         let configuration = try VietmapSnapshotConfiguration.make(request)
 
         XCTAssertEqual(configuration.size, CGSize(width: 212, height: 520))
-        XCTAssertEqual(configuration.scale, 1)
+        XCTAssertEqual(configuration.scale, 2)
         XCTAssertEqual(configuration.pitch, 0)
         XCTAssertEqual(configuration.heading, 45)
         XCTAssertEqual(configuration.userVerticalFraction, 0.72, accuracy: 0.001)

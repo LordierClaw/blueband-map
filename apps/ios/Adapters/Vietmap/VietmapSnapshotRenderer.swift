@@ -70,7 +70,7 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
             )
             let configuration = Self(
                 size: size,
-                scale: 1,
+                scale: 2,
                 pitch: 0,
                 heading: request.headingDegrees,
                 userVerticalFraction: 0.72,

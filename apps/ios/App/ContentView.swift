@@ -89,7 +89,7 @@ struct ContentView: View {
             }
             if let data = model.routePreviewPNG, let image = UIImage(data: data) {
                 Image(uiImage: image)
-                    .resizable().interpolation(.none).scaledToFit()
+                    .resizable().interpolation(.high).scaledToFit()
                     .frame(maxWidth: 212).accessibilityLabel("Bản đồ điều hướng đang hiển thị trên band")
             }
             if navigationIsActive {

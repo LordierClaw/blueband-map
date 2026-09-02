@@ -33,6 +33,19 @@ final class SnapshotPNGEncoderTests: XCTestCase {
         }
     }
 
+    func testDownsamplesTwoXSnapshotToTransportDimensionsWithinBudget() throws {
+        let output = try SnapshotPNGEncoder.encode(
+            solidImage(width: 424, height: 1_040),
+            profiles: [.colors16Labels]
+        )
+
+        XCTAssertLessThanOrEqual(output.data.count, RenderProtocol.maximumPayloadBytes)
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(output.data as CFData, nil))
+        let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(decoded.width, 212)
+        XCTAssertEqual(decoded.height, 520)
+    }
+
     func testBoundedSpatialFallbackFitsHighEntropySnapshotWithoutChangingDimensions() throws {
         let output = try SnapshotPNGEncoder.encode(
             noisyImage(width: 212, height: 520),
