@@ -1,6 +1,6 @@
 # Live Background Navigation Guidance Design
 
-**Date:** 2026-09-02  
+**Date:** 2026-09-02
 **Status:** Approved
 
 ## Goal

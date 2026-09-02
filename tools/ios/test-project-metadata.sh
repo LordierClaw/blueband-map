@@ -29,5 +29,7 @@ grep -Fq 'CLBackgroundActivitySession' "$location_source"
 grep -Fq 'manager.allowsBackgroundLocationUpdates = true' "$location_source"
 grep -Fq 'manager.allowsBackgroundLocationUpdates = false' "$location_source"
 grep -Fq 'backgroundActivitySession?.invalidate()' "$location_source"
+run_navigation=$(sed -n '/private func runNavigation/,/let gpsStarted/p' apps/ios/App/AppModel.swift)
+grep -Fq 'locationClient.stop()' <<<"$run_navigation"
 
 echo "iOS project metadata OK"

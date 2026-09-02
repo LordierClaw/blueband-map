@@ -29,7 +29,6 @@ final class AppModel: ObservableObject {
         let location: CLLocation
         let tileMapKey: String
         let bearingDegrees: Double
-        let reason: String
     }
     @Published var authKeyInput = ""
     @Published var tileMapKeyInput = ""
@@ -323,6 +322,7 @@ final class AppModel: ObservableObject {
 
     private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String) async {
         defer {
+            locationClient.stop()
             snapshotRefreshTask?.cancel()
             snapshotRefreshTask = nil
             pendingSnapshotRefresh = nil
@@ -667,8 +667,7 @@ final class AppModel: ObservableObject {
             progress: progress,
             location: location,
             tileMapKey: tileMapKey,
-            bearingDegrees: bearingDegrees,
-            reason: reason
+            bearingDegrees: bearingDegrees
         )
         logNavigation(
             "map.refresh.scheduled",
