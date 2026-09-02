@@ -201,23 +201,35 @@ function paintPixelRGBA(bitmap, imageWidth, imageHeight, x, y, color) {
   bitmap.set(color, (y * imageWidth + x) * 4)
 }
 
-function paintOpposedTrianglesRGBA(bitmap, imageWidth, imageHeight, color) {
-  for (let y = 1; y <= 36; y += 1) {
-    const halfWidth = y <= 25
-      ? 1 + Math.floor((y - 1) * 13 / 24)
-      : 1 + Math.floor((36 - y) * 13 / 10)
-    const left = imageWidth / 2 - halfWidth
-    const right = imageWidth / 2 + halfWidth - 1
-    for (let x = left; x <= right; x += 1) paintPixelRGBA(bitmap, imageWidth, imageHeight, x, y, color)
+function pointInPolygon(x, y, points) {
+  var inside = false
+  for (let current = 0, previous = points.length - 1; current < points.length; previous = current++) {
+    const a = points[current], b = points[previous]
+    if ((a[1] > y) !== (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside
+  }
+  return inside
+}
+
+function paintAntialiasedPolygonRGBA(bitmap, imageWidth, imageHeight, points, color) {
+  for (let y = 0; y < imageHeight; y += 1) {
+    for (let x = 0; x < imageWidth; x += 1) {
+      var coverage = 0
+      for (let sampleY = 0; sampleY < 4; sampleY += 1) {
+        for (let sampleX = 0; sampleX < 4; sampleX += 1) {
+          if (pointInPolygon(x + (sampleX + 0.5) / 4, y + (sampleY + 0.5) / 4, points)) coverage += 1
+        }
+      }
+      if (coverage) paintPixelRGBA(bitmap, imageWidth, imageHeight, x, y, [
+        color[0], color[1], color[2], Math.round(color[3] * coverage / 16)
+      ])
+    }
   }
 }
 
 const marker = new Uint8Array(30 * 38 * 4)
-paintOpposedTrianglesRGBA(marker, 30, 38, [39, 199, 111, 255])
-const markerPNG = rgbaPNG(30, 38, marker)
-for (let bucket = 0; bucket < 8; bucket += 1) {
-  await writeFile(new URL(`../src/common/marker-${bucket}.png`, import.meta.url), markerPNG)
-}
+paintAntialiasedPolygonRGBA(marker, 30, 38,
+  [[15.18, 2], [28, 30.97], [15.03, 26.12], [2, 30.78]], [20, 128, 74, 255])
+await writeRGBA("marker-cursor-v3.png", 30, 38, marker)
 
 const destinationPalette = [[0, 0, 0], [55, 32, 3], [255, 178, 24], [255, 244, 194]]
 const destinationPin = new Uint8Array(28 * 34)

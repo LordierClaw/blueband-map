@@ -206,7 +206,7 @@ test("nav.update covers live statuses and ignores stale scene or sequence", asyn
 
   assert.equal(page.navStatus, "ARRIVED")
   assert.equal(page.navArrowPath, "/common/maneuver-arrive.png")
-  assert.equal(page.navMarkerPath, "/common/marker-0.png")
+  assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
   assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   assert.equal(page.navStatusVisible, true)
   page.receiveMessage({ data: envelope("nav-5", "nav.update", {
@@ -241,7 +241,7 @@ test("preview and live guidance share compact metre and kilometre labels", async
   cases.forEach(([distanceM, label], seq) => {
     page.receiveMessage({ data: envelope(`nav-distance-${seq}`, "nav.update", navigation({ seq, distanceM })) })
     assert.equal(page.navDistance, label)
-    assert.equal(page.navMarkerPath, "/common/marker-0.png")
+    assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
     assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   })
 })
@@ -330,7 +330,7 @@ test("first raster promotes its staged marker and destination atomically", async
   assert.equal(page.navDestinationVisible, false)
   page.mapComplete(page.pendingPublication.token)
   assert.equal(page.navMarkerVisible, true)
-  assert.equal(page.navMarkerPath, "/common/marker-0.png")
+  assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
   assert.equal(page.navMarkerStyle, "left:91px;top:355px;")
   assert.equal(page.navDestinationVisible, true)
   assert.equal(page.navDestinationPath, "/common/destination-pin.png")
@@ -428,7 +428,7 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   })) })
   assert.equal(page.mapPath, oldURI)
   assert.equal(page.confirmedMap.uri, oldURI)
-  assert.equal(page.navMarkerPath, "/common/marker-0.png")
+  assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
 
   page.receiveMessage({ data: envelope("chunk-1", "map.asset.chunk", {
     asset: nextAsset, run: RUN, scene: nextScene, offset: 0,
@@ -451,7 +451,7 @@ test("accepts windowed unique chunk IDs in offset order and publishes a refresh 
   page.mapComplete(page.pendingPublication.token)
   assert.equal(page.confirmedMap.scene, nextScene)
   assert.equal(page.mapPath, `internal://files/${nextAsset}.png`)
-  assert.equal(page.navMarkerPath, "/common/marker-0.png")
+  assert.equal(page.navMarkerPath, "/common/marker-cursor-v3.png")
   assert.equal(page.navDestinationPath, "/common/destination-edge-1.png")
 })
 

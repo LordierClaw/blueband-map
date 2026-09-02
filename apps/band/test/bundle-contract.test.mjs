@@ -69,6 +69,8 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /\.map\s*\{[^}]*object-fit:\s*contain;/s)
   assert.match(page, /\.map-frame\s*\{[^}]*width:\s*212px;[^}]*height:\s*520px;/s)
   assert.doesNotMatch(page, /nav-shade\.png|class="nav-shade"|class="nav-panel(?:-shadow)?"/)
+  assert.match(page, /navMarkerPath:\s*["']\/common\/marker-cursor-v3\.png["']/)
+  assert.doesNotMatch(page, /\/common\/marker-[0-7]\.png/)
   assert.match(page, /<image class="nav-arrow"[^>]+src="\{\{ navArrowPath \}\}"/)
   assert.match(page, /<image class="nav-marker"[^>]+src="\{\{ navMarkerPath \}\}"/)
   assert.match(page, /<image class="nav-destination"[^>]+src="\{\{ navDestinationPath \}\}"/)
@@ -77,12 +79,13 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /<div class="nav-marker"/)
   assert.match(page, /\.nav-header\s*\{[^}]*left:\s*0;[^}]*top:\s*0;[^}]*width:\s*212px;[^}]*height:\s*96px;/s)
   assert.doesNotMatch(page, /box-shadow\s*:/)
+  assert.doesNotMatch(page, /linear-gradient\s*\(/)
   assert.doesNotMatch(page, /\.nav-panel(?:-shadow)?\s*\{/)
   assert.match(page, /statusVisible:\s*body\.status\s*!==\s*["']navigating["']/)
   assert.match(page, /navStatus\s*=\s*["']LOADING MAP["']/)
   assert.match(page, /\.nav-arrow\s*\{[^}]*left:\s*32px;[^}]*top:\s*28px;[^}]*width:\s*44px;[^}]*height:\s*56px;/s)
   assert.match(page, /\.nav-distance\s*\{[^}]*left:\s*78px;[^}]*top:\s*26px;[^}]*width:\s*88px;/s)
-  assert.match(page, /\.nav-street\s*\{[^}]*left:\s*72px;[^}]*top:\s*60px;[^}]*width:\s*94px;/s)
+  assert.match(page, /\.nav-street\s*\{[^}]*left:\s*72px;[^}]*top:\s*60px;[^}]*width:\s*126px;/s)
   assert.match(page, /\.nav-status\s*\{[^}]*left:\s*72px;[^}]*top:\s*80px;[^}]*width:\s*94px;/s)
   assert.match(page, /\.nav-marker\s*\{[^}]*width:\s*30px;[^}]*height:\s*38px;/s)
 })
@@ -90,8 +93,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
 test("generated HUD resources use the required PNG format at their display size", async () => {
   const expected = {
     "maneuver-right.png": [44, 56, 3],
-    "marker-0.png": [30, 38, 6],
-    "marker-7.png": [30, 38, 6],
+    "marker-cursor-v3.png": [30, 38, 6],
     "destination-pin.png": [28, 34, 3],
     "destination-edge.png": [28, 28, 3],
     ...Object.fromEntries(Array.from({ length: 8 }, (_, direction) => [`destination-edge-${direction}.png`, [24, 24, 6]]))
@@ -104,37 +106,28 @@ test("generated HUD resources use the required PNG format at their display size"
   }
 })
 
-test("all compatibility marker files contain the same pixel-mirrored closed RGBA pointer", async () => {
-  const markers = []
-  for (let heading = 0; heading < 8; heading += 1) {
-    const png = await readFile(new URL(`src/common/marker-${heading}.png`, root))
-    markers.push(png)
-    assert.equal(png[25], 6)
-    const { width, height, pixel } = rgbaPixels(png)
-    const opaqueRows = []
-    for (let y = 0; y < height; y += 1) {
-      const row = []
-      for (let x = 0; x < width; x += 1) {
-        assert.deepEqual(pixel(x, y), pixel(width - 1 - x, y), `pixel (${x}, ${y}) must mirror exactly`)
-        const [red, green, blue, alpha] = pixel(x, y)
-        if (alpha !== 0) row.push(x)
-        if (alpha !== 0) assert.deepEqual([red, green, blue, alpha], [39, 199, 111, 255])
-      }
-      if (row.length) {
-        assert.equal(Math.min(...row) + Math.max(...row), 29, `row ${y} must use the half-pixel centre`)
-        assert.equal(row.length, Math.max(...row) - Math.min(...row) + 1, `row ${y} must not contain an indented corner`)
-        opaqueRows.push(row.length)
+test("cursor marker is dark green without a border and aligns its tip-notch axis to route centre", async () => {
+  const png = await readFile(new URL("src/common/marker-cursor-v3.png", root))
+  assert.equal(png[25], 6)
+  const { width, height, pixel } = rgbaPixels(png)
+  assert.deepEqual([width, height], [30, 38])
+  const opaque = []
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const [red, green, blue, alpha] = pixel(x, y)
+      if (alpha !== 0) {
+        opaque.push([x, y])
+        assert.deepEqual([red, green, blue], [20, 128, 74])
       }
     }
-    assert.deepEqual([width, height], [30, 38])
-    assert.equal(opaqueRows.length, 36)
-    assert.equal(opaqueRows[0], 2)
-    assert.deepEqual(opaqueRows.slice(24, 26), [28, 28], "opposed triangles must share a two-row shoulder")
-    assert.equal(opaqueRows.at(-1), 2)
-    for (let row = 1; row < 25; row += 1) assert.ok(opaqueRows[row] >= opaqueRows[row - 1])
-    for (let row = 26; row < opaqueRows.length; row += 1) assert.ok(opaqueRows[row] <= opaqueRows[row - 1])
   }
-  for (const marker of markers.slice(1)) assert.deepEqual(marker, markers[0])
+  assert.ok(pixel(15, 2)[3] > 0, "sharp cursor tip must lie on the route centre")
+  assert.ok(pixel(15, 26)[3] > 0, "cursor notch vertex must lie on the route centre")
+  assert.equal(pixel(15, 29)[3], 0, "concave cursor notch must remain visibly open")
+  assert.ok(Math.min(...opaque.map(([x]) => x)) >= 1)
+  assert.ok(Math.max(...opaque.map(([x]) => x)) <= 28)
+  assert.ok(Math.min(...opaque.map(([, y]) => y)) >= 1)
+  assert.ok(Math.max(...opaque.map(([, y]) => y)) <= 32)
 })
 
 test("destination edge icons are contained 24px two-colour RGBA chevrons", async () => {

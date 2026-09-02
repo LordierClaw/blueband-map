@@ -47,10 +47,10 @@ for (const required of [
   "common/maneuver-uTurn.png",
   "common/maneuver-roundabout.png",
   "common/maneuver-arrive.png",
+  "common/marker-cursor-v3.png",
   "common/destination-pin.png",
   "common/destination-edge.png",
-  ...Array.from({ length: 8 }, (_, index) => `common/destination-edge-${index}.png`),
-  ...Array.from({ length: 8 }, (_, index) => `common/marker-${index}.png`)
+  ...Array.from({ length: 8 }, (_, index) => `common/destination-edge-${index}.png`)
 ]) {
   if (!files.has(required)) throw new Error(`RPK missing ${required}`)
 }
@@ -74,11 +74,11 @@ if (icon.readUInt32BE(16) !== 256 || icon.readUInt32BE(20) !== 256 || icon[25] !
   throw new Error("compiled launcher icon must be 256x256 RGBA")
 }
 for (const name of [
-  ...Array.from({ length: 8 }, (_, index) => `marker-${index}.png`),
+  "marker-cursor-v3.png",
   ...Array.from({ length: 8 }, (_, index) => `destination-edge-${index}.png`)
 ]) {
   const asset = files.get(`common/${name}`)
-  const marker = name.startsWith("marker-")
+  const marker = name === "marker-cursor-v3.png"
   const expectedWidth = marker ? 30 : 24
   const expectedHeight = marker ? 38 : 24
   if (asset.readUInt32BE(16) !== expectedWidth || asset.readUInt32BE(20) !== expectedHeight || asset[25] !== 6) {
