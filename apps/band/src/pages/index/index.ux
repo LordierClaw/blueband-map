@@ -22,12 +22,6 @@
         <text class="nav-status" if="{{ navStatusVisible }}">{{ navStatus }}</text>
       </div>
       <text class="online" if="{{ !mapReady && !pendingPublication && !preparedRender }}">{{ startupStatus }}</text>
-      <div class="diagnostics" if="{{ showDiagnostics && !preparedRender }}">
-        <text class="log">{{ logText }}</text>
-        <input class="button" type="button" value="ECHO PING" @click="sendPing" />
-        <input class="clear" type="button" value="CLEAR EVENTS" @click="clearEvents" />
-        <text class="version">RPK 0.6.10 • ENV V1</text>
-      </div>
     </div>
   </div>
 </template>
@@ -379,7 +373,7 @@ export default {
     navStreet: "",
     navStatus: "WAITING",
     navStatusVisible: false,
-    startupStatus: "IOS CONNECTED • WAITING ROUTE",
+    startupStatus: "CHỜ LỆNH TỪ IPHONE…",
     navMarkerPath: "/common/marker-cursor-v4.png",
     navMarkerStyle: "left:91px;top:355px;",
     navMarkerVisible: false,
@@ -526,7 +520,7 @@ export default {
     this.navStatusVisible = false
     this.navMarkerVisible = false
     this.navDestinationVisible = false
-    this.startupStatus = "IOS CONNECTED • WAITING ROUTE"
+    this.startupStatus = "CHỜ LỆNH TỪ IPHONE…"
     var cleanupURI = this.pendingPublication ? this.pendingPublication.uri :
       (this.activeTransfer ? this.activeTransfer.uri : this.unconfirmedURI)
     var preserveURI = this.confirmedMap ? this.confirmedMap.uri : ""
@@ -725,13 +719,12 @@ export default {
       }
       if (this.preparedRender && this.preparedRender.preview && this.preparedRender.sceneId !== body.scene) {
         this.preparedRender.previousNavigation = navigation
-      } else {
-        this.navArrowPath = navigation.arrowPath
-        this.navDistance = navigation.distance
-        this.navStreet = navigation.street
-        this.navStatus = navigation.status
-        this.navStatusVisible = navigation.statusVisible
       }
+      this.navArrowPath = navigation.arrowPath
+      this.navDistance = navigation.distance
+      this.navStreet = navigation.street
+      this.navStatus = navigation.status
+      this.navStatusVisible = navigation.statusVisible
       this.navMarkerStyle = "left:91px;top:355px;"
       this.navDestinationVisible = body.destinationMode !== "hidden"
       if (this.navDestinationVisible) {
@@ -766,13 +759,15 @@ export default {
     }
     this.preparedRender = result.prepared
     this.preparedRender.preparedAt = Date.now()
-    if (result.prepared.preview) {
-      this.navArrowPath = "/common/maneuver-" + result.prepared.preview.maneuver + ".png"
-      this.navDistance = this.formatDistance(result.prepared.preview.distanceM)
-      this.navStreet = result.prepared.preview.street
+    if (!this.confirmedMap) {
+      if (result.prepared.preview) {
+        this.navArrowPath = "/common/maneuver-" + result.prepared.preview.maneuver + ".png"
+        this.navDistance = this.formatDistance(result.prepared.preview.distanceM)
+        this.navStreet = result.prepared.preview.street
+      }
+      this.navStatus = "LOADING MAP"
+      this.navStatusVisible = true
     }
-    this.navStatus = "LOADING MAP"
-    this.navStatusVisible = true
     this.sendEnvelope({
       v: 1,
       id: this.nextBandMessageID(),
@@ -1438,8 +1433,10 @@ export default {
     this.showDiagnostics = false
     this.navScene = publication.scene || ""
     this.navSequence = -1
-    this.navStatus = "WAITING"
-    this.navStatusVisible = false
+    if (!priorMap) {
+      this.navStatus = "WAITING"
+      this.navStatusVisible = false
+    }
     this.applyPreviewOverlay(publication.preview)
     var page = this
     var publish = function () {
@@ -1510,9 +1507,9 @@ export default {
 .mark { width: 72px; height: 72px; border-radius: 18px; justify-content: center; align-items: center; background-color: #168cff; }
 .mark-text { font-size: 46px; font-weight: bold; color: #ffffff; }
 .title { margin-top: 18px; font-size: 25px; font-weight: bold; color: #ffffff; }
-.status, .online { margin-top: 12px; font-size: 16px; font-weight: bold; color: #5dffb0; }
+.status { margin-top: 12px; font-size: 16px; font-weight: bold; color: #5dffb0; }
+.online { position: absolute; left: 16px; top: 230px; width: 180px; font-size: 16px; font-weight: bold; text-align: center; color: #5dffb0; }
 .detail { margin-top: 14px; width: 180px; height: 76px; font-size: 15px; lines: 4; text-align: center; color: #a9bdd6; }
-.button { margin-top: 24px; width: 184px; height: 52px; border-radius: 26px; font-size: 16px; color: #ffffff; background-color: #168cff; }
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
 .nav-header { position: absolute; left: 0; top: 0; width: 212px; height: 96px; }
 .nav-arrow { position: absolute; left: 32px; top: 28px; width: 44px; height: 56px; }
@@ -1523,7 +1520,4 @@ export default {
 .map { position: absolute; left: 0; top: 0; width: 212px; height: 520px; object-fit: contain; }
 .nav-destination { position: absolute; width: 28px; }
 .nav-marker { position: absolute; width: 30px; height: 38px; object-fit: contain; }
-.diagnostics { width: 212px; flex-direction: column; align-items: center; }
-.log { margin-top: 14px; width: 184px; height: 260px; padding: 10px; font-size: 13px; lines: 12; color: #ffffff; background-color: #0d223d; }
-.clear { margin-top: 10px; width: 184px; height: 40px; border-radius: 20px; font-size: 14px; color: #a9bdd6; background-color: #1f3652; }
 </style>

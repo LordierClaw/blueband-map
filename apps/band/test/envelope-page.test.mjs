@@ -380,12 +380,15 @@ test("cancelled refresh restores the confirmed scene guidance", async () => {
     sceneId: "scene-refresh-01",
     preview: preview({ street: "New Road" })
   })) })
+  assert.equal(page.navStreet, "Old Road")
   page.receiveMessage({ data: envelope("nav-latest", "nav.update", {
     scene: SCENE, seq: 2, x: 108, y: 318, heading: 3,
     maneuver: "straight", distanceM: 120, street: "Latest Road", status: "navigating",
     destinationMode: "hidden", destinationX: 0, destinationY: 0
   }) })
-  assert.equal(page.navStreet, "New Road")
+  assert.equal(page.navArrowPath, "/common/maneuver-straight.png")
+  assert.equal(page.navDistance, "120 m")
+  assert.equal(page.navStreet, "Latest Road")
   page.receiveMessage({ data: envelope("cancel-new", "render.cancel", {
     runId: RUN, sceneId: "scene-refresh-01"
   }) })
