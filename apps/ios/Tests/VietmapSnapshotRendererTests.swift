@@ -172,15 +172,13 @@ final class VietmapSnapshotRendererTests: XCTestCase {
             )],
             distanceMeters: 220
         )
-        let progress = RouteProgress(
-            pointIndex: 0, matchedSegmentIndex: 0, matchedFraction: 0,
-            distanceFromRouteMeters: 0, matchedLocation: origin,
-            shouldReroute: false, status: .navigating
+        var tracker = RouteProgressTracker()
+        let progress = tracker.update(
+            route: route, location: origin, horizontalAccuracyMeters: 5
         )
-        let selection = GuidanceSelection(
-            instructionIndex: 0, instruction: route.instructions[0],
-            maneuverPointIndex: 2, distanceMeters: 220
-        )
+        let selection = try XCTUnwrap(GuidancePresentationPolicy.select(
+            route: route, progress: progress, horizontalAccuracyMeters: 5
+        ))
         let bearing = GuidancePresentationPolicy.stationaryBearing(
             route: route, progress: progress, selection: selection
         )
