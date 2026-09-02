@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.10</text>
+      <text class="version">RPK 0.6.11</text>
     </div>
 
     <div class="connected" if="{{ connected }}">

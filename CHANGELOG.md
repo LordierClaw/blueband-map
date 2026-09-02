@@ -1,5 +1,13 @@
 # Changelog
 
+## iOS 0.5.9 / RPK 0.6.11 - 2026-09-02
+
+- Pair the next Vietmap maneuver and trimmed destination street with the provider distance remaining to that turn, including overlapping instruction intervals observed in hardware logs.
+- Refresh the heading-up snapshot after one second of meaningful movement or a 30-degree bearing change, keep only the newest pending refresh, and remove the route-turn ellipse while preserving the fixed lower-centre cursor and accepted destination marker.
+- Keep location and Bluetooth active only during an explicit navigation session so locked-screen updates can continue; stop releases the Core Location background activity. A displayed update within five seconds remains a real-device acceptance target.
+- Remove the RPK echo/ping screen in favour of a clean iPhone-command waiting state, and keep live guidance visible while a replacement map scene is transferred and published.
+- Bump iOS to `0.5.9 (25)` and RPK to `0.6.11 (26)` because both packaged components change. Application-envelope, render/navigation payload, Xiaomi BLE/SPP/authentication, `212×520`, and `8192-byte` contracts remain unchanged.
+
 ## iOS 0.5.7 / RPK 0.6.9 - 2026-09-02
 
 - Render heading-up Vietmap snapshots at 2× and downsample once before the existing 16-colour, 212×520, ≤8192-byte admission path; use high-quality interpolation in the iPhone preview.

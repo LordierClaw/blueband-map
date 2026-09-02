@@ -39,7 +39,7 @@ struct ContentView: View {
                 if let error = model.errorMessage { Section("Lỗi an toàn") { Text(error).foregroundStyle(.red) } }
                 Section("Build") {
                     LabeledContent("iOS", value: BlueBandProduct.version)
-                    Text("Foreground-only • motorcycle • raster route-card")
+                    Text("Active background navigation • motorcycle • raster route-card")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

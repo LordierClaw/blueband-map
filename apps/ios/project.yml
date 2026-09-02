@@ -8,8 +8,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    CURRENT_PROJECT_VERSION: 24
-    MARKETING_VERSION: 0.5.8
+    CURRENT_PROJECT_VERSION: 25
+    MARKETING_VERSION: 0.5.9
 
 packages:
   BlueBandKit:
