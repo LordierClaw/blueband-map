@@ -64,6 +64,34 @@ final class AppModelPickerTests: XCTestCase {
         model.stopNavigation()
     }
 
+    func testInterruptedRenderRetriesTheFinalFixWithoutAnotherGPSCallback() async throws {
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        let sender = WindowedRouteCardSession()
+        var attempts = 0
+        let retry = expectation(description: "retry interrupted foreground render on the final fix")
+        let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
+            routeTransport: ReplayRouteTransport(), sender: sender, render: { request in
+                attempts += 1
+                if attempts == 1 { throw CancellationError() }
+                retry.fulfill()
+                let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "test", configuration: config)
+            })
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { manager.updating }
+        location.locationManager(manager, didUpdateLocations: [CLLocation(coordinate: .init(latitude: 0, longitude: 0),
+            altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())])
+        await fulfillment(of: [retry], timeout: 3)
+        model.stopNavigation()
+    }
+
     func testCancelledNavigationEpilogueCannotStopRestartedGPS() async {
         let central = PickerCentral()
         let manager = TestLocationManager()

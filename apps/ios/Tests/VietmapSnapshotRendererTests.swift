@@ -91,6 +91,49 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         }
     }
 
+    func testFailedSiblingTileDoesNotRefetchSuccessfulTiles() async throws {
+        let transport = CPUMapTestTransport(failFirstTile: true)
+        let renderer = VietmapCPURenderer(transport: transport)
+        let origin = GeoPoint(latitude: 21.039341, longitude: Double(26041) / 32768 * 360 - 180)
+        let forward = GeoPoint(latitude: origin.latitude + 0.0003, longitude: origin.longitude)
+        let route = RoutePlan(points: [origin, forward], instructions: [], distanceMeters: 33)
+        let request = VietmapSnapshotRequest(route: route, matchedPosition: origin,
+            overlayGeometry: .init(subdued: [], traveled: [], active: route.points, context: []),
+            headingDegrees: 0, nextManeuver: forward, tileMapKey: "fixture-key")
+        do { _ = try await renderer.render(request); XCTFail("one tile must fail first") }
+        catch RouteCardAssetFactory.Error.tileHTTPStatus(503) {}
+        _ = try await renderer.render(request)
+        let counts = await transport.tileCounts()
+        XCTAssertEqual(counts.values.sorted(), [1, 2], "retry only the failed tile, retaining the successful sibling")
+    }
+
+    func testRailDashAndGapRemainDistinctFromSolidRoads() throws {
+        let origin = GeoPoint(latitude: 0, longitude: 0)
+        let route = RoutePlan(points: [origin, GeoPoint(latitude: 0.001, longitude: 0)], instructions: [], distanceMeters: 111)
+        let request = VietmapSnapshotRequest(route: route, matchedPosition: origin,
+            overlayGeometry: .init(subdued: [], traveled: [], active: [], context: []),
+            headingDegrees: 0, nextManeuver: route.points[1], tileMapKey: "fixture-key")
+        let config = try VietmapSnapshotConfiguration.make(request)
+        let tile = VietmapSceneTile(tile: .init(layers: [.init(name: "road", extent: 4096,
+            features: [.init(geometryType: .lineString, properties: [:], lines: [[.init(x: -500, y: -200), .init(x: 500, y: -200)]])])]),
+            zoom: 15, x: 16384, y: 16384)
+        func coloredPixels(_ paint: String) throws -> Int {
+            let layer = try JSONDecoder().decode(VietmapMapStyle.Layer.self,
+                from: Data(("{\"id\":\"road_rail\",\"type\":\"line\",\"source-layer\":\"road\",\"paint\":" + paint + "}").utf8))
+            let style = VietmapMapStyle(template: .init(urlTemplate: "", sourceLayers: []), layers: [layer])
+            let image = try VietmapCPURenderer.draw(request, configuration: config, style: style, tiles: [tile])
+            let bytes = Array(try XCTUnwrap(image.dataProvider?.data) as Data)
+            return stride(from: 0, to: bytes.count, by: 4).filter { bytes[$0] == 47 && bytes[$0 + 1] == 64 && bytes[$0 + 2] == 87 }.count
+        }
+        let solid = try coloredPixels(#"{"line-width":8}"#)
+        let dashed = try coloredPixels(#"{"line-width":8,"line-dasharray":[0.1,3]}"#)
+        XCTAssertGreaterThan(solid, 1000)
+        XCTAssertLessThan(dashed, solid / 2, "rail cross-ties must be dashed")
+        let thin = try coloredPixels(#"{"line-width":2}"#)
+        let rails = try coloredPixels(#"{"line-width":2,"line-gap-width":8}"#)
+        XCTAssertGreaterThan(rails, thin * 3 / 2, "gap styling creates two rails, not one center stroke")
+    }
+
     func testRoadLabelsUseReadableSnapshotTypography() {
         XCTAssertTrue(VietmapStyleLayerPolicy.isRoadLabel(id: "road_primary_label"))
         XCTAssertFalse(VietmapStyleLayerPolicy.isRoadLabel(id: "poi_school"))
@@ -324,6 +367,10 @@ final class VietmapSnapshotRendererTests: XCTestCase {
 private actor CPUMapTestTransport: MapHTTPTransport {
     private var style = 0
     private var tiles = 0
+    private var failFirstTile: Bool
+    private var paths: [String: Int] = [:]
+    init(failFirstTile: Bool = false) { self.failFirstTile = failFirstTile }
+    func tileCounts() -> [String: Int] { paths }
     func counts() -> (style: Int, tiles: Int) { (style, tiles) }
     func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
         if request.url.path.hasSuffix("style.json") {
@@ -334,6 +381,12 @@ private actor CPUMapTestTransport: MapHTTPTransport {
             """#.utf8))
         }
         tiles += 1
+        paths[request.url.path, default: 0] += 1
+        if failFirstTile {
+            failFirstTile = false
+            try await Task.sleep(for: .milliseconds(100))
+            return MapHTTPResponse(statusCode: 503, headers: [:], body: Data())
+        }
         // Independent protobuf: one empty layer named road with extent 4096.
         return MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/x-protobuf"],
             body: Data([0x1a, 0x0b, 0x0a, 0x04, 0x72, 0x6f, 0x61, 0x64, 0x28, 0x80, 0x20, 0x78, 0x02]))
