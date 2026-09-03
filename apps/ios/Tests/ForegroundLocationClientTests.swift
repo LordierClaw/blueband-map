@@ -16,7 +16,8 @@ final class ForegroundLocationClientTests: XCTestCase {
             return true
         })
         client.applicationActive(true)
-        await fulfillment(of: [probeFinished], timeout: 2)
+        // This allows for a loaded parallel-test executor; it is not a location latency contract.
+        await fulfillment(of: [probeFinished], timeout: 10)
         for _ in 0..<100 {
             _ = client.healthText
             _ = client.needsSettings
