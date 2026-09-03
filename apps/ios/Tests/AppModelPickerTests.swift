@@ -92,6 +92,31 @@ final class AppModelPickerTests: XCTestCase {
         model.stopNavigation()
     }
 
+    func testFailedMapRefreshDoesNotHammerProviderWhileGPSKeepsAdvancing() async throws {
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        var attempts = 0
+        let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
+            routeTransport: ReplayRouteTransport(), render: { _ in
+                attempts += 1
+                throw VietmapStyleError.httpStatus(429)
+            })
+        model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { manager.updating }
+        func fix(_ latitude: Double) -> CLLocation {
+            CLLocation(coordinate: .init(latitude: latitude, longitude: 0), altitude: 0,
+                horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())
+        }
+        location.locationManager(manager, didUpdateLocations: [fix(0)])
+        await waitUntil { model.navigationDebugEntries.contains { $0.stage == "map.refresh.failed" } }
+        location.locationManager(manager, didUpdateLocations: [fix(0.0001), fix(0.0002)])
+        try await Task.sleep(for: .milliseconds(1300))
+        XCTAssertEqual(attempts, 1, "a failed map request needs a cooldown independent of GPS cadence")
+        XCTAssertEqual(location.acceptedFixCount, 3)
+        model.stopNavigation()
+    }
+
     func testCancelledNavigationEpilogueCannotStopRestartedGPS() async {
         let central = PickerCentral()
         let manager = TestLocationManager()
