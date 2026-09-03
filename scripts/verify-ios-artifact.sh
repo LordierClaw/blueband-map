@@ -20,8 +20,8 @@ build_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
 
 [[ "$bundle_id" == "dev.lordierclaw.bluebandmap" ]]
 [[ "$minimum_os" == "17.0" ]]
-[[ "$short_version" == "0.5.11" ]]
-[[ "$build_version" == "27" ]]
+[[ "$short_version" == "0.5.12" ]]
+[[ "$build_version" == "28" ]]
 [[ -n "$bluetooth" ]]
 [[ -n "$location" ]]
 [[ -n "$precision" ]]

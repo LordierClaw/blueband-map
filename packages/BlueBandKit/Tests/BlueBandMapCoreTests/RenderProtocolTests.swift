@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 import BlueBandCore
+import BlueBandProtocol
 @testable import BlueBandMapCore
 
 final class RenderProtocolTests: XCTestCase {
@@ -247,6 +248,33 @@ final class RenderProtocolTests: XCTestCase {
         XCTAssertEqual(steps.first?.body["renderer"], .string("raster"))
         XCTAssertEqual(steps.first?.body["format"], .string(RenderFormat.png.rawValue))
         XCTAssertEqual(steps.first?.body["primitives"], .number(0))
+    }
+
+    func testMaximumTransferEnvelopeFitsTheHardwareThirdPartyCommand() throws {
+        let identity = ThirdPartyAppIdentity(
+            packageName: "dev.lordierclaw.bluebandmap.band",
+            fingerprint: Data(repeating: 0xA5, count: 32)
+        )
+        let asset = try RenderAsset(
+            kind: .raster,
+            formatVersion: 1,
+            width: 212,
+            height: 520,
+            data: Data(repeating: 0x37, count: 8_192),
+            primitives: 0
+        )
+        let steps = try RenderTransferPlan.make(asset: asset, runID: runID, sceneID: sceneID)
+
+        for step in steps {
+            let envelope = ApplicationEnvelope.message(
+                id: String(repeating: "\\", count: 32),
+                source: .ios,
+                topic: step.topic,
+                body: step.body
+            )
+            let command = ThirdPartyAppCodec.phoneMessage(identity: identity, content: try envelope.encoded())
+            XCTAssertLessThanOrEqual(command.encode().count, 1_024)
+        }
     }
 
     func testRenderTransferUsesActualIdentifiersWithoutAnObsoleteChunkCountCap() throws {

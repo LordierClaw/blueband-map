@@ -1,5 +1,11 @@
 # Changelog
 
+## iOS 0.5.12 / RPK 0.6.11 - 2026-09-03
+
+- Keep every map chunk below the 1,024-byte Xiaomi ThirdPartyApp command ceiling after package, fingerprint, and protobuf framing are added; the previous app-envelope-only limit produced commands up to 1,076 bytes and could end as `TRANSFER_TIMEOUT`.
+- Restore the application ACK window from four to two to avoid overdriving the real Band while retaining bounded pipelining and the existing atomic publication flow.
+- Bump only iOS to `0.5.12 (28)`. RPK remains `0.6.11 (26)`; UI, GPS, route, marker, image payload, Xiaomi authentication, and application message schemas are unchanged.
+
 ## iOS 0.5.9 / RPK 0.6.11 - 2026-09-02
 
 - Pair the next Vietmap maneuver and trimmed destination street with the provider distance remaining to that turn, including overlapping instruction intervals observed in hardware logs.

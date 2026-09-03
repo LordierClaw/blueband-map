@@ -99,7 +99,7 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         }
     }
 
-    func testDefaultWindowIsFourAndPrepareCarriesNavigationPreview() async throws {
+    func testDefaultWindowIsTwoAndPrepareCarriesNavigationPreview() async throws {
         let session = WindowedRouteCardSession(delayFirstChunk: true)
         let coordinator = RouteCardRenderCoordinator(
             session: session,
@@ -126,8 +126,8 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         let maximumConcurrentChunks = await session.maximumConcurrentChunks
         let chunksStartedWhileFirstPending = await session.chunksStartedWhileFirstPending
         let preparedPreview = await session.prepareValue("preview")
-        XCTAssertEqual(maximumConcurrentChunks, 4)
-        XCTAssertEqual(chunksStartedWhileFirstPending, 3)
+        XCTAssertEqual(maximumConcurrentChunks, 2)
+        XCTAssertEqual(chunksStartedWhileFirstPending, 1)
         XCTAssertEqual(preparedPreview, .object(preview.jsonBody()))
     }
 }

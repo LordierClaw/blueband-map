@@ -22,6 +22,8 @@ public enum RenderTransferPlan {
     public static let maximumSceneIDBytes = RenderProtocol.maximumIdentifierBytes
     private static let envelopeID = String(repeating: "\\", count: 32)
     private static let maximumChunkBytes = RenderProtocol.maximumPayloadBytes
+    // Leaves room for the package, fingerprint, and protobuf fields added by ThirdPartyAppCodec.
+    private static let maximumHardwareSafeEnvelopeBytes = 940
 
     public static func make(asset: RenderAsset, runID: String, sceneID: String) throws -> [RenderTransferStep] {
         guard RenderProtocol.isValidIdentifier(runID) else { throw Error.invalidRunID }
@@ -136,6 +138,6 @@ public enum RenderTransferPlan {
             body: step.body
         )
         guard let encoded = try? envelope.encoded() else { return false }
-        return encoded.count <= ApplicationEnvelope.maximumEncodedSize
+        return encoded.count <= min(ApplicationEnvelope.maximumEncodedSize, maximumHardwareSafeEnvelopeBytes)
     }
 }
