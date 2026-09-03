@@ -23,6 +23,9 @@ grep -Fq 'CURRENT_PROJECT_VERSION: 31' "$project"
 grep -Fq 'MARKETING_VERSION: 0.5.15' "$project"
 grep -Fq 'static let version = "0.5.15"' apps/ios/App/BlueBandMapApp.swift
 grep -Fq 'transferWindow: Int = 1,' apps/ios/App/RouteCardRenderCoordinator.swift
+grep -Fq 'expected_short_version=$(awk' scripts/verify-ios-artifact.sh
+grep -Fq '[[ "$short_version" == "$expected_short_version" ]]' scripts/verify-ios-artifact.sh
+grep -Fq '[[ "$build_version" == "$expected_build_version" ]]' scripts/verify-ios-artifact.sh
 grep -Fq 'scale: 2,' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift
 grep -Fq '.interpolation(.high)' apps/ios/App/ContentView.swift
 grep -Fq 'mask.destinationEdge.destinationEdgePoint' apps/ios/App/AppModel.swift

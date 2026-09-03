@@ -7,6 +7,10 @@ if [[ -z "$app_path" || ! -d "$app_path" ]]; then
   exit 2
 fi
 
+repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+project="$repository_root/apps/ios/project.yml"
+expected_short_version=$(awk '/MARKETING_VERSION:/ { print $2; exit }' "$project")
+expected_build_version=$(awk '/CURRENT_PROJECT_VERSION:/ { print $2; exit }' "$project")
 plist="$app_path/Info.plist"
 test -f "$plist"
 bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")
@@ -20,8 +24,8 @@ build_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
 
 [[ "$bundle_id" == "dev.lordierclaw.bluebandmap" ]]
 [[ "$minimum_os" == "17.0" ]]
-[[ "$short_version" == "0.5.13" ]]
-[[ "$build_version" == "29" ]]
+[[ "$short_version" == "$expected_short_version" ]]
+[[ "$build_version" == "$expected_build_version" ]]
 [[ -n "$bluetooth" ]]
 [[ -n "$location" ]]
 [[ -n "$precision" ]]
