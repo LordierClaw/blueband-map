@@ -152,7 +152,7 @@ final class InterconnectSessionTests: XCTestCase {
         XCTAssertEqual(acknowledged, .acknowledged("i-test"))
     }
 
-    func testAwaitedSendTimesOutOnceWithoutRetry() async throws {
+    func testAwaitedSendRetriesOnceThenTimesOut() async throws {
         let recorder = CommandRecorder()
         let clock = ImmediateRecordingClock()
         let session = makeSession(recorder: recorder, trust: MemoryTrustStore(), clock: clock)
@@ -178,14 +178,84 @@ final class InterconnectSessionTests: XCTestCase {
         let duration = await clock.lastDuration()
         XCTAssertEqual(sent, .sent(envelope))
         XCTAssertEqual(failed, .failed("i-test"))
-        XCTAssertEqual(duration, .seconds(5))
-        XCTAssertEqual(commands.count, 2)
+        XCTAssertEqual(duration, .seconds(3))
+        XCTAssertEqual(commands.count, 3)
+        XCTAssertEqual(commands[2], commands[1])
 
         await session.disconnect()
         let disconnected = await events.next()
         let finished = await events.next()
         XCTAssertEqual(disconnected, .disconnected)
         XCTAssertNil(finished)
+    }
+
+    func testAwaitedSendRetriesExactCommandOnceThenAcceptsAcknowledgement() async throws {
+        let recorder = CommandRecorder()
+        let clock = FirstTimeoutClock()
+        let session = makeSession(recorder: recorder, trust: MemoryTrustStore(), clock: clock)
+        try await session.receive(.statusRequest(identity))
+
+        let result = Task {
+            try await session.sendAwaitingAcknowledgement(
+                topic: "system.echo",
+                body: ["text": JSONValue.string("PING")]
+            )
+        }
+        for _ in 0..<50 where await recorder.commands().count < 3 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let commands = await recorder.commands()
+        guard commands.count == 3 else {
+            _ = try? await result.value
+            return XCTFail("Expected one retry, got \(commands.count - 2)")
+        }
+        XCTAssertEqual(commands[2], commands[1])
+        XCTAssertEqual(commands[2].encode(), commands[1].encode())
+
+        let envelope = try decodePhoneEnvelope(commands[2])
+        let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+
+        let acknowledgedID = try await result.value
+        let durations = await clock.durations()
+        XCTAssertEqual(acknowledgedID, "i-test")
+        XCTAssertEqual(durations, [.seconds(1), .seconds(3)])
+    }
+
+    func testAcknowledgementDuringBlockedRetryCompletesDeliveryImmediately() async throws {
+        let sender = BlockingRetryCommandSender()
+        let clock = FirstTimeoutClock()
+        let session = InterconnectSession(
+            expectedPackage: identity.packageName,
+            trustedRPKStore: MemoryTrustStore(),
+            clock: clock,
+            idGenerator: { "i-retry-race" },
+            sendCommand: { command in try await sender.send(command) }
+        )
+        try await session.receive(.statusRequest(identity))
+
+        let completed = expectation(description: "ACK completes while retry transmit is blocked")
+        let result = Task<Result<String, Swift.Error>, Never> {
+            defer { completed.fulfill() }
+            do {
+                return .success(try await session.sendAwaitingAcknowledgement(topic: "system.echo", body: [:]))
+            } catch {
+                return .failure(error)
+            }
+        }
+        let retry = await sender.waitForRetryCommand()
+        let envelope = try decodePhoneEnvelope(retry)
+        let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+
+        await fulfillment(of: [completed], timeout: 0.2)
+        result.cancel()
+        guard case let .success(id) = await result.value else {
+            return XCTFail("Expected matching ACK to win the retry race")
+        }
+        let phoneSendCount = await sender.phoneSendCount()
+        XCTAssertEqual(id, "i-retry-race")
+        XCTAssertEqual(phoneSendCount, 2)
     }
 
     func testDisconnectResumesPendingAwaitedSendExactlyOnce() async throws {
@@ -959,6 +1029,39 @@ private actor ImmediateRecordingClock: BlueBandClock {
     private var duration: Duration?
     func sleep(for duration: Duration) async throws { self.duration = duration }
     func lastDuration() -> Duration? { duration }
+}
+
+private actor FirstTimeoutClock: BlueBandClock {
+    private var values: [Duration] = []
+
+    func sleep(for duration: Duration) async throws {
+        values.append(duration)
+        if values.count == 1 { return }
+        try await Task.sleep(for: .seconds(60))
+    }
+
+    func durations() -> [Duration] { values }
+}
+
+private actor BlockingRetryCommandSender {
+    private var commands: [BandCommand] = []
+    private var retryWaiters: [CheckedContinuation<BandCommand, Never>] = []
+
+    func send(_ command: BandCommand) async throws {
+        guard command.subtype == 8 else { return }
+        commands.append(command)
+        if commands.count == 1 { return }
+        retryWaiters.forEach { $0.resume(returning: command) }
+        retryWaiters.removeAll()
+        try await Task.sleep(for: .seconds(60))
+    }
+
+    func waitForRetryCommand() async -> BandCommand {
+        if commands.count > 1 { return commands[1] }
+        return await withCheckedContinuation { retryWaiters.append($0) }
+    }
+
+    func phoneSendCount() -> Int { commands.count }
 }
 
 private enum TestSendError: Swift.Error, Equatable {

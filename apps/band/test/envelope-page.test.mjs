@@ -166,6 +166,24 @@ test("publishes only a prepared 212x520 raster snapshot and one aggregate result
   })
 })
 
+test("re-acknowledges an exact duplicate chunk without writing it twice", async () => {
+  const { page, sent, file } = await harness()
+  page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
+  page.receiveMessage({ data: envelope("begin", "map.asset.begin", begin()) })
+  const chunk = envelope("chunk-retry", "map.asset.chunk", {
+    asset: ASSET, run: RUN, scene: SCENE, offset: 0,
+    data: Buffer.from(BYTES).toString("base64")
+  })
+
+  page.receiveMessage({ data: chunk })
+  page.receiveMessage({ data: chunk })
+  page.receiveMessage({ data: envelope("end", "map.asset.end", { asset: ASSET, run: RUN, scene: SCENE }) })
+
+  assert.equal(file.writes.length, 1)
+  assert.deepEqual(file.storage.get(`internal://files/${ASSET}.png`), BYTES)
+  assert.equal(sent.filter(message => message.type === "ack" && message.id === "chunk-retry").length, 2)
+})
+
 test("stores and publishes a prepared JPEG with a jpg extension", async () => {
   const { page, file } = await harness()
   page.receiveMessage({ data: envelope("prepare-jpeg", "render.prepare", prepare({ format: "image/jpeg" })) })

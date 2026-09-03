@@ -34,9 +34,12 @@ public actor InterconnectSession {
     private struct PendingDelivery {
         let token: UUID
         let generation: UInt64
+        let retryCommand: BandCommand?
+        let retryEnvelope: ApplicationEnvelope?
         var waiter: CheckedContinuation<String, Swift.Error>?
         var transmitTask: Task<Void, Never>?
         var timeoutTask: Task<Void, Never>?
+        var retryCount = 0
         var earlyAcknowledged = false
     }
 
@@ -92,7 +95,7 @@ public actor InterconnectSession {
                 if remember(envelope.id) { eventContinuation.yield(.received(envelope)) }
             case .ack:
                 guard var pending = pendingDeliveries[envelope.id] else { return }
-                if pending.timeoutTask != nil {
+                if pending.timeoutTask != nil || pending.retryCount > 0 {
                     _ = removeDelivery(id: envelope.id, token: pending.token)
                     pending.timeoutTask?.cancel()
                     pending.transmitTask?.cancel()
@@ -151,6 +154,8 @@ public actor InterconnectSession {
                         id: id,
                         token: token,
                         generation: currentGeneration,
+                        retryCommand: command,
+                        retryEnvelope: envelope,
                         waiter: continuation
                     )
                     let transmitTask = Self.makeTransmitTask(
@@ -266,10 +271,17 @@ public actor InterconnectSession {
     }
 
     private func startDeliveryTimeout(for id: String, token: UUID, generation: UInt64) {
+        guard let pending = pendingDeliveries[id], pending.token == token else { return }
         let clock = clock
+        let duration: Duration
+        if pending.retryCommand == nil {
+            duration = .seconds(5)
+        } else {
+            duration = pending.retryCount == 0 ? .seconds(1) : .seconds(3)
+        }
         let timeoutTask = Task { [weak self, clock] in
             do {
-                try await clock.sleep(for: .seconds(5))
+                try await clock.sleep(for: duration)
                 guard !Task.isCancelled else { return }
                 await self?.deliveryTimedOut(id, token: token, generation: generation)
             } catch {}
@@ -285,7 +297,25 @@ public actor InterconnectSession {
 
     private func deliveryTimedOut(_ id: String, token: UUID, generation: UInt64) {
         guard isCurrent(id: id, token: token, generation: generation),
-              let pending = removeDelivery(id: id, token: token) else { return }
+              var pending = pendingDeliveries[id] else { return }
+        if pending.retryCount == 0,
+           let command = pending.retryCommand,
+           let envelope = pending.retryEnvelope {
+            pending.retryCount = 1
+            pending.timeoutTask = nil
+            let transmitTask = Self.makeTransmitTask(
+                sender: sendCommand,
+                command: command,
+                envelope: envelope,
+                token: token,
+                generation: generation,
+                session: self
+            )
+            pending.transmitTask = transmitTask
+            pendingDeliveries[id] = pending
+            return
+        }
+        guard let pending = removeDelivery(id: id, token: token) else { return }
         pending.waiter?.resume(throwing: InterconnectDeliveryError.timeout(id))
         eventContinuation.yield(.failed(id))
     }
@@ -294,6 +324,8 @@ public actor InterconnectSession {
         id: String,
         token: UUID,
         generation: UInt64,
+        retryCommand: BandCommand? = nil,
+        retryEnvelope: ApplicationEnvelope? = nil,
         waiter: CheckedContinuation<String, Swift.Error>? = nil
     ) throws {
         guard !isTerminal, self.generation == generation else {
@@ -305,6 +337,8 @@ public actor InterconnectSession {
         pendingDeliveries[id] = PendingDelivery(
             token: token,
             generation: generation,
+            retryCommand: retryCommand,
+            retryEnvelope: retryEnvelope,
             waiter: waiter
         )
     }
@@ -314,7 +348,7 @@ public actor InterconnectSession {
               !isTerminal, pending.generation == generation else { return }
         pending.transmitTask = nil
         pendingDeliveries[id] = pending
-        eventContinuation.yield(.sent(envelope))
+        if pending.retryCount == 0 { eventContinuation.yield(.sent(envelope)) }
         if pending.earlyAcknowledged {
             _ = removeDelivery(id: id, token: token)
             pending.timeoutTask?.cancel()

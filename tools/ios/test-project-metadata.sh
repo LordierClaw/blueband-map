@@ -19,9 +19,9 @@ if grep -Fq 'INFOPLIST_KEY_UIBackgroundModes' "$project"; then
   exit 1
 fi
 grep -Fq 'path: ../../packages/BlueBandKit' "$project"
-grep -Fq 'CURRENT_PROJECT_VERSION: 29' "$project"
-grep -Fq 'MARKETING_VERSION: 0.5.13' "$project"
-grep -Fq 'static let version = "0.5.13"' apps/ios/App/BlueBandMapApp.swift
+grep -Fq 'CURRENT_PROJECT_VERSION: 30' "$project"
+grep -Fq 'MARKETING_VERSION: 0.5.14' "$project"
+grep -Fq 'static let version = "0.5.14"' apps/ios/App/BlueBandMapApp.swift
 grep -Fq 'scale: 2,' apps/ios/Adapters/Vietmap/VietmapSnapshotRenderer.swift
 grep -Fq '.interpolation(.high)' apps/ios/App/ContentView.swift
 grep -Fq 'mask.destinationEdge.destinationEdgePoint' apps/ios/App/AppModel.swift

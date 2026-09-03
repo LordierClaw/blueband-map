@@ -22,6 +22,7 @@ Contract:
 - An ACK reuses the message ID and omits topic and body.
 - Every valid incoming message is ACKed, including duplicates.
 - Duplicate content is emitted once; the newest 64 incoming IDs are retained per session.
-- Delivery fails five seconds after send without ACK. Version 1 never retries automatically.
+- A caller that waits for delivery retries the exact same command and message ID once after one second without an ACK. The retry gets a final three-second ACK window; duplicate IDs are ACKed without applying the message twice.
+- A caller that does not wait for delivery keeps the original five-second failure window and does not retry.
 
 `system.echo` is the only registered sample topic.
