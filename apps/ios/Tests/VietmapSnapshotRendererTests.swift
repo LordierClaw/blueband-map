@@ -8,6 +8,26 @@ import BlueBandMapCore
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
 
+    func testLockedScreenRenderDoesNotRejectAnActiveNavigationRequest() async throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106)
+        let forward = GeoPoint(latitude: 10.001, longitude: 106)
+        let route = RoutePlan(points: [origin, forward], instructions: [], distanceMeters: 111)
+        let renderer = VietmapSnapshotRenderer()
+        renderer.setApplicationActive(false)
+        do {
+            _ = try await renderer.render(VietmapSnapshotRequest(
+                route: route, matchedPosition: origin,
+                overlayGeometry: RouteOverlayGeometry(subdued: [], traveled: [], active: route.points, context: []),
+                headingDegrees: 0, nextManeuver: forward, tileMapKey: "fixture-key"
+            ))
+        } catch VietmapSnapshotRenderer.Error.backgroundUnavailable {
+            XCTFail("An active locked-screen navigation must have a CPU render path, not MAP_BACKGROUND_UNAVAILABLE")
+        } catch {
+            // The fixture has no provider credentials. Network failure is distinct from
+            // refusing to render because the app is backgrounded.
+        }
+    }
+
     func testRoadLabelsUseReadableSnapshotTypography() {
         XCTAssertTrue(VietmapStyleLayerPolicy.isRoadLabel(id: "road_primary_label"))
         XCTAssertFalse(VietmapStyleLayerPolicy.isRoadLabel(id: "poi_school"))
