@@ -144,7 +144,7 @@ final class RouteCardRenderCoordinator {
         session: any RouteCardSessionSending,
         clock: any BlueBandClock = ContinuousBlueBandClock(),
         resultTimeout: Duration = .seconds(15),
-        transferWindow: Int = 2,
+        transferWindow: Int = 1,
         runIDGenerator: @escaping @Sendable () -> String = { RouteCardRenderCoordinator.makeRunID() },
         sceneIDGenerator: @escaping @Sendable () -> String = { RouteCardRenderCoordinator.makeSceneID() }
     ) {

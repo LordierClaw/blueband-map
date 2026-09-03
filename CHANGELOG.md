@@ -1,5 +1,17 @@
 # Changelog
 
+## iOS 0.5.15 / RPK 0.6.11 - 2026-09-04
+
+- Restore the hardware-safe stop-and-wait map transfer default after iOS 0.5.14 still stalled at 7/18 application ACKs with `TRANSFER_TIMEOUT` under a two-message window.
+- Keep explicit windows 2/4 available for controlled tests, but require real-device evidence before using them in production again.
+- Bump only iOS to `0.5.15 (31)`. RPK, map payload limits, UI, GPS, render pipeline, Xiaomi bytes, and application schemas remain unchanged.
+
+## iOS 0.5.14 / RPK 0.6.11 - 2026-09-03
+
+- Retry the same immutable application command once after a one-second ACK timeout, then retain the final three-second timeout and reconnect boundary.
+- Keep duplicate map chunks idempotent on the Band and preserve all encoded command bytes.
+- Bump only iOS to `0.5.14 (30)`. RPK remains `0.6.11 (26)`.
+
 ## iOS 0.5.13 / RPK 0.6.11 - 2026-09-03
 
 - Front-load the latest navigation event so a truncated 1 KiB export still contains the terminal failure.

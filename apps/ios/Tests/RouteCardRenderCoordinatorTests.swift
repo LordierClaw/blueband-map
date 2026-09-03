@@ -55,7 +55,7 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.failureCode, "ASSET_READY_TIMEOUT")
         XCTAssertTrue(coordinator.requiresReconnect)
         XCTAssertTrue(coordinator.diagnostic.contains("terminal=ASSET_READY_TIMEOUT acked=1/4"))
-        XCTAssertTrue(coordinator.diagnostic.contains("transferMs=0 window=2"))
+        XCTAssertTrue(coordinator.diagnostic.contains("transferMs=0 window=1"))
     }
 
     func testChunkAcknowledgementWindowsStayBounded() async throws {
@@ -101,7 +101,7 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         }
     }
 
-    func testDefaultWindowIsTwoAndPrepareCarriesNavigationPreview() async throws {
+    func testDefaultWindowWaitsForEachChunkAcknowledgementAndCarriesNavigationPreview() async throws {
         let session = WindowedRouteCardSession(delayFirstChunk: true)
         let coordinator = RouteCardRenderCoordinator(
             session: session,
@@ -128,8 +128,8 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         let maximumConcurrentChunks = await session.maximumConcurrentChunks
         let chunksStartedWhileFirstPending = await session.chunksStartedWhileFirstPending
         let preparedPreview = await session.prepareValue("preview")
-        XCTAssertEqual(maximumConcurrentChunks, 2)
-        XCTAssertEqual(chunksStartedWhileFirstPending, 1)
+        XCTAssertEqual(maximumConcurrentChunks, 1)
+        XCTAssertEqual(chunksStartedWhileFirstPending, 0)
         XCTAssertEqual(preparedPreview, .object(preview.jsonBody()))
     }
 }
