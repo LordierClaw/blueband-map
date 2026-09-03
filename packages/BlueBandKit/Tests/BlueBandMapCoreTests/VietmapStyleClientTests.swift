@@ -5,6 +5,43 @@ import XCTest
 final class VietmapStyleClientTests: XCTestCase {
     private let key = "tile-test-key"
 
+    func testCPUStylePreservesGeometryLayersFiltersAndZoomWidths() async throws {
+        let transport = StyleRecordingTransport(responses: [jsonResponse(#"""
+        {"version":8,"sources":{"map":{"type":"vector","maxzoom":15,
+          "tiles":["https://maps.vietmap.vn/tiles/{z}/{x}/{y}.pbf?apikey={apikey}"]}},
+         "layers":[{"id":"building","type":"fill","source":"map","source-layer":"building"},
+          {"id":"road_primary","type":"line","source":"map","source-layer":"road",
+           "filter":["all",["==","class","primary"],[">=","layer",0],["has","name"]],
+           "paint":{"line-width":{"base":1,"stops":[[16,6],[18,10]]}},
+           "layout":{"text-field":"{prefix} {name}"}}]}
+        """#)])
+        let style = try await VietmapStyleClient(transport: transport).loadMapStyle(tileMapKey: key)
+        XCTAssertEqual(style.template.sourceLayers, ["building", "road"])
+        XCTAssertEqual(style.template.maximumZoom, 15)
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.first?.url.path, "/maps/styles/dm/style.json")
+        let road = try XCTUnwrap(style.layers.last)
+        let feature = MapboxVectorTile.Feature(geometryType: .lineString,
+            properties: ["class": "primary", "name": "Nguyễn Khuyến", "layer": "0"], lines: [])
+        XCTAssertTrue(road.matches(feature))
+        XCTAssertFalse(road.matches(.init(geometryType: .lineString, properties: ["class": "minor"], lines: [])))
+        XCTAssertEqual(road.number("line-width", zoom: 17, fallback: 1), 8)
+        XCTAssertEqual(road.text(for: feature), "Nguyễn Khuyến")
+    }
+
+    func testCPUStyleRejectsForeignTileSourceAndUnsupportedFilter() async throws {
+        let transport = StyleRecordingTransport(responses: [jsonResponse(#"""
+        {"sources":{"map":{"type":"vector","tiles":["https://foreign.example/{z}/{x}/{y}"]}},
+         "layers":[{"id":"water","type":"fill","source":"map","source-layer":"water"}]}
+        """#)])
+        do {
+            _ = try await VietmapStyleClient(transport: transport).loadMapStyle(tileMapKey: key)
+            XCTFail("Foreign tile URLs must be rejected before a credential-bearing fetch")
+        } catch { XCTAssertEqual(error as? VietmapStyleError, .foreignHost) }
+        let layer = try JSONDecoder().decode(VietmapMapStyle.Layer.self, from: Data(#"{"id":"road","type":"line","filter":["unknown","class"]}"#.utf8))
+        XCTAssertFalse(layer.matches(.init(geometryType: .lineString, properties: [:], lines: [])))
+    }
+
     func testDiscoversInlineVectorTilesAndRoadLayersWithAResponseCap() async throws {
         let style = """
         {

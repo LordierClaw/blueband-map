@@ -12,19 +12,82 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         let origin = GeoPoint(latitude: 10, longitude: 106)
         let forward = GeoPoint(latitude: 10.001, longitude: 106)
         let route = RoutePlan(points: [origin, forward], instructions: [], distanceMeters: 111)
-        let renderer = VietmapSnapshotRenderer()
+        let transport = CPUMapTestTransport()
+        let renderer = VietmapSnapshotRenderer(backgroundRenderer: VietmapCPURenderer(transport: transport))
         renderer.setApplicationActive(false)
-        do {
-            _ = try await renderer.render(VietmapSnapshotRequest(
+        for index in 0..<5 {
+            let request = VietmapSnapshotRequest(
                 route: route, matchedPosition: origin,
                 overlayGeometry: RouteOverlayGeometry(subdued: [], traveled: [], active: route.points, context: []),
                 headingDegrees: 0, nextManeuver: forward, tileMapKey: "fixture-key"
-            ))
-        } catch VietmapSnapshotRenderer.Error.backgroundUnavailable {
-            XCTFail("An active locked-screen navigation must have a CPU render path, not MAP_BACKGROUND_UNAVAILABLE")
-        } catch {
-            // The fixture has no provider credentials. Network failure is distinct from
-            // refusing to render because the app is backgrounded.
+            )
+            let output = try await renderer.render(request)
+            XCTAssertEqual(output.cacheState, index == 0 ? "cpu-cold" : "cpu-warm")
+            XCTAssertEqual(output.image.width, 424)
+            let encoded = try SnapshotImageEncoder.encode(output.image)
+            XCTAssertLessThanOrEqual(encoded.data.count, 8192)
+            XCTAssertEqual(output.configuration.point(for: origin).x, 106, accuracy: 0.5)
+            XCTAssertEqual(output.configuration.point(for: origin).y, 374, accuracy: 0.5)
+        }
+        let counts = await transport.counts()
+        XCTAssertEqual(counts.style, 1)
+        XCTAssertLessThanOrEqual(counts.tiles, 4, "a stationary camera reuses decoded source tiles")
+    }
+
+    func testCPUHeadingProjectionGeometryLabelsAndFinalPayload() throws {
+        let origin = GeoPoint(latitude: 21.039341, longitude: 106.092286)
+        let world = mercator(origin, worldSize: 4096 * pow(2, 15))
+        let x = Int(world.x / 4096), y = Int(world.y / 4096)
+        let localX = Int(world.x) - x * 4096, localY = Int(world.y) - y * 4096
+        func point(_ dx: Int, _ dy: Int) -> MapboxVectorTile.TilePoint { .init(x: localX + dx, y: localY + dy) }
+        let source = VietmapSceneTile(tile: MapboxVectorTile(layers: [
+            .init(name: "road", extent: 4096, features: [
+                .init(geometryType: .lineString, properties: ["name": "Nguyễn Khuyến", "class": "primary"],
+                      lines: [[point(-650, -220), point(650, -220)]]),
+                .init(geometryType: .lineString, properties: ["name": "Đường Bắc", "class": "primary"],
+                      lines: [[point(0, 700), point(0, 0), point(0, -700)]]),
+                .init(geometryType: .lineString, properties: ["name": "Đường Cong", "class": "primary"],
+                      lines: [[point(-550, 350), point(-350, 150), point(-300, -250), point(-200, -600)]])
+            ]),
+            .init(name: "water", extent: 4096, features: [
+                .init(geometryType: .polygon, properties: [:], lines: [
+                    [point(150, -550), point(600, -550), point(600, -300), point(150, -300), point(150, -550)],
+                    [point(250, -450), point(250, -350), point(350, -350), point(350, -450), point(250, -450)]
+                ])
+            ])
+        ]), zoom: 15, x: x, y: y)
+        let layers = try JSONDecoder().decode([VietmapMapStyle.Layer].self, from: Data(#"""
+        [{"id":"water","type":"fill","source-layer":"water"},
+         {"id":"road_primary","type":"line","source-layer":"road","paint":{"line-width":12}},
+         {"id":"road_primary_label","type":"symbol","source-layer":"road","layout":{"text-field":"{name}"}}]
+        """#.utf8))
+        let style = VietmapMapStyle(template: .init(urlTemplate: "", sourceLayers: []), layers: layers)
+        for heading in [0.0, 45, 90, 180, 270] {
+            let radians = heading * .pi / 180
+            let forward = GeoPoint(latitude: origin.latitude + 0.0003 * cos(radians),
+                                   longitude: origin.longitude + 0.0003 * sin(radians) / cos(origin.latitude * .pi / 180))
+            let route = RoutePlan(points: [origin, forward], instructions: [], distanceMeters: 33)
+            let request = VietmapSnapshotRequest(route: route, matchedPosition: origin,
+                overlayGeometry: .init(subdued: [], traveled: [], active: route.points, context: []),
+                headingDegrees: heading, nextManeuver: forward, tileMapKey: "fixture-key")
+            let configuration = try VietmapSnapshotConfiguration.make(request)
+            let tileCoordinates = VietmapCPURenderer.tileCoordinates(configuration, zoom: 15)
+            XCTAssertTrue(tileCoordinates.contains { $0.x == x && $0.y == y })
+            XCTAssertLessThanOrEqual(tileCoordinates.count, 4)
+            let image = try VietmapCPURenderer.draw(request, configuration: configuration, style: style, tiles: [source])
+            let encoded = try SnapshotImageEncoder.encode(image)
+            XCTAssertLessThanOrEqual(encoded.data.count, 8192)
+            XCTAssertGreaterThan(encoded.data.count, 1000, "roads and text must survive final encoding")
+            let marker = configuration.point(for: origin)
+            XCTAssertEqual(marker.x, 106, accuracy: 0.5)
+            XCTAssertEqual(marker.y, 374, accuracy: 0.5)
+            let ahead = configuration.point(for: forward)
+            XCTAssertEqual(ahead.x, marker.x, accuracy: 1)
+            XCTAssertLessThan(ahead.y, marker.y)
+            let attachment = XCTAttachment(data: encoded.data, uniformTypeIdentifier: encoded.format == .jpeg ? "public.jpeg" : "public.png")
+            attachment.name = "CPU-map-\(Int(heading))-\(encoded.data.count)bytes"
+            attachment.lifetime = .keepAlways
+            add(attachment)
         }
     }
 
@@ -255,5 +318,24 @@ final class VietmapSnapshotRendererTests: XCTestCase {
             x: (point.longitude + 180) / 360 * worldSize,
             y: (1 - log(tan(latitude) + 1 / cos(latitude)) / .pi) / 2 * worldSize
         )
+    }
+}
+
+private actor CPUMapTestTransport: MapHTTPTransport {
+    private var style = 0
+    private var tiles = 0
+    func counts() -> (style: Int, tiles: Int) { (style, tiles) }
+    func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
+        if request.url.path.hasSuffix("style.json") {
+            style += 1
+            return MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: Data(#"""
+            {"version":8,"sources":{"map":{"type":"vector","maxzoom":15,"tiles":["https://maps.vietmap.vn/tiles/{z}/{x}/{y}?apikey={apikey}"]}},
+             "layers":[{"id":"background","type":"background"},{"id":"road_primary","type":"line","source":"map","source-layer":"road"}]}
+            """#.utf8))
+        }
+        tiles += 1
+        // Independent protobuf: one empty layer named road with extent 4096.
+        return MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/x-protobuf"],
+            body: Data([0x1a, 0x0b, 0x0a, 0x04, 0x72, 0x6f, 0x61, 0x64, 0x28, 0x80, 0x20, 0x78, 0x02]))
     }
 }

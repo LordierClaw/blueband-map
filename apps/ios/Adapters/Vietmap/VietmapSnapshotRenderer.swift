@@ -35,13 +35,24 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
     let center: GeoPoint
 
     func point(for coordinate: GeoPoint) -> CGPoint {
-        let centerWorld = world(center), pointWorld = world(coordinate)
+        point(worldPoint: world(coordinate))
+    }
+
+    func point(worldPoint pointWorld: CGPoint) -> CGPoint {
+        let centerWorld = world(center)
         let angle = heading * .pi / 180
         let x = pointWorld.x - centerWorld.x, y = pointWorld.y - centerWorld.y
         return CGPoint(
             x: size.width / 2 + x * cos(angle) + y * sin(angle),
             y: size.height / 2 - x * sin(angle) + y * cos(angle)
         )
+    }
+
+    func worldPoint(for screen: CGPoint) -> CGPoint {
+        let centerWorld = world(center), angle = heading * .pi / 180
+        let x = screen.x - size.width / 2, y = screen.y - size.height / 2
+        return CGPoint(x: centerWorld.x + x * cos(angle) - y * sin(angle),
+                       y: centerWorld.y + x * sin(angle) + y * cos(angle))
     }
 
     static func make(_ request: VietmapSnapshotRequest) throws -> Self {
@@ -236,15 +247,18 @@ struct VietmapRouteOverlay {
     }
 
     static func draw(_ request: VietmapSnapshotRequest, on overlay: MGLMapSnapshotOverlay) {
-        let context = overlay.context
+        draw(request, context: overlay.context) { overlay.point(for: coordinate($0)) }
+    }
+
+    static func draw(_ request: VietmapSnapshotRequest, context: CGContext, project: (GeoPoint) -> CGPoint) {
         context.saveGState()
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        drawPath(request.overlayGeometry.subdued, color: VietmapDarkStyle.color(hex: subduedColorHex).cgColor, width: 3, overlay: overlay)
-        drawPath(request.overlayGeometry.traveled, color: VietmapDarkStyle.color(hex: traveledColorHex).cgColor, width: 4, overlay: overlay)
-        drawPath(request.overlayGeometry.context, color: VietmapDarkStyle.color(hex: contextColorHex).cgColor, width: 4, overlay: overlay)
-        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeCasingColorHex).cgColor, width: 10, overlay: overlay)
-        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeColorHex).cgColor, width: 6, overlay: overlay)
+        drawPath(request.overlayGeometry.subdued, color: VietmapDarkStyle.color(hex: subduedColorHex).cgColor, width: 3, context: context, project: project)
+        drawPath(request.overlayGeometry.traveled, color: VietmapDarkStyle.color(hex: traveledColorHex).cgColor, width: 4, context: context, project: project)
+        drawPath(request.overlayGeometry.context, color: VietmapDarkStyle.color(hex: contextColorHex).cgColor, width: 4, context: context, project: project)
+        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeCasingColorHex).cgColor, width: 10, context: context, project: project)
+        drawPath(request.overlayGeometry.active, color: VietmapDarkStyle.color(hex: activeColorHex).cgColor, width: 6, context: context, project: project)
         context.restoreGState()
     }
 
@@ -252,13 +266,13 @@ struct VietmapRouteOverlay {
         _ points: [GeoPoint],
         color: CGColor,
         width: CGFloat,
-        overlay: MGLMapSnapshotOverlay
+        context: CGContext,
+        project: (GeoPoint) -> CGPoint
     ) {
         guard points.count >= 2 else { return }
-        let context = overlay.context
         context.beginPath()
-        context.move(to: overlay.point(for: coordinate(points[0])))
-        for point in points.dropFirst() { context.addLine(to: overlay.point(for: coordinate(point))) }
+        context.move(to: project(points[0]))
+        for point in points.dropFirst() { context.addLine(to: project(point)) }
         context.setStrokeColor(color)
         context.setLineWidth(width)
         context.strokePath()
@@ -303,6 +317,12 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     private var applicationActive = true
     private var deadlineTask: Task<Void, Never>?
     private var renderGeneration = 0
+    private let backgroundRenderer: VietmapCPURenderer
+
+    init(backgroundRenderer: VietmapCPURenderer = VietmapCPURenderer()) {
+        self.backgroundRenderer = backgroundRenderer
+        super.init()
+    }
 
     func setApplicationActive(_ active: Bool) {
         applicationActive = active
@@ -333,7 +353,19 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     }
 
     func render(_ request: VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput {
-        guard applicationActive else { throw Error.backgroundUnavailable }
+        if !applicationActive {
+            let renderer = backgroundRenderer
+            return try await withThrowingTaskGroup(of: VietmapSnapshotOutput.self) { group in
+                group.addTask { try await renderer.render(request) }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(3))
+                    throw Error.timedOut
+                }
+                defer { group.cancelAll() }
+                guard let result = try await group.next() else { throw CancellationError() }
+                return result
+            }
+        }
         try Task.checkCancellation()
         guard snapshotter == nil else { throw Error.busy }
         renderGeneration += 1

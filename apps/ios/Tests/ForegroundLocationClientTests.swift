@@ -7,6 +7,9 @@ final class ForegroundLocationClientTests: XCTestCase {
     func testServiceAvailabilityProbeDoesNotBlockMainActorOrRepeatForHealthReads() async {
         let manager = TestLocationManager()
         let probeFinished = expectation(description: "background service probe")
+        // CLLocationManager may deliver its initial authorization callback after init.
+        // That is an allowed second lifecycle probe, independent of health reads below.
+        probeFinished.assertForOverFulfill = false
         let client = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: {
             XCTAssertFalse(Thread.isMainThread, "Core Location's global service query must not block GPS/UI")
             probeFinished.fulfill()

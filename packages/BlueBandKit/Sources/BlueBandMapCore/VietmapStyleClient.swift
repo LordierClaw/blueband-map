@@ -62,6 +62,28 @@ public struct VietmapStyleClient: Sendable {
         self.transport = transport
     }
 
+    public func loadMapStyle(tileMapKey: String) async throws -> VietmapMapStyle {
+        let key = try Self.validatedKey(tileMapKey)
+        let url = try Self.authorizedURL("https://maps.vietmap.vn/maps/styles/dm/style.json", key: key)
+        let object = try await fetchJSONObject(url, key: key)
+        guard let sources = object["sources"] as? [String: Any],
+              let rawLayers = object["layers"] as? [[String: Any]], rawLayers.count <= 512 else {
+            throw VietmapStyleError.invalidJSON
+        }
+        let layers = try JSONDecoder().decode([VietmapMapStyle.Layer].self,
+            from: JSONSerialization.data(withJSONObject: rawLayers))
+        let sourceNames = Set(layers.compactMap(\.source))
+        guard sourceNames.count == 1, let name = sourceNames.first,
+              let source = sources[name] as? [String: Any], source["type"] as? String == "vector" else {
+            throw VietmapStyleError.unsupportedSource
+        }
+        let resolved = try await resolveTileSource(source: source, key: key)
+        return VietmapMapStyle(template: VectorTileTemplate(
+            urlTemplate: resolved.template, sourceLayers: Set(layers.compactMap(\.sourceLayer)).sorted(),
+            minimumZoom: resolved.minimumZoom, maximumZoom: resolved.maximumZoom
+        ), layers: layers)
+    }
+
     public func discover(tileMapKey: String) async throws -> VectorTileTemplate {
         let key = try Self.validatedKey(tileMapKey)
         let styleURL = try Self.authorizedURL(
