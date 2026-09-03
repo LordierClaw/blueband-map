@@ -252,6 +252,7 @@ struct VietmapRouteOverlay {
 
     static func draw(_ request: VietmapSnapshotRequest, context: CGContext, project: (GeoPoint) -> CGPoint) {
         context.saveGState()
+        context.setLineDash(phase: 0, lengths: [])
         context.setLineCap(.round)
         context.setLineJoin(.round)
         drawPath(request.overlayGeometry.subdued, color: VietmapDarkStyle.color(hex: subduedColorHex).cgColor, width: 3, context: context, project: project)

@@ -1,5 +1,7 @@
 # Live Location and Background Map Repair Plan
 
+**Continuation:** The subsequent completion work and delivery evidence are tracked in [Realtime navigation completion and handoff](2026-09-03-realtime-map-handoff.md). This document retains the earlier investigation and experiment checkpoints; its unintegrated-CPU status below describes that checkpoint, not the later implementation.
+
 > **For agentic workers:** Use `superpowers:executing-plans` for approved implementation, inline on `main`. Do not use subagents or change the renderer before the evidence and visual gates below pass.
 
 **Goal:** Keep real GPS, guidance, heading-up map rendering, and Band publication live during a user-started route, including ordinary iPhone screen lock, without changing the accepted visual or wire contract.

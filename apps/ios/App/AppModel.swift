@@ -91,6 +91,7 @@ final class AppModel: ObservableObject {
     private var activeSnapshotConfiguration: VietmapSnapshotConfiguration?
     private var activeSnapshotAnchor: GeoPoint?
     private var lastSnapshotRefreshStartedAt: Date?
+    private var snapshotRetryAfter = Date.distantPast
     private var navigationStartedMilliseconds = 0
     private var navigationDebugSequence = 0
     private var navigationScreenIsActive = false
@@ -295,6 +296,7 @@ final class AppModel: ObservableObject {
             "serviceKey=present tileMapKey=\(tileMapAvailability)"
         )
         navigationGeneration += 1
+        snapshotRetryAfter = .distantPast
         let generation = navigationGeneration
         navigationTask = Task { @MainActor [weak self] in
             await self?.runNavigation(
@@ -325,6 +327,7 @@ final class AppModel: ObservableObject {
         activeSnapshotConfiguration = nil
         activeSnapshotAnchor = nil
         lastSnapshotRefreshStartedAt = nil
+        snapshotRetryAfter = .distantPast
         guidanceBearingPolicy = GuidanceBearingPolicy()
         routePreviewPNG = nil
         navigationState = .idle
@@ -644,7 +647,7 @@ final class AppModel: ObservableObject {
         )
         logNavigation(
             "map.rendered",
-            "bytes=\(asset.byteCount) format=\(encoded.format.rawValue) jpegQuality=\(encoded.jpegQuality ?? 0) " +
+            "cache=\(snapshot.cacheState) bytes=\(asset.byteCount) format=\(encoded.format.rawValue) jpegQuality=\(encoded.jpegQuality ?? 0) " +
             "palette=\(encoded.colorCount) pixelBlock=\(encoded.pixelBlockSize) zoom=\(Int(snapshot.zoom)) " +
             "layers=\(snapshot.retainedFillLayers)/\(snapshot.retainedLineLayers)/\(snapshot.retainedSymbolLayers) " +
             "styleMs=\(snapshot.styleLoadMilliseconds) snapshotMs=\(snapshot.snapshotMilliseconds) encodeMs=\(encoded.durationMilliseconds)"
@@ -737,7 +740,8 @@ final class AppModel: ObservableObject {
     private func drainSnapshotRefreshes(generation: Int) async {
         defer { if generation == navigationGeneration { snapshotRefreshTask = nil } }
         while !Task.isCancelled, generation == navigationGeneration, pendingSnapshotRefresh != nil {
-            let delay = max(0, 1 - (lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? 1))
+            let delay = max(0, snapshotRetryAfter.timeIntervalSinceNow,
+                            1 - (lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? 1))
             do { if delay > 0 { try await Task.sleep(for: .seconds(delay)) } } catch { return }
             guard generation == navigationGeneration, !Task.isCancelled,
                   let request = pendingSnapshotRefresh else { return }
@@ -761,8 +765,12 @@ final class AppModel: ObservableObject {
                 )
             } catch is CancellationError {
                 if Task.isCancelled { break }
+                // The SDK is cancelled when iOS becomes inactive. Keep the final fix
+                // for the CPU path even if movement stops before another GPS callback.
+                if pendingSnapshotRefresh == nil { pendingSnapshotRefresh = request }
             } catch {
                 guard generation == navigationGeneration else { return }
+                snapshotRetryAfter = Date().addingTimeInterval(5)
                 navigationState = .limitedMap
                 sendNavigationUpdate(
                     route: request.route,
@@ -1054,6 +1062,10 @@ final class AppModel: ObservableObject {
         case VietmapSnapshotRenderer.Error.provider: "MAP_PROVIDER_FAILED"
         case VietmapSnapshotRenderer.Error.invalidRequest: "MAP_INVALID_REQUEST"
         case VietmapSnapshotRenderer.Error.styleLoadFailed: "MAP_STYLE_FAILED"
+        case let VietmapStyleError.httpStatus(status): "MAP_STYLE_HTTP_\(status)"
+        case let RouteCardAssetFactory.Error.tileHTTPStatus(status): "MAP_TILE_HTTP_\(status)"
+        case is VietmapStyleError: "MAP_STYLE_INVALID"
+        case is MapboxVectorTile.Error: "MAP_TILE_INVALID"
         case VietmapSnapshotRenderer.Error.snapshotFailed, VietmapSnapshotRenderer.Error.imageUnavailable: "MAP_SNAPSHOT_FAILED"
         case SnapshotImageEncoder.Error.payloadTooLarge: "MAP_PAYLOAD_TOO_LARGE"
         case NavigationRuntimeError.bandDisplayFailed: "BAND_DISPLAY_FAILED"

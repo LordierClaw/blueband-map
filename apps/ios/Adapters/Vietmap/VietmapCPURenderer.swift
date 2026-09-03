@@ -42,7 +42,7 @@ actor VietmapCPURenderer {
             return tiles[url] == nil ? (url, coordinate.x, coordinate.y) : nil
         }
         let transport = transport
-        let fetched = try await withThrowingTaskGroup(of: (URL, VietmapSceneTile, Int).self) { group in
+        try await withThrowingTaskGroup(of: (URL, VietmapSceneTile, Int).self) { group in
             for (url, x, y) in missing {
                 group.addTask {
                     let response = try await transport.execute(MapHTTPRequest(method: "GET", url: url,
@@ -66,27 +66,21 @@ actor VietmapCPURenderer {
                     return (url, VietmapSceneTile(tile: tile, zoom: zoom, x: x, y: y), cost)
                 }
             }
-            var fetched: [(URL, VietmapSceneTile, Int)] = []
             var cost = 0
-            for try await value in group {
-                cost += value.2
+            for try await (url, tile, tileCost) in group {
+                try Task.checkCancellation()
+                cost += tileCost
                 guard cost <= 24 * 1024 * 1024 else { throw VietmapSnapshotRenderer.Error.imageUnavailable }
-                fetched.append(value)
+                tiles[url] = tile; costs[url] = tileCost
+                order.removeAll { $0 == url }; order.append(url)
+                trimCache()
             }
-            return fetched
         }
         try Task.checkCancellation()
-        for (url, tile, cost) in fetched {
-            tiles[url] = tile; costs[url] = cost
-        }
         let urls = try coordinates.map { try style.template.url(z: zoom, x: $0.x, y: $0.y, tileMapKey: request.tileMapKey) }
         let sourceTiles = urls.compactMap { tiles[$0] }
         for url in urls { order.removeAll { $0 == url }; order.append(url) }
-        while order.count > 16 || costs.values.reduce(0, +) > 24 * 1024 * 1024 {
-            guard !order.isEmpty else { break }
-            let oldest = order.removeFirst()
-            tiles.removeValue(forKey: oldest); costs.removeValue(forKey: oldest)
-        }
+        trimCache()
         guard sourceTiles.count == coordinates.count else { throw VietmapSnapshotRenderer.Error.imageUnavailable }
         let image = try Self.draw(request, configuration: configuration, style: style, tiles: sourceTiles)
         let layers = Self.layers(style, request: request, configuration: configuration)
@@ -97,6 +91,14 @@ actor VietmapCPURenderer {
             zoom: configuration.zoom, styleLoadMilliseconds: Int(loaded.timeIntervalSince(started) * 1000),
             snapshotMilliseconds: Int(Date().timeIntervalSince(loaded) * 1000),
             cacheState: missing.isEmpty ? "cpu-warm" : "cpu-cold", configuration: configuration)
+    }
+
+    private func trimCache() {
+        while order.count > 16 || costs.values.reduce(0, +) > 24 * 1024 * 1024 {
+            guard !order.isEmpty else { break }
+            let oldest = order.removeFirst()
+            tiles.removeValue(forKey: oldest); costs.removeValue(forKey: oldest)
+        }
     }
 
     nonisolated static func tileCoordinates(_ config: VietmapSnapshotConfiguration, zoom: Int) -> [(x: Int, y: Int)] {
@@ -131,7 +133,7 @@ actor VietmapCPURenderer {
         context.scaleBy(x: 2, y: -2)
         context.setFillColor(VietmapDarkStyle.color(id: "background", type: "background").cgColor)
         context.fill(CGRect(x: 0, y: 0, width: 212, height: 520))
-        var occupied: [CGRect] = [], names = Set<String>()
+        var occupied = [CGRect(x: 75, y: 481, width: 62, height: 18)], names = Set<String>()
         let centerWorld = configuration.worldPoint(for: CGPoint(x: 106, y: 260))
         let angle = configuration.heading * .pi / 180, cosine = cos(angle), sine = sin(angle)
         for layer in layers(style, request: request, configuration: configuration) {
@@ -139,9 +141,20 @@ actor VietmapCPURenderer {
             if layer.type == "background" { continue }
             let color = VietmapDarkStyle.color(id: layer.id, type: layer.type).cgColor
             context.setFillColor(color); context.setStrokeColor(color)
-            context.setLineWidth(min(128, max(0, layer.number("line-width", zoom: configuration.zoom, fallback: 1))))
-            context.setLineCap(layer.layout?["line-cap"] == .string("round") ? .round : .butt)
-            context.setLineJoin(layer.layout?["line-join"] == .string("round") ? .round : .miter)
+            let width = min(128, max(0, layer.number("line-width", zoom: configuration.zoom, fallback: 1)))
+            let gap = min(128, max(0, layer.number("line-gap-width", zoom: configuration.zoom, fallback: 0)))
+            let cap: CGLineCap = layer.layout?["line-cap"] == .string("round") ? .round : .butt
+            let join: CGLineJoin = layer.layout?["line-join"] == .string("round") ? .round : .miter
+            var dash: [CGFloat] = []
+            if case let .array(values) = layer.paint?["line-dasharray"], values.count <= 16 {
+                dash = values.compactMap {
+                    guard case let .number(value) = $0, value.isFinite, value > 0 else { return nil }
+                    return min(1024, value * width)
+                }
+            }
+            context.setLineWidth(width)
+            context.setLineCap(cap); context.setLineJoin(join)
+            context.setLineDash(phase: 0, lengths: dash)
             context.setAlpha(min(1, max(0, layer.number(layer.type + "-opacity", zoom: configuration.zoom, fallback: 1))))
             for tile in tiles {
                 guard let source = tile.tile.layers.first(where: { $0.name == layer.sourceLayer }) else { continue }
@@ -165,7 +178,15 @@ actor VietmapCPURenderer {
                         for point in line.dropFirst() { context.addLine(to: point) }
                         if layer.type == "fill" { context.closePath() }
                     }
-                    if layer.type == "fill" { context.drawPath(using: .eoFill) } else { context.strokePath() }
+                    if layer.type == "fill" {
+                        context.drawPath(using: .eoFill)
+                    } else if gap > 0, let path = context.path {
+                        let line = dash.isEmpty ? path : path.copy(dashingWithPhase: 0, lengths: dash)
+                        context.beginPath()
+                        context.addPath(line.copy(strokingWithWidth: gap + 2 * width, lineCap: cap, lineJoin: join, miterLimit: 10))
+                        context.addPath(line.copy(strokingWithWidth: gap, lineCap: cap, lineJoin: join, miterLimit: 10))
+                        context.drawPath(using: .eoFill)
+                    } else { context.strokePath() }
                 }
             }
         }
