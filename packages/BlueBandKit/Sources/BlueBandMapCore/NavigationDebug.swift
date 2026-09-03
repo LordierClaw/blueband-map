@@ -36,6 +36,18 @@ public enum NavigationDebugFormatter {
             "alternativePaths=\(alternativePathCount.map(String.init) ?? "—")",
             "instructionCount=\(instructions.count)",
         ]
+        if let entry = entries.last(where: { $0.stage.hasSuffix(".failed") }) {
+            lines.append(
+                "lastFailure=[\(max(0, entry.elapsedMilliseconds))ms] #\(max(0, entry.sequence)) " +
+                "\(oneLine(entry.stage)) \(oneLine(entry.detail))"
+            )
+        }
+        if let entry = entries.last {
+            lines.append(
+                "lastEvent=[\(max(0, entry.elapsedMilliseconds))ms] #\(max(0, entry.sequence)) " +
+                "\(oneLine(entry.stage)) \(oneLine(entry.detail))"
+            )
+        }
         for key in runtime.keys.sorted() {
             lines.append("\(oneLine(key))=\(oneLine(runtime[key] ?? ""))")
         }

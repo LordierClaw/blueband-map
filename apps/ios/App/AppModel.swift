@@ -904,6 +904,7 @@ final class AppModel: ObservableObject {
             build: "\(BlueBandProduct.version) (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))",
             runtime: [
                 "app": applicationState,
+                "bandTransfer": renderCoordinator.diagnostic,
                 "location": locationClient.diagnostic,
                 "locationHealth": locationClient.healthText,
                 "mapLatency": "fixToDisplayMs=\(lastMapFixAgeMilliseconds.map(String.init) ?? "none") violations=\(latencyViolations)",

@@ -49,4 +49,25 @@ final class NavigationDebugTests: XCTestCase {
         XCTAssertFalse(output.contains("10.123456"))
         XCTAssertFalse(output.contains("106.987654"))
     }
+
+    func testExportFrontLoadsTheLatestEventBeforeTheFullEventRing() throws {
+        let entries = (1...20).map {
+            NavigationDebugEntry(
+                sequence: $0,
+                elapsedMilliseconds: $0 * 1_000,
+                stage: $0 == 19 ? "map.refresh.failed" : "guidance.fix",
+                detail: $0 == 19 ? "code=BAND_DISPLAY_FAILED terminal=TRANSFER_TIMEOUT" : String(repeating: "đ", count: 120)
+            )
+        }
+
+        let output = NavigationDebugFormatter.export(
+            state: "limitedMap", start: nil, destination: nil, routeDistanceMeters: nil,
+            alternativePathCount: nil, instructions: [], entries: entries
+        )
+        let prefix = String(decoding: Data(output.utf8).prefix(1_024), as: UTF8.self)
+
+        XCTAssertTrue(prefix.contains("lastFailure=[19000ms] #19 map.refresh.failed code=BAND_DISPLAY_FAILED terminal=TRANSFER_TIMEOUT"))
+        XCTAssertTrue(prefix.contains("lastEvent=[20000ms] #20 guidance.fix"))
+        XCTAssertEqual(output.components(separatedBy: "[19000ms] #19").count - 1, 2)
+    }
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## iOS 0.5.13 / RPK 0.6.11 - 2026-09-03
+
+- Front-load the latest navigation event so a truncated 1 KiB export still contains the terminal failure.
+- Export the last Band transfer terminal, acknowledged/expected message count, maximum ACK time, transfer time, and window without logging payloads, identifiers, or credentials.
+- Keep map rendering, UI, GPS behavior, Xiaomi wire bytes, and RPK unchanged while isolating the still-reproducing hardware failure.
+- Bump only iOS to `0.5.13 (29)`. RPK remains `0.6.11 (26)`.
+
 ## iOS 0.5.12 / RPK 0.6.11 - 2026-09-03
 
 - Keep every map chunk below the 1,024-byte Xiaomi ThirdPartyApp command ceiling after package, fingerprint, and protobuf framing are added; the previous app-envelope-only limit produced commands up to 1,076 bytes and could end as `TRANSFER_TIMEOUT`.

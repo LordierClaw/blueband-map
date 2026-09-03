@@ -122,6 +122,14 @@ final class RouteCardRenderCoordinator {
         return code
     }
 
+    var diagnostic: String {
+        guard let metrics = lastRunRecord?.metrics else { return "none" }
+        return "terminal=\(metrics.terminalCode) " +
+            "acked=\(metrics.ackDurationsMilliseconds.count)/\(metrics.chunks + 1) " +
+            "maxAckMs=\(metrics.ackMaxMilliseconds.map(String.init) ?? "none") " +
+            "transferMs=\(metrics.transferMilliseconds) window=\(metrics.transferWindow)"
+    }
+
     private var operationToken: UUID?
     private var operationTask: Task<Void, Never>?
     private var pending: PendingTransfer?

@@ -54,6 +54,8 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .failed(mode: .routeCard, code: "ASSET_READY_TIMEOUT"))
         XCTAssertEqual(coordinator.failureCode, "ASSET_READY_TIMEOUT")
         XCTAssertTrue(coordinator.requiresReconnect)
+        XCTAssertTrue(coordinator.diagnostic.contains("terminal=ASSET_READY_TIMEOUT acked=1/4"))
+        XCTAssertTrue(coordinator.diagnostic.contains("transferMs=0 window=2"))
     }
 
     func testChunkAcknowledgementWindowsStayBounded() async throws {
