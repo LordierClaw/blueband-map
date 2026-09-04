@@ -487,8 +487,10 @@ final class RouteCardRenderCoordinator {
             finish(code: "RESULT_EARLY", requiresReconnect: true)
         } else if pending.phase == .awaitingFinalAcknowledgement {
             self.pending?.bufferedResult = result
-        } else if pending.phase == .waitingForBand, let token = operationToken {
-            handleResult(result, token: token)
+        } else if pending.phase == .waitingForBand {
+            // Let the awaiting publisher finish the run and release transfer ownership.
+            if resultContinuation != nil { resumeResult(with: result) }
+            else { self.pending?.bufferedResult = result }
         } else if !result.success, let token = operationToken {
             handleResult(result, token: token)
         }
@@ -750,6 +752,8 @@ final class RouteCardRenderCoordinator {
     }
 
     private func resumeResult(with result: RouteCardBandResult?) {
+        resultTimeoutTask?.cancel()
+        resultTimeoutTask = nil
         guard let continuation = resultContinuation else { return }
         resultContinuation = nil
         continuation.resume(returning: result)
