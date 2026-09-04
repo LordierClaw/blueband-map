@@ -5,6 +5,17 @@ import BlueBandMapCore
 @testable import BlueBandMap
 
 final class SnapshotImageEncoderTests: XCTestCase {
+    func testRepresentativeMapAvoidsUnnecessaryStopAndWaitChunks() throws {
+        let source = try representativeMap(width: 424, height: 1040)
+        let output = try SnapshotImageEncoder.encode(source)
+        let png = try SnapshotPNGEncoder.encode(source, profiles: [.colors16Labels], blockSizes: [1])
+        print("ENCODER baseline=\(output.data.count) indexed=\(png.data.count) pngPSNR=\(try psnr(source: source, decoded: decode(png.data)))")
+        XCTAssertLessThanOrEqual(output.data.count, png.data.count,
+                                 "do not send extra BLE chunks when a full-resolution map is smaller")
+        XCTAssertGreaterThan(try psnr(source: source, decoded: decode(output.data)), 27)
+        XCTAssertEqual(output.pixelBlockSize, 1)
+    }
+
     func testRepresentativeRotatedMapSelectsTheBestBoundedJPEG() throws {
         let source = try representativeMap(width: 424, height: 1_040)
         let output = try SnapshotImageEncoder.encode(source)

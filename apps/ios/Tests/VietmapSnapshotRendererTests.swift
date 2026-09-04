@@ -8,6 +8,30 @@ import BlueBandMapCore
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
 
+    func testHairpinAndCoincidentManeuversKeepALocalHeadingUpCamera() throws {
+        let origin = GeoPoint(latitude: 20.97184, longitude: 105.78985)
+        for heading in [0.0, 20, 90, 180, 270, 323, 327] {
+            let angle = heading * .pi / 180
+            let ahead = GeoPoint(latitude: origin.latitude + 0.0003 * cos(angle),
+                longitude: origin.longitude + 0.0003 * sin(angle))
+            let behind = GeoPoint(latitude: origin.latitude - 0.0003 * cos(angle),
+                longitude: origin.longitude - 0.0003 * sin(angle))
+            for maneuver in [behind, origin] {
+                let route = RoutePlan(points: [origin, ahead, maneuver], instructions: [], distanceMeters: 100)
+                let config = try VietmapSnapshotConfiguration.make(VietmapSnapshotRequest(
+                    route: route, matchedPosition: origin,
+                    overlayGeometry: .init(subdued: [], traveled: [], active: route.points, context: []),
+                    headingDegrees: heading, nextManeuver: maneuver, tileMapKey: "fixture-key"))
+                XCTAssertEqual(config.zoom, 17, "do not zoom a hairpin out to a city-wide view")
+                XCTAssertEqual(config.heading, heading)
+                XCTAssertEqual(config.point(for: origin).x, 106, accuracy: 0.5)
+                XCTAssertEqual(config.point(for: origin).y, 374, accuracy: 0.5)
+                XCTAssertLessThan(config.point(for: ahead).y, config.point(for: origin).y)
+                XCTAssertFalse(VietmapCPURenderer.tileCoordinates(config, zoom: 15).isEmpty)
+            }
+        }
+    }
+
     func testLockedScreenRenderDoesNotRejectAnActiveNavigationRequest() async throws {
         let origin = GeoPoint(latitude: 10, longitude: 106)
         let forward = GeoPoint(latitude: 10.001, longitude: 106)

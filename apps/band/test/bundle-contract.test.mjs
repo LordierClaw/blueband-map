@@ -88,6 +88,8 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /\.nav-arrow\s*\{[^}]*left:\s*32px;[^}]*top:\s*28px;[^}]*width:\s*44px;[^}]*height:\s*56px;/s)
   assert.match(page, /\.nav-distance\s*\{[^}]*left:\s*78px;[^}]*top:\s*26px;[^}]*width:\s*88px;/s)
   assert.match(page, /\.nav-street\s*\{[^}]*left:\s*72px;[^}]*top:\s*60px;[^}]*width:\s*126px;/s)
+  assert.match(page, /\.nav-street\s*\{[^}]*text-align:\s*left;/s,
+    "short names such as Yên Bình must start beside the maneuver, not at the far right")
   assert.match(page, /\.nav-status\s*\{[^}]*left:\s*72px;[^}]*top:\s*80px;[^}]*width:\s*94px;/s)
   assert.match(page, /\.nav-marker\s*\{[^}]*width:\s*30px;[^}]*height:\s*38px;/s)
 })
