@@ -5,6 +5,17 @@ import BlueBandMapCore
 @testable import BlueBandMap
 
 final class SnapshotImageEncoderTests: XCTestCase {
+    func testCompactMapKeepsTheAcceptedActiveRouteBlue() throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 212, height: 520, bitsPerComponent: 8,
+            bytesPerRow: 212 * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 22 / 255, green: 140 / 255, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 212, height: 520))
+        let output = try SnapshotImageEncoder.encode(XCTUnwrap(context.makeImage()))
+        XCTAssertEqual(output.format, .png)
+        XCTAssertEqual(Array(try rgba(decode(output.data)).prefix(3)), [22, 140, 255])
+    }
+
     func testRepresentativeMapAvoidsUnnecessaryStopAndWaitChunks() throws {
         let source = try representativeMap(width: 424, height: 1040)
         let output = try SnapshotImageEncoder.encode(source)
