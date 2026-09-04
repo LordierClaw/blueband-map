@@ -1,17 +1,21 @@
-# ADR 0015: Hardware-safe stop-and-wait map transfer
+# ADR 0015: Conservative stop-and-wait map transfer
 
 - Status: Accepted
 - Date: 2026-09-04
 
 ## Context
 
-iOS 0.5.14 retained a two-message application ACK window and retried one immutable command after a timeout. A new iPhone and Xiaomi Smart Band 10 trace improved from 4/18 to 7/18 acknowledged messages, then still ended after 5,657 ms with `TRANSFER_TIMEOUT`. Route generation, the admitted map payload, GPS, and background location were healthy.
+iOS 0.5.14 retained a two-message application ACK window and retried one immutable command after a timeout. A new iPhone and Xiaomi Smart Band 10 trace improved from 4/18 to 7/18 acknowledged messages, then still ended after 5,657 ms with `TRANSFER_TIMEOUT`. The route and admitted payload reached transfer, and location diagnostics reported an accepted precise fix with background updates enabled. The app was active; this trace does not establish locked-screen GPS health.
 
-The iPhone serializes complete BLE/SPP frame writes, but a window of two still lets the Band receive the next application message while its preceding asynchronous interconnect ACK send can be pending. The iOS test double returned those ACKs synchronously and therefore did not model this hardware boundary. Xiaomi's interconnect send API exposes asynchronous success/failure callbacks; the RPK does not currently wait for the success callback before sending another ACK.
+The iPhone serializes complete BLE/SPP frame writes, but a window of two still lets the Band receive the next application message while its preceding asynchronous interconnect ACK send can be pending. The test doubles simulate successful ACK delivery without modeling firmware outbound backpressure. Xiaomi's interconnect send API exposes asynchronous success/failure callbacks; the RPK does not currently wait for the success callback before sending another ACK.
+
+The trace does not distinguish a lost command from a lost ACK or prove that concurrency caused the loss. Stop-and-wait is a conservative mitigation that removes chunk overlap; confirming the device root cause still requires the hardware acceptance below.
 
 ## Decision
 
 The production `RouteCardRenderCoordinator` default returns to `transferWindow = 1`. Each map chunk must receive its application ACK before the next chunk starts. Explicit windows 2 and 4 remain available only for controlled tests and future hardware measurement.
+
+Serial application ACKs may increase transfer time. The five-second target must be measured again on hardware; a successful transfer alone does not meet that target.
 
 The bounded identical-command retry from ADR 0014 remains active for one isolated loss. This change does not alter map dimensions, payload limits, chunk encoding, Xiaomi authentication, BLE/SPP framing, encryption, protobuf fields, application-envelope schemas, RPK code, UI, route rendering, or GPS behavior.
 

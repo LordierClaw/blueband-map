@@ -2,7 +2,7 @@
 
 ## iOS 0.5.15 / RPK 0.6.11 - 2026-09-04
 
-- Restore the hardware-safe stop-and-wait map transfer default after iOS 0.5.14 still stalled at 7/18 application ACKs with `TRANSFER_TIMEOUT` under a two-message window.
+- Restore the conservative stop-and-wait map transfer default after iOS 0.5.14 still stalled at 7/18 application ACKs with `TRANSFER_TIMEOUT` under a two-message window.
 - Keep explicit windows 2/4 available for controlled tests, but require real-device evidence before using them in production again.
 - Make the CI artifact verifier read the expected version and build from the project metadata instead of accepting a stale hard-coded release.
 - Bump only iOS to `0.5.15 (31)`. RPK, map payload limits, UI, GPS, render pipeline, Xiaomi bytes, and application schemas remain unchanged.
