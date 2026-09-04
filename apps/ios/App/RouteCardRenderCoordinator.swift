@@ -127,7 +127,7 @@ final class RouteCardRenderCoordinator {
         return "terminal=\(metrics.terminalCode) " +
             "acked=\(metrics.ackDurationsMilliseconds.count)/\(metrics.chunks + 1) " +
             "maxAckMs=\(metrics.ackMaxMilliseconds.map(String.init) ?? "none") " +
-            "transferMs=\(metrics.transferMilliseconds) window=\(metrics.transferWindow)"
+            "transferMs=\(metrics.transferMilliseconds) window=\(metrics.transferWindow) peer=\(peerDiagnostic)"
     }
 
     private var operationToken: UUID?
@@ -139,6 +139,9 @@ final class RouteCardRenderCoordinator {
     private var resultTimeoutTask: Task<Void, Never>?
     private var prepareTimeoutTask: Task<Void, Never>?
     private var disconnectObserved = false
+    private var peerDiagnostic = "none"
+    private var peerRequestID: String?
+    private var peerDiagnosticTask: Task<Void, Never>?
 
     init(
         session: any RouteCardSessionSending,
@@ -169,6 +172,9 @@ final class RouteCardRenderCoordinator {
             return
         }
 
+        peerDiagnosticTask?.cancel()
+        peerRequestID = nil
+        peerDiagnostic = "none"
         let token = UUID()
         let runID = runIDGenerator()
         let sceneID = sceneIDGenerator()
@@ -222,8 +228,12 @@ final class RouteCardRenderCoordinator {
         guard envelope.src == .band,
               envelope.type == .message,
               let topic = envelope.topic,
-              let body = envelope.body,
-              let pending,
+              let body = envelope.body else { return }
+        if topic == "diagnostics.report" {
+            consumePeerDiagnostic(body)
+            return
+        }
+        guard let pending,
               pending.token == operationToken else { return }
 
         switch topic {
@@ -240,6 +250,9 @@ final class RouteCardRenderCoordinator {
 
     func disconnected() {
         disconnectObserved = true
+        peerDiagnosticTask?.cancel()
+        peerRequestID = nil
+        if peerDiagnostic == "pending" { peerDiagnostic = "unavailable" }
         if operationToken != nil {
             finish(code: "TRANSFER_DISCONNECTED", requiresReconnect: true)
         }
@@ -618,7 +631,37 @@ final class RouteCardRenderCoordinator {
         finishRun(code)
         pending = nil
         operationTask?.cancel()
+        if requiresReconnect && code != "TRANSFER_CANCELLED" && code != "TRANSFER_DISCONNECTED" {
+            requestPeerDiagnostic()
+        }
         _ = token
+    }
+
+    private func requestPeerDiagnostic() {
+        guard peerRequestID == nil, peerDiagnostic == "none", !disconnectObserved else { return }
+        let request = "diag-" + String(UUID().uuidString.lowercased().prefix(12))
+        peerRequestID = request
+        peerDiagnostic = "pending"
+        let session = session
+        peerDiagnosticTask = Task { @MainActor [weak self] in
+            // Reuse the existing one-retry delivery limit; never poll a failed Band.
+            _ = try? await session.sendAwaitingAcknowledgement(
+                topic: "diagnostics.get", body: ["request": .string(request)]
+            )
+            guard !Task.isCancelled, let self, self.peerRequestID == request else { return }
+            if self.peerDiagnostic == "pending" { self.peerDiagnostic = "unavailable" }
+        }
+    }
+
+    private func consumePeerDiagnostic(_ body: [String: JSONValue]) {
+        guard let request = peerRequestID, string(body, key: "request") == request,
+              let rpk = integer(body, key: "rpk"), (1...9999).contains(rpk),
+              let phase = string(body, key: "phase"), ["none", "prepare", "begin", "chunk", "end"].contains(phase),
+              let offset = integer(body, key: "offset"), (-1...8192).contains(offset),
+              let received = integer(body, key: "received"), (0...8192).contains(received),
+              let code = integer(body, key: "sendCode"), (-1...65535).contains(code) else { return }
+        peerDiagnostic = "rpk\(rpk)/\(phase)/off\(offset)/got\(received)/err\(code)"
+        peerRequestID = nil
     }
 
     private func finishRun(_ terminalCode: String) {
@@ -781,10 +824,8 @@ final class RouteCardRenderCoordinator {
     }
 
     private func integer(_ body: [String: JSONValue], key: String) -> Int? {
-        guard case let .number(value)? = body[key], value.isFinite,
-              value.rounded(.towardZero) == value,
-              value >= Double(Int.min), value <= Double(Int.max) else { return nil }
-        return Int(value)
+        guard case let .number(value)? = body[key] else { return nil }
+        return Int(exactly: value)
     }
 
     private func isSafeCode(_ value: String) -> Bool {

@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.11</text>
+      <text class="version">RPK 0.6.12</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -355,6 +355,10 @@ export default {
     logRows: [],
     recentIDs: [],
     inFlightIDs: [],
+    lastReceivePhase: "none",
+    lastReceiveOffset: -1,
+    lastReceivedBytes: 0,
+    lastSendCode: 0,
     lifecycleEpoch: 0,
     activeMapOperationID: "",
     pendingDeleteURIs: [],
@@ -621,6 +625,34 @@ export default {
     if (message.type === "ack") {
       this.acknowledge(message.id)
       return
+    }
+
+    if (message.topic === "diagnostics.get") {
+      var request = message.body.request
+      if (typeof request !== "string" || !/^[a-z0-9-]{1,32}$/.test(request)) return
+      this.sendEnvelope({
+        v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "diagnostics.report",
+        body: {
+          request: request, rpk: 27, phase: this.lastReceivePhase,
+          offset: this.lastReceiveOffset, received: this.lastReceivedBytes, sendCode: this.lastSendCode
+        }
+      })
+      this.sendACK(message.id)
+      return
+    }
+    var phases = { "render.prepare": "prepare", "map.asset.begin": "begin", "map.asset.chunk": "chunk", "map.asset.end": "end" }
+    if (typeof phases[message.topic] === "string") {
+      this.lastReceivePhase = phases[message.topic]
+      if (message.topic === "render.prepare" && this.recentIDs.indexOf(message.id) < 0 &&
+        this.inFlightIDs.indexOf(message.id) < 0 && !this.preparedRender) {
+        this.lastReceiveOffset = -1
+        this.lastReceivedBytes = 0
+        this.lastSendCode = 0
+      }
+      if (message.topic === "map.asset.chunk" && this.validInteger(message.body.offset) &&
+        message.body.offset >= 0 && message.body.offset <= this.MAX_ASSET_BYTES) {
+        this.lastReceiveOffset = message.body.offset
+      }
     }
 
     if (this.recentIDs.indexOf(message.id) >= 0) {
@@ -1002,6 +1034,7 @@ export default {
         }
       }
     }
+    this.lastReceivedBytes = transfer.receivedBytes
     this.succeedAsset(message.id)
   },
 
@@ -1317,9 +1350,14 @@ export default {
     var epoch = this.lifecycleEpoch
     ownedConnection.send({
       data: message,
-      fail: function () {
+      fail: function (data, code) {
         if (!page.ownsConnectionEpoch(ownedConnection, epoch) ||
           !page.connected || !page.acceptingMessages) return
+        var nativeCode = typeof code === "number" ? code : data && data.code
+        page.lastSendCode = page.validInteger(nativeCode) && nativeCode >= 0 && nativeCode <= 65535 ? nativeCode : -1
+        // A native send timeout is not a disconnect. Keep accepted chunks so
+        // the phone's bounded exact-command retry can request the ACK again.
+        if (page.lastSendCode === 204) return
         page.lock("SEND FAILED")
       }
     })

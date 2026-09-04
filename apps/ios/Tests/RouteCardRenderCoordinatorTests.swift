@@ -17,6 +17,12 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         await coordinator.start(asset: asset)
         await fulfillment(of: [requested], timeout: 2)
         XCTAssertTrue(coordinator.diagnostic.contains("peer=rpk27/chunk/off480/got960/err204"))
+        let exported = NavigationDebugFormatter.export(
+            state: "limitedMap", start: nil, destination: nil, routeDistanceMeters: nil,
+            alternativePathCount: nil, instructions: [], entries: [],
+            runtime: ["bandTransfer": coordinator.diagnostic]
+        )
+        XCTAssertTrue(exported.prefix(1024).contains("peer=rpk27/chunk/off480/got960/err204"))
         let diagnostic = coordinator.diagnostic
         coordinator.consume(.message(id: "stale-report", source: .band, topic: "diagnostics.report", body: [
             "request": .string("stale"), "rpk": .number(27), "phase": .string("end"),
@@ -26,6 +32,32 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         await coordinator.start(asset: asset)
         let count = await session.requestCount
         XCTAssertEqual(count, 1, "a reconnect-required refresh must not probe again")
+    }
+
+    func testPeerDiagnosticsValidateNumbersAndIgnoreRepliesAfterDisconnect() async throws {
+        let requested = expectation(description: "diagnostic request without automatic reply")
+        let session = DiagnosticRouteCardSession(requested: requested, responds: false)
+        let coordinator = RouteCardRenderCoordinator(session: session)
+        let asset = try RenderAsset(kind: .raster, formatVersion: 1, width: 212, height: 520,
+                                    data: Data(repeating: 0x5A, count: 64), primitives: 0)
+        await coordinator.start(asset: asset)
+        await fulfillment(of: [requested], timeout: 2)
+        let lastRequest = await session.lastRequest
+        let request = try XCTUnwrap(lastRequest)
+        var body: [String: JSONValue] = [
+            "request": .string(request), "rpk": .number(27), "phase": .string("chunk"),
+            "offset": .number(480), "received": .number(960), "sendCode": .number(204)
+        ]
+        for invalid in [Double(Int.max), .infinity, .nan, 0.5, -2, 8193] {
+            body["offset"] = .number(invalid)
+            coordinator.consume(.message(id: "invalid", source: .band, topic: "diagnostics.report", body: body))
+            XCTAssertFalse(coordinator.diagnostic.contains("peer=rpk"))
+        }
+        coordinator.disconnected()
+        let diagnostic = coordinator.diagnostic
+        body["offset"] = .number(480)
+        coordinator.consume(.message(id: "late", source: .band, topic: "diagnostics.report", body: body))
+        XCTAssertEqual(coordinator.diagnostic, diagnostic)
     }
 
     func testBufferedReadyCancelsPrepareTimeoutBeforeSlowTransfer() async throws {
@@ -233,19 +265,27 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
 
 private actor DiagnosticRouteCardSession: RouteCardSessionSending {
     let requested: XCTestExpectation
+    let responds: Bool
     private var receiver: WindowedRouteCardSession.Receiver?
     private(set) var requestCount = 0
+    private(set) var lastRequest: String?
 
-    init(requested: XCTestExpectation) { self.requested = requested }
+    init(requested: XCTestExpectation, responds: Bool = true) {
+        self.requested = requested
+        self.responds = responds
+    }
     func setReceiver(_ receiver: @escaping WindowedRouteCardSession.Receiver) { self.receiver = receiver }
 
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
         guard topic == "diagnostics.get" else { throw InterconnectDeliveryError.timeout("fixture-prepare") }
         requestCount += 1
-        await receiver?(.message(id: "peer-report", source: .band, topic: "diagnostics.report", body: [
-            "request": body["request"] ?? .null, "rpk": .number(27), "phase": .string("chunk"),
-            "offset": .number(480), "received": .number(960), "sendCode": .number(204)
-        ]))
+        if case let .string(request)? = body["request"] { lastRequest = request }
+        if responds {
+            await receiver?(.message(id: "peer-report", source: .band, topic: "diagnostics.report", body: [
+                "request": body["request"] ?? .null, "rpk": .number(27), "phase": .string("chunk"),
+                "offset": .number(480), "received": .number(960), "sendCode": .number(204)
+            ]))
+        }
         requested.fulfill()
         return "diagnostic-ack"
     }

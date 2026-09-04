@@ -219,7 +219,13 @@ test("full-size maps survive asynchronous file and send callbacks across repeate
   }
   const connection = {
     getReadyState({ success }) { success({ status: 1 }) },
-    send({ data, success }) {
+    failedIDs: new Set(),
+    send({ data, success, fail }) {
+      if (data.type === "ack" && /-480$/.test(data.id) && !this.failedIDs.has(data.id)) {
+        this.failedIDs.add(data.id)
+        callbacks.push(() => fail({ code: 204 }))
+        return
+      }
       sent.push(JSON.parse(JSON.stringify(data)))
       if (success) callbacks.push(success)
     }
@@ -231,6 +237,10 @@ test("full-size maps survive asynchronous file and send callbacks across repeate
     assert.ok(Buffer.byteLength(wire) <= 940, "exercise admitted envelopes")
     page.receiveMessage({ data: wire })
     flush()
+    if (!sent.some(item => item.type === "ack" && item.id === message.id)) {
+      page.receiveMessage({ data: wire }) // the phone retries the identical command once
+      flush()
+    }
     assert.ok(sent.some(item => item.type === "ack" && item.id === message.id), `missing ACK ${message.id}`)
   }
   try {
@@ -258,9 +268,33 @@ test("full-size maps survive asynchronous file and send callbacks across repeate
       assert.ok(sent.some(item => item.topic === "render.result" && item.body.sceneId === scene && item.body.status === "ok"))
       assert.ok(file.storage.size <= 2, "keep file storage bounded")
     }
+    assert.equal(connection.failedIDs.size, 100, "inject one native send failure per map")
   } finally {
     page.onDestroy()
     flush()
+  }
+})
+
+test("native disconnect still clears the transfer and stale failures cannot reset a new session", async () => {
+  const { page, connection } = await harness()
+  const sends = []
+  connection.send = options => sends.push(options)
+  try {
+    page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
+    page.receiveMessage({ data: envelope("begin", "map.asset.begin", begin()) })
+    const oldFailure = sends[0].fail
+    oldFailure("disconnected", 1006)
+    assert.equal(page.connected, false)
+    assert.equal(page.activeTransfer, null)
+    page.probeConnection()
+    assert.equal(page.connected, true)
+    page.receiveMessage({ data: envelope("prepare-2", "render.prepare", prepare()) })
+    const prepared = page.preparedRender
+    oldFailure("late error", 1006)
+    assert.equal(page.connected, true)
+    assert.equal(page.preparedRender, prepared)
+  } finally {
+    page.onDestroy()
   }
 })
 
@@ -281,6 +315,15 @@ test("failure diagnostics retain the last chunk boundary without returning paylo
       request: "probe-1", rpk: 27, phase: "chunk", offset: 0, received: 4, sendCode: 0
     })
     assert.ok(Buffer.byteLength(JSON.stringify(report)) < 512)
+    sends.find(send => send.data.id === "chunk").fail({ code: 204 })
+    page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
+    page.receiveMessage({ data: envelope("diagnostic-retry", "diagnostics.get", { request: "probe-2" }) })
+    const retryReport = sent.filter(message => message.topic === "diagnostics.report").at(-1)
+    assert.equal(retryReport.body.sendCode, 204, "duplicate prepare must not erase native failure evidence")
+    assert.equal(retryReport.body.received, 4)
+    const count = sent.length
+    page.receiveMessage({ data: envelope("bad-probe", "diagnostics.get", { request: "x".repeat(33) }) })
+    assert.equal(sent.length, count, "invalid diagnostic request must not produce traffic")
   } finally {
     page.onDestroy()
   }

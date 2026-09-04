@@ -602,6 +602,9 @@ final class AppModel: ObservableObject {
         generation: Int
     ) async throws -> Bool {
         try checkNavigationOwner(generation)
+        guard !renderCoordinator.requiresReconnect else {
+            throw NavigationRuntimeError.bandDisplayFailed("TRANSFER_RECONNECT_REQUIRED")
+        }
         navigationState = .transferring
         let snapshotStartedAt = Date()
         lastSnapshotRefreshStartedAt = snapshotStartedAt
