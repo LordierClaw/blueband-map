@@ -20,7 +20,7 @@ Thêm chẩn đoán tự động đúng một lần khi truyền lỗi: `peer=rp
 
 ## Một lượt kiểm tra thiết bị, dừng ở lỗi đầu
 
-1. Cài cả IPA và RPK mới trong `artifacts/handoff`; đối chiếu version và `SHA256SUMS`. Kết nối sạch, mở RPK, bắt đầu một tuyến ngắn. Map đầu phải có route/marker và log `band.displayed`.
+1. Ký/cài IPA unsigned và cài RPK mới trong `artifacts/handoff`; đối chiếu version và `SHA256SUMS`. Cấp Bluetooth, vị trí và Precise Location khi được hỏi. Kết nối sạch, mở RPK, bắt đầu một tuyến ngắn. Map đầu phải có route/marker và log `band.displayed`.
 2. Nếu map không lên: **không Start lặp lại**. Đợi khoảng 5 giây để phép hỏi chẩn đoán hữu hạn kết thúc, export log, ghi màn hình Band (LOADING MAP / ĐANG CHỜ KẾT NỐI / app thoát), firmware và phiên bản iOS. Không gửi key/raw capture. Dừng bài tại đây.
 3. Chỉ khi map đầu đạt: đi bộ an toàn hoặc replay cùng tuyến, khoá iPhone 5 phút, ít nhất 10 refresh. Cần `fixToDisplayMs` hữu hạn <5000, không `BAND_DISPLAY_FAILED`/`MAP_PAYLOAD_TOO_LARGE`. `violations=0` khi chưa display không tính là đạt. Sau đó thử ngắt/kết nối lại một lần; Stop phải dừng GPS navigation.
 
@@ -28,4 +28,11 @@ Giới hạn bài test: tối đa 2 Route requests, không cố tình reroute; t
 
 ## Bằng chứng bàn giao
 
-Chưa nghiệm thu phần cứng; máy Linux hiện không truy cập được iPhone qua `idevice_id -l`. Không có bản realtime known-good đã được chứng minh để hứa rollback.
+- Commit nguồn IPA/RPK: `2f6f72ae254d26ab0e6489b5e433a4c2736c95b8` trên `main`; commit sau chỉ cập nhật bằng chứng bàn giao.
+- [iOS CI](https://github.com/LordierClaw/blueband-map/actions/runs/33828764075): success, **79/79 XCTest**, build unsigned arm64 và kiểm tra metadata đạt. Hai test từng đỏ tại [CI trước sửa](https://github.com/LordierClaw/blueband-map/actions/runs/33827826566) nay đạt; có thêm kiểm tra số không hợp lệ, phản hồi sau disconnect và diagnostic nằm trong phần đầu export.
+- [Band CI](https://github.com/LordierClaw/blueband-map/actions/runs/33828764150) và [Repository CI](https://github.com/LordierClaw/blueband-map/actions/runs/33828764255): success. Entry JS của RPK tải từ CI khớp byte với bản build/test cục bộ; ảnh marker/mũi tên/HUD giữ nguyên byte so với RPK 0.6.11.
+- `BlueBandMap-unsigned.ipa`: **3,560,952 bytes**, SHA-256 `be0e128d84999d3036bc26a130a7ae21f0209c62ccf1235430f11f7532bdb242`; hash tải về khớp hash CI.
+- `dev.lordierclaw.bluebandmap.band.debug.0.6.12.rpk`: **32,936 bytes**, SHA-256 `bcbea2837efe122b737b81b4ddb11325d1919bee3147d22be5ca531a7fb974b8`.
+- IPA tải về đã kiểm tra ZIP, Mach-O arm64, bundle ID, iOS minimum 17.0, version/build, iPhone-only, không có chữ ký/provisioning profile. Có `UIBackgroundModes=location,bluetooth-central`, mô tả quyền Bluetooth/location và xin precise location tạm thời. Metadata không chứng minh người dùng đã cấp quyền hoặc iOS cho phép chạy lúc khoá màn hình trong điều kiện thực tế.
+
+Chưa nghiệm thu phần cứng: `lsusb` không có iPhone; `idevice_id -l` không truy cập được thiết bị. Không có bản realtime known-good đã được chứng minh để hứa rollback. Thư mục handoff chỉ giữ cặp mới; IPA 0.5.15 có thể lấy lại từ [CI cũ](https://github.com/LordierClaw/blueband-map/actions/runs/33787726371) nếu còn thời hạn lưu trữ, còn RPK 0.6.11 có thể build lại từ nguồn commit `5bc2f7a` (không cam kết cùng checksum archive).
