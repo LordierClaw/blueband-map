@@ -13,7 +13,7 @@ final class AppModelPickerTests: XCTestCase {
     func testMovingGPSIsNotBlockedByRenderingAndFinalFixPublishesAfterCooldown() async throws {
         let manager = TestLocationManager()
         let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
-        let sender = WindowedRouteCardSession()
+        let sender = WindowedRouteCardSession(deferResults: true)
         var requests: [VietmapSnapshotRequest] = []
         let renderedTwice = expectation(description: "newest GPS snapshot after cooldown")
         let model = makeModel(
@@ -34,6 +34,16 @@ final class AppModelPickerTests: XCTestCase {
             }
         )
         await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        let delivery = Task {
+            for _ in 0..<2 {
+                await waitUntil { await sender.pendingResult != nil }
+                // Model the Band's asynchronous image decode after the final command ACK.
+                try? await Task.sleep(for: .milliseconds(50))
+                if Task.isCancelled { return }
+                await sender.deliverResult()
+            }
+        }
+        defer { delivery.cancel(); model.stopNavigation() }
         model.destinationLatitudeInput = "0.002"
         model.destinationLongitudeInput = "0.001"
         model.consume(.connected)
@@ -53,6 +63,8 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil { model.navigationDebugEntries.filter { $0.stage == "band.displayed" }.count == 2 }
         XCTAssertNotNil(model.routePreviewPNG)
         XCTAssertNotNil(model.lastMapFixAgeMilliseconds)
+        XCTAssertGreaterThanOrEqual(model.navigationDebugEntries.filter { $0.stage == "nav.update" }.count, 2,
+                                    "a displayed scene must unblock live guidance updates")
         XCTAssertLessThan(model.lastMapFixAgeMilliseconds ?? .max, 5_000)
         XCTAssertEqual(requests.last?.matchedPosition.latitude ?? -1, 0.0002, accuracy: 0.00001)
         for request in requests {

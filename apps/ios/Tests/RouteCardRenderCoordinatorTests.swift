@@ -6,6 +6,44 @@ import BlueBandMapCore
 
 @MainActor
 final class RouteCardRenderCoordinatorTests: XCTestCase {
+    func testResultAfterFinalACKReturnsToCallerAndAllowsTheNextMap() async throws {
+        let session = WindowedRouteCardSession(deferResults: true)
+        let coordinator = RouteCardRenderCoordinator(session: session)
+        await session.setReceiver { envelope in coordinator.consume(envelope) }
+        let asset = try RenderAsset(kind: .raster, formatVersion: 1, width: 212, height: 520,
+                                   data: Data(repeating: 0x5A, count: 64), primitives: 0)
+        var scenes = Set<String>()
+        for _ in 0..<3 {
+            let returned = expectation(description: "display result releases the awaiting publisher")
+            let operation = Task {
+                await coordinator.start(asset: asset)
+                returned.fulfill()
+            }
+            let deadline = ContinuousClock.now + .seconds(2)
+            while ContinuousClock.now < deadline {
+                if case .waitingForBand = coordinator.state { break }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            guard case .waitingForBand = coordinator.state else {
+                operation.cancel()
+                await operation.value
+                return XCTFail("must acknowledge map.asset.end before delivering render.result")
+            }
+            let pendingResult = await session.pendingResult
+            let result = try XCTUnwrap(pendingResult)
+            await session.deliverResult()
+            coordinator.consume(.message(id: "duplicate-result", source: .band,
+                topic: RenderProtocol.resultTopic, body: result))
+            await fulfillment(of: [returned], timeout: 1)
+            XCTAssertEqual(coordinator.lastRunRecord?.metrics.terminalCode, "displayed")
+            XCTAssertEqual(coordinator.lastRunRecord?.events.filter { $0.name == "displayed" }.count, 1)
+            if let scene = coordinator.lastDisplayedSceneID { scenes.insert(scene) }
+            operation.cancel() // bounded cleanup also releases the old implementation's stuck waiter
+            await operation.value
+        }
+        XCTAssertEqual(scenes.count, 3, "successful publication must release ownership for subsequent maps")
+    }
+
     func testTerminalFailureQueriesPeerOnceAndIgnoresUncorrelatedDiagnostics() async throws {
         let requested = expectation(description: "one diagnostic exchange after terminal failure")
         let session = DiagnosticRouteCardSession(requested: requested)
@@ -207,17 +245,27 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     private let chunkDelay: Duration
     private let delayFirstChunk: Bool
     private let failChunks: Bool
+    private let deferResults: Bool
     private var firstChunkPending = false
+    private(set) var pendingResult: [String: JSONValue]?
 
-    init(chunkDelay: Duration = .milliseconds(5), delayFirstChunk: Bool = false, failChunks: Bool = false) {
+    init(chunkDelay: Duration = .milliseconds(5), delayFirstChunk: Bool = false,
+         failChunks: Bool = false, deferResults: Bool = false) {
         self.chunkDelay = chunkDelay
         self.delayFirstChunk = delayFirstChunk
         self.failChunks = failChunks
+        self.deferResults = deferResults
     }
 
     func setReceiver(_ receiver: @escaping Receiver) { self.receiver = receiver }
 
     func prepareValue(_ key: String) -> JSONValue? { prepareBody[key] }
+
+    func deliverResult() async {
+        guard let body = pendingResult else { return }
+        pendingResult = nil
+        await receive(RenderProtocol.resultTopic, body: body)
+    }
 
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
         if topic == RenderProtocol.prepareTopic {
@@ -246,13 +294,15 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
             }
             activeChunks -= 1
         } else if topic == "map.asset.end" {
-            await receive(RenderProtocol.resultTopic, body: [
+            let result: [String: JSONValue] = [
                 "runId": prepareBody["runId"]!, "sceneId": prepareBody["sceneId"]!,
                 "renderer": prepareBody["renderer"]!, "formatVersion": prepareBody["formatVersion"]!,
                 "status": .string("ok"), "bytes": prepareBody["bytes"]!,
                 "primitives": prepareBody["primitives"]!, "renderMs": .number(1),
                 "prepareMs": .number(1), "validateMs": .number(1),
-            ])
+            ]
+            if deferResults { pendingResult = result }
+            else { await receive(RenderProtocol.resultTopic, body: result) }
         }
         return "ack"
     }
