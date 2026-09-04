@@ -489,6 +489,8 @@ final class RouteCardRenderCoordinator {
             self.pending?.bufferedResult = result
         } else if pending.phase == .waitingForBand {
             // Let the awaiting publisher finish the run and release transfer ownership.
+            resultTimeoutTask?.cancel()
+            resultTimeoutTask = nil
             if resultContinuation != nil { resumeResult(with: result) }
             else { self.pending?.bufferedResult = result }
         } else if !result.success, let token = operationToken {
@@ -752,8 +754,6 @@ final class RouteCardRenderCoordinator {
     }
 
     private func resumeResult(with result: RouteCardBandResult?) {
-        resultTimeoutTask?.cancel()
-        resultTimeoutTask = nil
         guard let continuation = resultContinuation else { return }
         resultContinuation = nil
         continuation.resume(returning: result)
