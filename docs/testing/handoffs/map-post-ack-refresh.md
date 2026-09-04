@@ -1,6 +1,6 @@
 # Bàn giao sửa map đứng yên sau lần hiển thị đầu
 
-iOS 0.5.17 (33). Giữ nguyên RPK 0.6.12 (27); không cần cài lại Band nếu đang ở bản này.
+Ngày 2026-09-04. iOS 0.5.17 (33). Giữ nguyên RPK 0.6.12 (27); không cần cài lại Band nếu đang ở bản này.
 
 ## Nguyên nhân trực tiếp
 
@@ -27,4 +27,12 @@ Tiếp tục giới hạn bài kiểm tra ở một tuyến chính, tối đa 2 
 ## Bằng chứng
 
 - [CI trước sửa](https://github.com/LordierClaw/blueband-map/actions/runs/33833940517), commit `89bbfc0`: hai test liên quan thất bại đúng dự kiến. Caller không được giải phóng trong cả ba lượt, AppModel không có frame thứ hai, không có mốc display và có 0 `nav.update`. Các test khác không có failure.
-- Kết quả sau sửa và checksum được ghi sau khi xác minh. Chưa nghiệm thu bản sửa trên iPhone + Band; USB hiện nhận iPhone và xác nhận bản cài 0.5.16 (32), chưa phải bản sửa.
+- [CI sau sửa](https://github.com/LordierClaw/blueband-map/actions/runs/33834420300), source `50d344a54d1bf19e5fd4353102991e33be023a1a`: **80/80 XCTest đạt**, gồm cả hai test từng đỏ, build IPA unsigned arm64 đạt. [Repository CI](https://github.com/LordierClaw/blueband-map/actions/runs/33834420261) cũng đạt. Commit bàn giao sau chỉ cập nhật tài liệu.
+- `make test`: portable Swift 174, RPK 33 (bao gồm build archive và replay 100 ảnh có lỗi native), protocol-lab 19, location-runtime 15; metadata/provider-script/handoff checks đạt. `make lint`, secret scan và `git diff --check` đạt. Provider-script tests dùng fake curl, không phải phép đo API thật. RPK toolchain vẫn báo 14 dependency vulnerabilities (3 low, 11 high), không đổi dependencies trong bản này.
+- `artifacts/handoff/BlueBandMap-unsigned.ipa`: **3,560,955 bytes**, SHA-256 `87fe899bb53667baecaff0c8f634fe421ca70e23494f6a89fa848893c67500a5`. Hash tải về khớp CI; ZIP, Mach-O arm64, version/build và bundle ID đã kiểm tra. IPA unsigned cần ký trước khi cài.
+- IPA chứa `UIBackgroundModes=location,bluetooth-central`, mô tả quyền Bluetooth/vị trí và xin Precise Location tạm thời, iPhone-only, minimum iOS 17.0. Quyền người dùng đã cấp và độ trễ khi khoá màn hình vẫn phải kiểm tra trên thiết bị.
+- RPK giữ nguyên binary từ lần bàn giao trước: `dev.lordierclaw.bluebandmap.band.debug.0.6.12.rpk`, **32,936 bytes**, SHA-256 `bcbea2837efe122b737b81b4ddb11325d1919bee3147d22be5ca531a7fb974b8`.
+
+Test mới chứng minh tác vụ được giải phóng và AppModel phát cập nhật scene/chỉ đường; các callback truyền và giải mã trong test vẫn là mô phỏng, không phải đo ACK/radio thật. Chưa nghiệm thu bản 0.5.17 trên iPhone + Band hoặc xác nhận <5s khi khoá màn hình. USB đã xác nhận iPhone đang cài 0.5.16 (32) trong lần kiểm tra này.
+
+Thư mục handoff chỉ giữ IPA mới cùng RPK không đổi. IPA 0.5.16 cũ có thể tải lại từ [CI trước](https://github.com/LordierClaw/blueband-map/actions/runs/33828764075) nếu còn trong thời hạn lưu trữ; bản đó hiển thị map đầu nhưng có lỗi realtime đã mô tả, không phải bản realtime known-good.
