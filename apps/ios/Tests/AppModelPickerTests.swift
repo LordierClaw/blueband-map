@@ -68,8 +68,8 @@ final class AppModelPickerTests: XCTestCase {
         XCTAssertLessThan(model.lastMapFixAgeMilliseconds ?? .max, 5_000)
         XCTAssertEqual(requests.last?.matchedPosition.latitude ?? -1, 0.0002, accuracy: 0.00001)
         let updates = model.navigationDebugEntries.filter { $0.stage == "nav.update" }
-        XCTAssertFalse(updates.contains { $0.detail.contains("distanceM=222 ") },
-                       "the initial frame must not overwrite the newer 200 m guidance after its delayed display")
+        XCTAssertFalse(updates.contains { $0.detail.contains("distanceM=111 ") },
+                       "the initial frame must not overwrite the newer 89 m guidance after its delayed display")
         for request in requests {
             let config = try VietmapSnapshotConfiguration.make(request)
             let marker = config.point(for: request.matchedPosition)
