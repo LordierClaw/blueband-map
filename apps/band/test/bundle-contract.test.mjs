@@ -96,7 +96,8 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
 
 test("generated HUD resources use the required PNG format at their display size", async () => {
   const expected = {
-    "maneuver-right.png": [44, 56, 3],
+    ...Object.fromEntries(["straight", "left", "right", "uTurn", "roundabout", "arrive"]
+      .map(name => [`maneuver-${name}.png`, [44, 56, 6]])),
     "marker-cursor-v4.png": [30, 38, 6],
     "destination-pin.png": [28, 34, 3],
     "destination-edge.png": [28, 28, 3],

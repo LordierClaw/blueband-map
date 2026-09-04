@@ -193,6 +193,25 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         }
     }
 
+    func testTwoChunkWindowReducesRecordedHardwareACKLatencyWithoutLargerEnvelopes() async throws {
+        var durations: [Double] = []
+        for window in [1, 2] {
+            let session = WindowedRouteCardSession(chunkDelay: .milliseconds(500))
+            let coordinator = RouteCardRenderCoordinator(session: session, transferWindow: window)
+            await session.setReceiver { envelope in coordinator.consume(envelope) }
+            let asset = try RenderAsset(kind: .raster, formatVersion: RenderProtocol.formatVersion,
+                width: 212, height: 520, data: Data(repeating: 0x5a, count: 7416), primitives: 0)
+            let started = Date()
+            await coordinator.start(asset: asset)
+            durations.append(Date().timeIntervalSince(started))
+            guard case .displayed = coordinator.state else { return XCTFail("window \(window) failed") }
+            let concurrent = await session.maximumConcurrentChunks
+            XCTAssertEqual(concurrent, window)
+        }
+        print("TRANSFER 7416B ACK500ms window1=\(durations[0])s window2=\(durations[1])s")
+        XCTAssertLessThan(durations[1], durations[0] * 0.65)
+    }
+
     func testDefaultWindowWaitsForEachChunkAcknowledgementAndCarriesNavigationPreview() async throws {
         let session = WindowedRouteCardSession(delayFirstChunk: true)
         let coordinator = RouteCardRenderCoordinator(

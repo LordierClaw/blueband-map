@@ -66,6 +66,8 @@ final class AppModelPickerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(model.navigationDebugEntries.filter { $0.stage == "nav.update" }.count, 2,
                                     "a displayed scene must unblock live guidance updates")
         XCTAssertLessThan(model.lastMapFixAgeMilliseconds ?? .max, 5_000)
+        let concurrentChunks = await sender.maximumConcurrentChunks
+        XCTAssertEqual(concurrentChunks, 2, "navigation uses the existing bounded two-chunk window")
         XCTAssertEqual(requests.last?.matchedPosition.latitude ?? -1, 0.0002, accuracy: 0.00001)
         let updates = model.navigationDebugEntries.filter { $0.stage == "nav.update" }
         XCTAssertFalse(updates.contains { $0.detail.contains("distanceM=111 ") },
