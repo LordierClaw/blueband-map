@@ -251,7 +251,13 @@ test("full-size maps survive asynchronous file and send callbacks across repeate
       const scene = `scene-${run}`
       receive(envelope(`prepare-${run}`, "render.prepare", prepare({ sceneId: scene, bytes: bytes.length, sha256, preview: preview() })))
       receive(envelope(`begin-${run}`, "map.asset.begin", begin({ asset, scene, bytes: bytes.length, sha256 })))
-      for (let offset = 0; offset < bytes.length; offset += 480) {
+      const offsets = Array.from({ length: Math.ceil(bytes.length / 480) }, (_, index) => index * 480)
+      // Alternate stop-and-wait with reordered two-chunk windows, including a
+      // native 204 on the later chunk and its identical command retry.
+      if (run % 2) for (let index = 0; index + 1 < offsets.length; index += 2) {
+        [offsets[index], offsets[index + 1]] = [offsets[index + 1], offsets[index]]
+      }
+      for (const offset of offsets) {
         const chunk = envelope(`chunk-${run}-${offset}`, "map.asset.chunk", {
           asset, scene, run: RUN, offset, data: Buffer.from(bytes.subarray(offset, offset + 480)).toString("base64")
         })
@@ -312,7 +318,7 @@ test("failure diagnostics retain the last chunk boundary without returning paylo
     const report = sent.find(message => message.topic === "diagnostics.report")
     assert.ok(report, "automatically queryable peer diagnostics are required")
     assert.deepEqual(report.body, {
-      request: "probe-1", rpk: 27, phase: "chunk", offset: 0, received: 4, sendCode: 0
+      request: "probe-1", rpk: 28, phase: "chunk", offset: 0, received: 4, sendCode: 0
     })
     assert.ok(Buffer.byteLength(JSON.stringify(report)) < 512)
     sends.find(send => send.data.id === "chunk").fail({ code: 204 })

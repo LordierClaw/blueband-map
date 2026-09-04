@@ -39,6 +39,10 @@ test-rpk:
 test-rpk-runtime:
 	docker compose run --rm node-rpk node --test --test-concurrency=1 test/envelope-page.test.mjs
 
+.PHONY: test-rpk-contract
+test-rpk-contract:
+	docker compose run --rm node-rpk node --test --test-concurrency=1 test/bundle-contract.test.mjs
+
 test-lab:
 	docker compose run --rm node-lab bash -lc 'npm ci && npm test'
 

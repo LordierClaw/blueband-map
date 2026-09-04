@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.12</text>
+      <text class="version">RPK 0.6.13</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -633,7 +633,7 @@ export default {
       this.sendEnvelope({
         v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "diagnostics.report",
         body: {
-          request: request, rpk: 27, phase: this.lastReceivePhase,
+          request: request, rpk: 28, phase: this.lastReceivePhase,
           offset: this.lastReceiveOffset, received: this.lastReceivedBytes, sendCode: this.lastSendCode
         }
       })
@@ -1552,7 +1552,7 @@ export default {
 .nav-header { position: absolute; left: 0; top: 0; width: 212px; height: 96px; }
 .nav-arrow { position: absolute; left: 32px; top: 28px; width: 44px; height: 56px; }
 .nav-distance { position: absolute; left: 78px; top: 26px; width: 88px; font-size: 26px; font-weight: bold; text-align: right; color: #ffffff; }
-.nav-street { position: absolute; left: 72px; top: 60px; width: 126px; height: 22px; font-size: 14px; lines: 1; text-align: right; color: #ffffff; }
+.nav-street { position: absolute; left: 72px; top: 60px; width: 126px; height: 22px; font-size: 14px; lines: 1; text-align: left; color: #ffffff; }
 .nav-status { position: absolute; left: 72px; top: 80px; width: 94px; font-size: 10px; font-weight: bold; text-align: right; color: #5dffb0; }
 .map-frame { width: 212px; height: 520px; position: relative; background-color: #050e16; }
 .map { position: absolute; left: 0; top: 0; width: 212px; height: 520px; object-fit: contain; }

@@ -71,6 +71,7 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
             y: min(size.height - overlayInsets.bottom, max(overlayInsets.top, size.height * 0.72))
         )
         let mask = BandDisplaySafeMask.smartBand10PhotoEstimate
+        var localConfiguration: Self?
         while zoom >= 10 {
             let center = cameraCenter(
                 matched: request.matchedPosition,
@@ -89,8 +90,12 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
                 zoom: zoom,
                 center: center
             )
+            if localConfiguration == nil { localConfiguration = configuration }
             let user = configuration.point(for: request.matchedPosition)
             let forward = configuration.point(for: request.nextManeuver)
+            // A hairpin/roundabout exit can be behind the current road tangent.
+            // Zooming cannot put it ahead; keep the local heading-up map instead.
+            if forward.y >= user.y { return localConfiguration ?? configuration }
             if forward.y < user.y,
                mask.contains(
                 center: ScreenPoint(x: Int(user.x.rounded()), y: Int(user.y.rounded())),
@@ -104,6 +109,7 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
                ) { return configuration }
             zoom -= 1
         }
+        if let localConfiguration { return localConfiguration }
         throw VietmapSnapshotRenderer.Error.invalidRequest
     }
 

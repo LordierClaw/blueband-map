@@ -27,23 +27,26 @@ enum SnapshotImageEncoder {
     ) throws -> SnapshotImageOutput {
         let started = nowMilliseconds()
         let downsampled = try downsample(image)
+        // Compare the existing full-resolution palette path before committing
+        // to JPEG. Fewer bytes mean fewer ACK round trips; never block pixels here.
+        let compact = try? SnapshotPNGEncoder.encode(downsampled, profiles: [.colors16Labels], blockSizes: [1])
+        var jpegCandidate: (data: Data, quality: Int)?
         var rejectedBytes = 0
         for quality in jpegQualities where (1...100).contains(quality) {
             guard let data = jpeg(downsampled, quality: quality) else { continue }
             rejectedBytes = data.count
             if data.count <= RenderProtocol.maximumPayloadBytes {
-                return SnapshotImageOutput(
-                    data: data,
-                    format: .jpeg,
-                    jpegQuality: quality,
-                    colorCount: 0,
-                    pixelBlockSize: 1,
-                    durationMilliseconds: max(0, nowMilliseconds() - started)
-                )
+                jpegCandidate = (data, quality)
+                break
             }
         }
+        if let jpegCandidate, jpegCandidate.data.count <= (compact?.data.count ?? Int.max) {
+            return SnapshotImageOutput(data: jpegCandidate.data, format: .jpeg,
+                jpegQuality: jpegCandidate.quality, colorCount: 0, pixelBlockSize: 1,
+                durationMilliseconds: max(0, nowMilliseconds() - started))
+        }
         do {
-            let png = try SnapshotPNGEncoder.encode(
+            let png = try compact ?? SnapshotPNGEncoder.encode(
                 downsampled,
                 profiles: [.colors16Labels],
                 blockSizes: [1, 2, 4, 8]

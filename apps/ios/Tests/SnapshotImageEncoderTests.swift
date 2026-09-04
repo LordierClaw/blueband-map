@@ -16,14 +16,14 @@ final class SnapshotImageEncoderTests: XCTestCase {
         XCTAssertEqual(output.pixelBlockSize, 1)
     }
 
-    func testRepresentativeRotatedMapSelectsTheBestBoundedJPEG() throws {
+    func testRepresentativeRotatedMapKeepsQualityAtDisplaySize() throws {
         let source = try representativeMap(width: 424, height: 1_040)
         let output = try SnapshotImageEncoder.encode(source)
 
-        XCTAssertEqual(output.format, .jpeg)
-        XCTAssertNotNil(output.jpegQuality)
+        XCTAssertEqual(output.format, .png)
+        XCTAssertNil(output.jpegQuality)
         XCTAssertLessThanOrEqual(output.data.count, RenderProtocol.maximumPayloadBytes)
-        XCTAssertEqual(Array(output.data.prefix(2)), [0xff, 0xd8])
+        XCTAssertEqual(Array(output.data.prefix(8)), [137, 80, 78, 71, 13, 10, 26, 10])
         let decoded = try decode(output.data)
         XCTAssertEqual(decoded.width, 212)
         XCTAssertEqual(decoded.height, 520)

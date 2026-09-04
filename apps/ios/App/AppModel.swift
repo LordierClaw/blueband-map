@@ -130,7 +130,8 @@ final class AppModel: ObservableObject {
         self.updateClock = updateClock
         self.defaults = defaults
         self.scanDuration = scanDuration
-        self.renderCoordinator = RouteCardRenderCoordinator(session: routeCardSession ?? BandSessionRouteCardSender(session: session))
+        self.renderCoordinator = RouteCardRenderCoordinator(
+            session: routeCardSession ?? BandSessionRouteCardSender(session: session), transferWindow: 2)
         destinationLatitudeInput = defaults.string(forKey: "destinationLatitude") ?? ""
         destinationLongitudeInput = defaults.string(forKey: "destinationLongitude") ?? ""
         rememberedBand = bandStore.load()
@@ -699,9 +700,6 @@ final class AppModel: ObservableObject {
         if lastMapFixAgeMilliseconds! >= 5_000 { latencyViolations += 1 }
         activeSnapshotConfiguration = snapshot.configuration
         activeSnapshotAnchor = progress.matchedLocation ?? location.geoPoint
-        navigationManeuver = instruction?.maneuver ?? .straight
-        navigationDistanceMeters = max(0, Int((selection?.distanceMeters ?? 0).rounded()))
-        navigationStreet = instruction?.streetName ?? ""
         navigationState = .navigating
         logNavigation(
             "band.displayed",
@@ -758,12 +756,15 @@ final class AppModel: ObservableObject {
                     bearingDegrees: request.bearingDegrees,
                     generation: generation
                 )
+                // Rendering and BLE await while GPS advances. Bind the newest
+                // guidance to the newly displayed scene, never replay the old fix.
+                let guidance = pendingSnapshotRefresh ?? request
                 sendNavigationUpdate(
-                    route: request.route,
-                    progress: request.progress,
-                    location: request.location.geoPoint,
-                    headingDegrees: request.location.course,
-                    horizontalAccuracyMeters: request.location.horizontalAccuracy,
+                    route: guidance.route,
+                    progress: guidance.progress,
+                    location: guidance.location.geoPoint,
+                    headingDegrees: guidance.location.course,
+                    horizontalAccuracyMeters: guidance.location.horizontalAccuracy,
                     status: .navigating
                 )
             } catch is CancellationError {
@@ -775,12 +776,13 @@ final class AppModel: ObservableObject {
                 guard generation == navigationGeneration else { return }
                 snapshotRetryAfter = Date().addingTimeInterval(5)
                 navigationState = .limitedMap
+                let guidance = pendingSnapshotRefresh ?? request
                 sendNavigationUpdate(
-                    route: request.route,
-                    progress: request.progress,
-                    location: request.location.geoPoint,
-                    headingDegrees: request.location.course,
-                    horizontalAccuracyMeters: request.location.horizontalAccuracy,
+                    route: guidance.route,
+                    progress: guidance.progress,
+                    location: guidance.location.geoPoint,
+                    headingDegrees: guidance.location.course,
+                    horizontalAccuracyMeters: guidance.location.horizontalAccuracy,
                     status: .limitedMap
                 )
                 logNavigation("map.refresh.failed", "code=\(Self.navigationErrorCode(for: error)) \(Self.navigationErrorDetail(for: error))")

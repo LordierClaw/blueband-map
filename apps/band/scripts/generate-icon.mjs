@@ -119,69 +119,7 @@ function paintCircle(bitmap, imageWidth, imageHeight, centerX, centerY, radius, 
   }
 }
 
-function paintLine(bitmap, imageWidth, imageHeight, from, to, radius, color) {
-  const steps = Math.max(Math.abs(to[0] - from[0]), Math.abs(to[1] - from[1]))
-  for (let step = 0; step <= steps; step += 1) {
-    const ratio = steps ? step / steps : 0
-    paintCircle(bitmap, imageWidth, imageHeight,
-      from[0] + (to[0] - from[0]) * ratio,
-      from[1] + (to[1] - from[1]) * ratio,
-      radius, color)
-  }
-}
-
-function paintGlyph(lines, circles = []) {
-  const bitmap = new Uint8Array(44 * 56)
-  for (const color of [1, 2]) {
-    const radius = color === 1 ? 5 : 3
-    for (const [from, to] of lines) paintLine(bitmap, 44, 56,
-      [from[0] + 1, from[1] + 1], [to[0] + 1, to[1] + 1], radius, color)
-    for (const [x, y, size] of circles) paintCircle(bitmap, 44, 56, x + 1, y + 1, size + (color === 1 ? 2 : 0), color)
-  }
-  return bitmap
-}
-
-function paintRoundabout() {
-  const bitmap = new Uint8Array(44 * 56)
-  for (const color of [1, 2]) {
-    const thickness = color === 1 ? 5 : 3
-    for (let y = 8; y < 41; y += 1) {
-      for (let x = 5; x < 39; x += 1) {
-        if (Math.abs(Math.hypot(x - 22, y - 24) - 11) <= thickness) bitmap[y * 44 + x] = color
-      }
-    }
-    paintLine(bitmap, 44, 56, [22, 48], [22, 35], thickness, color)
-    paintLine(bitmap, 44, 56, [30, 13], [37, 19], thickness, color)
-    paintLine(bitmap, 44, 56, [37, 19], [30, 25], thickness, color)
-  }
-  return bitmap
-}
-
-const glyphs = {
-  straight: [
-    [[[21, 47], [21, 10]], [[21, 10], [11, 22]], [[21, 10], [31, 22]]]
-  ],
-  left: [
-    [[[27, 47], [27, 26]], [[27, 26], [10, 26]], [[10, 26], [20, 16]], [[10, 26], [20, 36]]]
-  ],
-  right: [
-    [[[15, 47], [15, 26]], [[15, 26], [32, 26]], [[32, 26], [22, 16]], [[32, 26], [22, 36]]]
-  ],
-  uTurn: [
-    [[[29, 47], [29, 24]], [[29, 24], [24, 17]], [[24, 17], [16, 17]], [[16, 17], [11, 24]], [[11, 24], [11, 32]], [[11, 32], [5, 25]], [[11, 32], [18, 25]]]
-  ],
-  roundabout: [
-    [[[21, 47], [21, 39]], [[21, 13], [21, 7]], [[21, 7], [13, 15]], [[21, 7], [29, 15]]], [[21, 26, 11]]
-  ],
-  arrive: [
-    [[[21, 47], [21, 32]]], [[21, 20, 10], [21, 20, 4]]
-  ]
-}
-for (const [name, [lines, circles]] of Object.entries(glyphs)) {
-  await writeIndexed(`maneuver-${name}.png`, 44, 56,
-    [[0, 0, 0], [0, 33, 46], [0, 229, 255]], [0, 255, 255],
-    name === "roundabout" ? paintRoundabout() : paintGlyph(lines, circles))
-}
+// Maneuvers are vendored Google Material Icons; normal builds must not redraw them.
 
 function fillPolygon(bitmap, imageWidth, imageHeight, points, color) {
   for (let y = 0; y < imageHeight; y += 1) {
