@@ -148,7 +148,7 @@ public struct RenderRunMetrics: Codable, Equatable, Sendable {
         }
         guard paletteSize == 0 || paletteSize == 16 || paletteSize == 32,
               [1, 2, 4].contains(transferWindow),
-              ["cold", "warm", "reused", "unknown"].contains(cacheState) else {
+              ["cold", "warm", "cpu-cold", "cpu-warm", "reused", "unknown"].contains(cacheState) else {
             throw Error.invalidBounds
         }
         guard RenderProtocol.isValidIdentifier(terminalCode), terminalCode.utf8.count <= 32 else {

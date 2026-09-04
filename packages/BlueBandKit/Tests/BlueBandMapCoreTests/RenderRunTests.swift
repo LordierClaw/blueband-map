@@ -3,6 +3,19 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class RenderRunTests: XCTestCase {
+    func testCPUCacheStatesPreserveCurrentTransferMetrics() throws {
+        for state in ["cpu-cold", "cpu-warm"] {
+            let metrics = try RenderRunMetrics(totalMilliseconds: 3000, providerMilliseconds: 0,
+                prepareMilliseconds: 100, transferMilliseconds: 2900, validateMilliseconds: 0,
+                renderMilliseconds: 0, bytes: 4833, chunks: 12, retries: 0, primitives: 0,
+                providerCalls: 0, transferWindow: 2, cacheState: state,
+                ackDurationsMilliseconds: [500], terminalCode: "displayed")
+            XCTAssertEqual(metrics.cacheState, state)
+            XCTAssertEqual(metrics.transferWindow, 2)
+            XCTAssertEqual(metrics.transferMilliseconds, 2900)
+        }
+    }
+
     func testMetricsCalculateDeterministicAckPercentilesAndKeepCounters() throws {
         let metrics = try RenderRunMetrics(
             totalMilliseconds: 120,

@@ -29,7 +29,7 @@ final class AppModelPickerTests: XCTestCase {
                 let configuration = try VietmapSnapshotConfiguration.make(request)
                 return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0,
                     retainedLineLayers: 0, retainedSymbolLayers: 0, zoom: configuration.zoom,
-                    styleLoadMilliseconds: 0, snapshotMilliseconds: 200, cacheState: "test",
+                    styleLoadMilliseconds: 0, snapshotMilliseconds: 200, cacheState: "cpu-warm",
                     configuration: configuration)
             }
         )
@@ -99,7 +99,7 @@ final class AppModelPickerTests: XCTestCase {
                 let config = try VietmapSnapshotConfiguration.make(request)
                 return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
                     retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
-                    cacheState: "test", configuration: config)
+                    cacheState: "cpu-warm", configuration: config)
             })
         await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
         model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
@@ -149,7 +149,7 @@ final class AppModelPickerTests: XCTestCase {
                 let config = try VietmapSnapshotConfiguration.make(request)
                 return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
                     retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
-                    cacheState: "test", configuration: config)
+                    cacheState: "cpu-warm", configuration: config)
             })
         await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
         model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
