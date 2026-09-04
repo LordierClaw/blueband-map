@@ -117,6 +117,38 @@ final class AppModelPickerTests: XCTestCase {
         model.stopNavigation()
     }
 
+    func testTerminalBandFailureDoesNotRenderAgainAfterTheRetryCooldown() async throws {
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        let sender = WindowedRouteCardSession(failChunks: true)
+        var renders = 0
+        let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
+            routeTransport: ReplayRouteTransport(), sender: sender, render: { request in
+                renders += 1
+                let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "test", configuration: config)
+            })
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { manager.updating }
+        func fix(_ latitude: Double) -> CLLocation {
+            CLLocation(coordinate: .init(latitude: latitude, longitude: 0), altitude: 0,
+                horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())
+        }
+        location.locationManager(manager, didUpdateLocations: [fix(0)])
+        await waitUntil { model.navigationDebugEntries.contains { $0.stage == "map.refresh.failed" } }
+        location.locationManager(manager, didUpdateLocations: [fix(0.0001)])
+        try await Task.sleep(for: .milliseconds(5500))
+        XCTAssertEqual(renders, 1, "a terminal Band session cannot display a newly fetched/rendered map")
+        XCTAssertEqual(location.acceptedFixCount, 2, "keep consuming GPS while waiting for reconnect")
+        model.stopNavigation()
+    }
+
     func testCancelledNavigationEpilogueCannotStopRestartedGPS() async {
         let central = PickerCentral()
         let manager = TestLocationManager()

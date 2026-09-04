@@ -35,6 +35,10 @@ test-swift:
 test-rpk:
 	docker compose run --rm node-rpk bash -lc 'npm ci && npm test'
 
+.PHONY: test-rpk-runtime
+test-rpk-runtime:
+	docker compose run --rm node-rpk node --test --test-concurrency=1 test/envelope-page.test.mjs
+
 test-lab:
 	docker compose run --rm node-lab bash -lc 'npm ci && npm test'
 

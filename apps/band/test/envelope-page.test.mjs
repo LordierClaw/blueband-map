@@ -184,6 +184,108 @@ test("re-acknowledges an exact duplicate chunk without writing it twice", async 
   assert.equal(sent.filter(message => message.type === "ack" && message.id === "chunk-retry").length, 2)
 })
 
+test("a native ACK timeout does not erase a transfer before the phone retries", async () => {
+  const { page, connection, sent } = await harness()
+  const sends = []
+  connection.send = options => { sends.push(options); sent.push(options.data) }
+  try {
+    page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
+    page.receiveMessage({ data: envelope("begin", "map.asset.begin", begin()) })
+    const chunk = envelope("chunk-retry", "map.asset.chunk", {
+      asset: ASSET, run: RUN, scene: SCENE, offset: 0,
+      data: Buffer.from(BYTES).toString("base64")
+    })
+    page.receiveMessage({ data: chunk })
+    const transfer = page.activeTransfer
+    sends.find(send => send.data.id === chunk.id).fail("timeout", 204)
+
+    assert.equal(page.connected, true, "a send timeout is not a disconnect event")
+    assert.equal(page.activeTransfer, transfer, "retain accepted bytes for exact-command retry")
+    page.receiveMessage({ data: JSON.stringify(chunk) })
+    assert.equal(transfer.receivedBytes, BYTES.length)
+    assert.equal(sent.filter(message => message.id === chunk.id && message.type === "ack").length, 2)
+  } finally {
+    page.onDestroy()
+  }
+})
+
+test("full-size maps survive asynchronous file and send callbacks across repeated refreshes", async () => {
+  const callbacks = []
+  const sent = []
+  const file = memoryFile()
+  for (const name of ["access", "delete", "writeArrayBuffer"]) {
+    const operation = file[name].bind(file)
+    file[name] = options => callbacks.push(() => operation(options))
+  }
+  const connection = {
+    getReadyState({ success }) { success({ status: 1 }) },
+    send({ data, success }) {
+      sent.push(JSON.parse(JSON.stringify(data)))
+      if (success) callbacks.push(success)
+    }
+  }
+  const page = await loadPage(connection, file)
+  const flush = () => { while (callbacks.length) callbacks.shift()() }
+  const receive = message => {
+    const wire = JSON.stringify(message)
+    assert.ok(Buffer.byteLength(wire) <= 940, "exercise admitted envelopes")
+    page.receiveMessage({ data: wire })
+    flush()
+    assert.ok(sent.some(item => item.type === "ack" && item.id === message.id), `missing ACK ${message.id}`)
+  }
+  try {
+    for (let run = 0; run < 100; run += 1) {
+      const bytes = Uint8Array.from({ length: 8192 }, (_, index) => (index * 37 + run) & 255)
+      const sha256 = createHash("sha256").update(bytes).digest("hex")
+      const asset = `nav-${sha256.slice(0, 16)}`
+      const scene = `scene-${run}`
+      receive(envelope(`prepare-${run}`, "render.prepare", prepare({ sceneId: scene, bytes: bytes.length, sha256, preview: preview() })))
+      receive(envelope(`begin-${run}`, "map.asset.begin", begin({ asset, scene, bytes: bytes.length, sha256 })))
+      for (let offset = 0; offset < bytes.length; offset += 480) {
+        const chunk = envelope(`chunk-${run}-${offset}`, "map.asset.chunk", {
+          asset, scene, run: RUN, offset, data: Buffer.from(bytes.subarray(offset, offset + 480)).toString("base64")
+        })
+        receive(chunk)
+        if (offset === 480) receive(chunk) // exact retry must not append twice
+      }
+      receive(envelope(`end-${run}`, "map.asset.end", { asset, scene, run: RUN }))
+      assert.deepEqual(file.storage.get(page.pendingMapPath), bytes)
+      assert.notEqual(page.confirmedMap?.scene, scene, "do not promote before image decode")
+      page.mapComplete(page.pendingPublication.token)
+      flush()
+      assert.equal(page.confirmedMap.scene, scene)
+      assert.equal(page.navMarkerVisible, true)
+      assert.ok(sent.some(item => item.topic === "render.result" && item.body.sceneId === scene && item.body.status === "ok"))
+      assert.ok(file.storage.size <= 2, "keep file storage bounded")
+    }
+  } finally {
+    page.onDestroy()
+    flush()
+  }
+})
+
+test("failure diagnostics retain the last chunk boundary without returning payloads", async () => {
+  const { page, connection, sent } = await harness()
+  const sends = []
+  connection.send = options => { sends.push(options); sent.push(options.data) }
+  try {
+    page.receiveMessage({ data: envelope("prepare", "render.prepare", prepare()) })
+    page.receiveMessage({ data: envelope("begin", "map.asset.begin", begin()) })
+    page.receiveMessage({ data: envelope("chunk", "map.asset.chunk", {
+      asset: ASSET, run: RUN, scene: SCENE, offset: 0, data: Buffer.from(BYTES).toString("base64")
+    }) })
+    page.receiveMessage({ data: envelope("diagnostic", "diagnostics.get", { request: "probe-1" }) })
+    const report = sent.find(message => message.topic === "diagnostics.report")
+    assert.ok(report, "automatically queryable peer diagnostics are required")
+    assert.deepEqual(report.body, {
+      request: "probe-1", rpk: 27, phase: "chunk", offset: 0, received: 4, sendCode: 0
+    })
+    assert.ok(Buffer.byteLength(JSON.stringify(report)) < 512)
+  } finally {
+    page.onDestroy()
+  }
+})
+
 test("stores and publishes a prepared JPEG with a jpg extension", async () => {
   const { page, file } = await harness()
   page.receiveMessage({ data: envelope("prepare-jpeg", "render.prepare", prepare({ format: "image/jpeg" })) })

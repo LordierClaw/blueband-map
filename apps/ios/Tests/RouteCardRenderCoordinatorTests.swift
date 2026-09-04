@@ -6,6 +6,28 @@ import BlueBandMapCore
 
 @MainActor
 final class RouteCardRenderCoordinatorTests: XCTestCase {
+    func testTerminalFailureQueriesPeerOnceAndIgnoresUncorrelatedDiagnostics() async throws {
+        let requested = expectation(description: "one diagnostic exchange after terminal failure")
+        let session = DiagnosticRouteCardSession(requested: requested)
+        let coordinator = RouteCardRenderCoordinator(session: session)
+        await session.setReceiver { envelope in coordinator.consume(envelope) }
+        let asset = try RenderAsset(kind: .raster, formatVersion: 1, width: 212, height: 520,
+                                    data: Data(repeating: 0x5A, count: 64), primitives: 0)
+
+        await coordinator.start(asset: asset)
+        await fulfillment(of: [requested], timeout: 2)
+        XCTAssertTrue(coordinator.diagnostic.contains("peer=rpk27/chunk/off480/got960/err204"))
+        let diagnostic = coordinator.diagnostic
+        coordinator.consume(.message(id: "stale-report", source: .band, topic: "diagnostics.report", body: [
+            "request": .string("stale"), "rpk": .number(27), "phase": .string("end"),
+            "offset": .number(8192), "received": .number(8192), "sendCode": .number(0)
+        ]))
+        XCTAssertEqual(coordinator.diagnostic, diagnostic)
+        await coordinator.start(asset: asset)
+        let count = await session.requestCount
+        XCTAssertEqual(count, 1, "a reconnect-required refresh must not probe again")
+    }
+
     func testBufferedReadyCancelsPrepareTimeoutBeforeSlowTransfer() async throws {
         let session = WindowedRouteCardSession(chunkDelay: .milliseconds(5))
         let coordinator = RouteCardRenderCoordinator(
@@ -152,11 +174,13 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     private(set) var chunksStartedWhileFirstPending = 0
     private let chunkDelay: Duration
     private let delayFirstChunk: Bool
+    private let failChunks: Bool
     private var firstChunkPending = false
 
-    init(chunkDelay: Duration = .milliseconds(5), delayFirstChunk: Bool = false) {
+    init(chunkDelay: Duration = .milliseconds(5), delayFirstChunk: Bool = false, failChunks: Bool = false) {
         self.chunkDelay = chunkDelay
         self.delayFirstChunk = delayFirstChunk
+        self.failChunks = failChunks
     }
 
     func setReceiver(_ receiver: @escaping Receiver) { self.receiver = receiver }
@@ -173,6 +197,7 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
                 "bytes": body["bytes"]!, "primitives": body["primitives"]!,
             ])
         } else if topic == "map.asset.chunk" {
+            if failChunks { throw InterconnectDeliveryError.timeout("fixture-chunk") }
             activeChunks += 1
             maximumConcurrentChunks = max(maximumConcurrentChunks, activeChunks)
             let offset: Int
@@ -203,5 +228,25 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     private func receive(_ topic: String, body: [String: JSONValue]) async {
         guard let receiver else { return }
         await receiver(.message(id: "band-\(topic)", source: .band, topic: topic, body: body))
+    }
+}
+
+private actor DiagnosticRouteCardSession: RouteCardSessionSending {
+    let requested: XCTestExpectation
+    private var receiver: WindowedRouteCardSession.Receiver?
+    private(set) var requestCount = 0
+
+    init(requested: XCTestExpectation) { self.requested = requested }
+    func setReceiver(_ receiver: @escaping WindowedRouteCardSession.Receiver) { self.receiver = receiver }
+
+    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
+        guard topic == "diagnostics.get" else { throw InterconnectDeliveryError.timeout("fixture-prepare") }
+        requestCount += 1
+        await receiver?(.message(id: "peer-report", source: .band, topic: "diagnostics.report", body: [
+            "request": body["request"] ?? .null, "rpk": .number(27), "phase": .string("chunk"),
+            "offset": .number(480), "received": .number(960), "sendCode": .number(204)
+        ]))
+        requested.fulfill()
+        return "diagnostic-ack"
     }
 }
