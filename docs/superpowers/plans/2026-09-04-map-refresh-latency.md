@@ -14,10 +14,10 @@ Left-align the existing street label. Replace only maneuver glyphs with Google's
 
 ## Execution and verification
 
-- [ ] Add failing camera hairpin/coincident, stale-guidance, image-size/quality and street-layout regression checks; observe iOS CI and local RPK failures before fixes.
-- [ ] Correct shared camera fitting and latest-guidance publication; keep cancellation and post-ACK continuation tests.
-- [ ] Compare image byte counts/decoded quality and bounded-window latency; enable only supported, tested optimizations. Keep 8 KiB maximum and exact-command retries.
-- [ ] Vendor licensed maneuver artwork, generate PNGs and visually inspect all six at display size; keep marker/destination hashes unchanged.
-- [ ] Run `make test`, `make lint`, `git diff --check`, iOS simulator tests and arm64 build. Bump both changed component versions, package fresh IPA/RPK and a concise handoff.
+- [x] Add failing camera hairpin/coincident, stale-guidance, image-size/quality and street-layout regression checks; observe iOS CI and local RPK failures before fixes.
+- [x] Correct shared camera fitting and latest-guidance publication; keep cancellation and post-ACK continuation tests.
+- [x] Compare image byte counts/decoded quality and bounded-window latency; enable only supported, tested optimizations. Keep 8 KiB maximum and exact-command retries.
+- [x] Vendor licensed maneuver artwork, generate PNGs and visually inspect all six at display size; keep marker/destination hashes unchanged.
+- [x] Run `make test`, `make lint`, `git diff --check`, iOS simulator tests and arm64 build. Bump both changed component versions, package fresh IPA/RPK and a concise handoff.
 
 Repository/CI measurements do not prove locked-iPhone or physical-Band latency. Report warm/cold, transmission and hardware acceptance separately; do not call the <5 s device target achieved without a new device log.
