@@ -15,7 +15,7 @@ let package = Package(
         .library(name: "BlueBandMapCore", targets: ["BlueBandMapCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.1"),
+        .package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.2"),
         .package(url: "https://github.com/krzyzanowskim/CryptoSwift.git", exact: "1.10.0"),
     ],
     targets: [
