@@ -42,7 +42,7 @@ jobs:
         run: xcrun xcresulttool export attachments --path "$RUNNER_TEMP/BlueBandMap-tests.xcresult" --output-path "$RUNNER_TEMP/map-visuals"
       - name: Upload rendered test images
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blueband-map-visuals-${{ github.sha }}
           path: ${{ runner.temp }}/map-visuals
@@ -56,7 +56,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/Payload" "$RUNNER_TEMP/BlueBandMap-unsigned.ipa"
           shasum -a 256 "$RUNNER_TEMP/BlueBandMap-unsigned.ipa" > "$RUNNER_TEMP/BlueBandMap-unsigned.ipa.sha256"
       - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blueband-map-ios-${{ github.sha }}
           if-no-files-found: error
