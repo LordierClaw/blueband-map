@@ -537,6 +537,29 @@ test("render.cancel releases a matching prepared generation", async () => {
   assert.equal(page.preparedRender, null)
 })
 
+test("roundabout geometry overrides exit number in preview and live guidance", async () => {
+  const { page } = await harness()
+  page.receiveMessage({ data: envelope("direction-preview", "render.prepare", prepare({
+    preview: preview({ maneuver: "roundabout", roundaboutExit: 2, roundaboutDirection: "straight" })
+  })) })
+  assert.equal(page.navArrowPath, "/common/maneuver-roundabout-straight.png")
+  page.receiveMessage({ data: envelope("direction-cancel", "render.cancel", { runId: RUN, sceneId: SCENE }) })
+  publish(page)
+  let seq = 0
+  for (const direction of ["straight", "left", "right", "uTurn"]) {
+    page.receiveMessage({ data: envelope(`direction-${direction}`, "nav.update", navigation({
+      seq: ++seq, maneuver: "roundabout", roundaboutExit: 2, roundaboutDirection: direction
+    })) })
+    assert.equal(page.navArrowPath, direction === "uTurn" ? "/common/maneuver-uTurn.png" : `/common/maneuver-roundabout-${direction}.png`)
+  }
+  for (const direction of ["arrive", "../../bad", 2, null]) {
+    page.receiveMessage({ data: envelope(`invalid-direction-${seq++}`, "nav.update", navigation({
+      seq: 100, maneuver: "roundabout", roundaboutDirection: direction
+    })) })
+    assert.equal(page.navSequence, 4, "invalid direction cannot replace the current scene guidance")
+  }
+})
+
 test("roundabout preview and live guidance show the provider exit without inventing a right turn", async () => {
   const { page } = await harness()
   page.receiveMessage({ data: envelope("exit-preview", "render.prepare", prepare({

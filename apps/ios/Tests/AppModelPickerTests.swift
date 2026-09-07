@@ -10,6 +10,48 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testNextMapRendersWhilePreviousMapAwaitsBandDisplay() async throws {
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        let sender = WindowedRouteCardSession(deferResults: true)
+        var requests: [VietmapSnapshotRequest] = []
+        let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
+            routeTransport: ReplayRouteTransport(), sender: sender, render: { request in
+                requests.append(request)
+                let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "cpu-warm", configuration: config)
+            })
+        defer { model.stopNavigation() }
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { manager.updating }
+        func fix(_ latitude: Double) -> CLLocation {
+            CLLocation(coordinate: .init(latitude: latitude, longitude: 0), altitude: 0,
+                horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())
+        }
+        location.locationManager(manager, didUpdateLocations: [fix(0)])
+        await waitUntil { await sender.pendingResult != nil }
+        let firstScene = await sender.prepareValue("sceneId")
+        location.locationManager(manager, didUpdateLocations: [fix(0.0001), fix(0.0002)])
+        await waitUntil { requests.count == 2 }
+        XCTAssertEqual(requests.last?.matchedPosition.latitude ?? -1, 0.0002, accuracy: 0.00001)
+        let stillFirstScene = await sender.prepareValue("sceneId")
+        XCTAssertEqual(stillFirstScene, firstScene, "preparing B must not send it before A is confirmed")
+        XCTAssertNil(model.routePreviewPNG)
+        await sender.deliverResult()
+        await waitUntil { await sender.prepareValue("sceneId") != firstScene }
+        await waitUntil { await sender.pendingResult != nil }
+        await sender.deliverResult()
+        await waitUntil { model.navigationDebugEntries.filter { $0.stage == "band.displayed" }.count == 2 }
+        XCTAssertEqual(requests.count, 2, "reuse the prepared newest frame instead of rendering it again")
+        XCTAssertTrue(model.navigationDebugEntries.contains { $0.stage == "map.pipeline" && $0.detail.contains("queueMs=") && $0.detail.contains("frameGapMs=") })
+    }
+
     func testTransferTimeoutResumesOnTheLatestGPSWithoutRestartingNavigation() async throws {
         let manager = TestLocationManager()
         let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })

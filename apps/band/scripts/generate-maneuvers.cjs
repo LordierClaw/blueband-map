@@ -27,5 +27,12 @@ async function main() {
     }
     await writeFile(resolve(__dirname, `../src/common/maneuver-roundabout${exit ? '-' + exit : ''}.png`), canvas.toBuffer('image/png'))
   }
+  for (const direction of ['straight', 'left', 'right']) {
+    const svg = await readFile(resolve(__dirname, `../vendor/mapbox-directions/roundabout_${direction}.svg`), 'utf8')
+    const image = await loadImage(Buffer.from(svg.replaceAll('#000000', '#00e5ff')))
+    const canvas = createCanvas(44, 56)
+    canvas.getContext('2d').drawImage(image, 0, 6, 44, 44)
+    await writeFile(resolve(__dirname, `../src/common/maneuver-roundabout-${direction}.png`), canvas.toBuffer('image/png'))
+  }
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })

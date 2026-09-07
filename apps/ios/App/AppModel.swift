@@ -674,7 +674,8 @@ final class AppModel: ObservableObject {
             destinationMode: destination.mode,
             destinationX: destination.point.x,
             destinationY: destination.point.y,
-            roundaboutExit: instruction?.roundaboutExit
+            roundaboutExit: instruction?.roundaboutExit,
+            roundaboutDirection: instruction?.roundaboutDirection
         )
         logNavigation("map.transfer.start", "session=\(generation) bytes=\(asset.byteCount)")
         await renderCoordinator.start(asset: asset, diagnostics: RouteCardRenderDiagnostics(
@@ -841,7 +842,8 @@ final class AppModel: ObservableObject {
             destinationMode: destination.mode,
             destinationX: destination.point.x,
             destinationY: destination.point.y,
-            roundaboutExit: instruction?.roundaboutExit
+            roundaboutExit: instruction?.roundaboutExit,
+            roundaboutDirection: instruction?.roundaboutDirection
         ) else { return }
         navigationManeuver = update.maneuver
         navigationDistanceMeters = update.distanceMeters

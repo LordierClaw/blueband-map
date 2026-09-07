@@ -253,11 +253,17 @@ function renderProtocolReject(code) {
 }
 
 function validRoundaboutExit(body) {
-  return body.roundaboutExit === undefined || (body.maneuver === "roundabout" &&
-    renderProtocolValidInteger(body.roundaboutExit) && body.roundaboutExit >= 1 && body.roundaboutExit <= 12)
+  return (body.roundaboutExit === undefined || (body.maneuver === "roundabout" &&
+    renderProtocolValidInteger(body.roundaboutExit) && body.roundaboutExit >= 1 && body.roundaboutExit <= 12)) &&
+    (body.roundaboutDirection === undefined || (body.maneuver === "roundabout" &&
+      ["straight", "left", "right", "uTurn"].indexOf(body.roundaboutDirection) >= 0))
 }
 
 function maneuverPath(body) {
+  if (body.maneuver === "roundabout" && body.roundaboutDirection !== undefined) {
+    return body.roundaboutDirection === "uTurn" ? "/common/maneuver-uTurn.png" :
+      "/common/maneuver-roundabout-" + body.roundaboutDirection + ".png"
+  }
   return "/common/maneuver-" + body.maneuver +
     (body.maneuver === "roundabout" && body.roundaboutExit !== undefined ? "-" + body.roundaboutExit : "") + ".png"
 }

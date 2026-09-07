@@ -2,6 +2,70 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class VietmapRouteTests: XCTestCase {
+    func testRoundaboutGeometrySelectsRelativeExitNotLocalExitTurnOrExitNumber() {
+        for (sweep, expected) in [(90, "right"), (180, "straight"), (270, "left"), (360, "uTurn")] {
+            for rotation in [0.0, 73, 181, 350] {
+                let route = circularRoute(sweep: sweep, rotation: rotation)
+                let debug = NavigationDebugFormatter.export(state: "navigating", start: nil, destination: nil,
+                    routeDistanceMeters: route.distanceMeters, alternativePathCount: 1,
+                    instructions: route.instructions, entries: [])
+                XCTAssertTrue(debug.contains("roundaboutDirection=\(expected)"), "sweep=\(sweep), rotation=\(rotation): \(debug)")
+            }
+        }
+    }
+
+    private func circularRoute(sweep: Int, rotation: Double) -> RoutePlan {
+        // Independent circle fixture: approach north; CCW circulation; radial outlet.
+        // All cases deliberately carry exit=2 and local exit sign=2.
+        var xy: [(Double, Double)] = [(0, -120), (0, -20)]
+        for angle in stride(from: -75, through: -90 + sweep, by: 15) {
+            let radians = Double(angle) * .pi / 180
+            xy.append((20 * cos(radians), 20 * sin(radians)))
+        }
+        let end = Double(-90 + sweep) * .pi / 180
+        xy.append((80 * cos(end), 80 * sin(end)))
+        let rotation = rotation * .pi / 180
+        let points = xy.map { x, y in
+            GeoPoint(latitude: 20 + (y * cos(rotation) - x * sin(rotation)) / 111_195,
+                     longitude: 105 + (x * cos(rotation) + y * sin(rotation)) / (111_195 * cos(20 * .pi / 180)))
+        }
+        return RoutePlan(points: points, instructions: [
+            RouteInstruction(distanceMeters: 200, headingDegrees: 0, sign: 6,
+                             interval: 0...(points.count - 2), streetName: "Circle", roundaboutExit: 2),
+            RouteInstruction(distanceMeters: 60, headingDegrees: 0, sign: 2,
+                             interval: (points.count - 2)...(points.count - 1), streetName: "Exit")
+        ], distanceMeters: 260)
+    }
+
+    func testRoundaboutGeometryRejectsMissingOutletStraightAndClockwisePaths() {
+        let circle = circularRoute(sweep: 180, rotation: 0)
+        let last = circle.points.count - 1
+        XCTAssertNil(RoundaboutGeometry.direction(points: circle.points, interval: 0...last))
+        let straight = (0..<10).map { GeoPoint(latitude: 20 + Double($0) * 0.0001, longitude: 105) }
+        XCTAssertNil(RoundaboutGeometry.direction(points: straight, interval: 0...8))
+        let mirrored = circle.points.map { GeoPoint(latitude: $0.latitude, longitude: 210 - $0.longitude) }
+        XCTAssertNil(RoundaboutGeometry.direction(points: mirrored, interval: 0...(last - 1)))
+        var invalid = circle.points
+        invalid[4] = GeoPoint(latitude: .nan, longitude: 105)
+        XCTAssertNil(RoundaboutGeometry.direction(points: invalid, interval: 0...(last - 1)))
+        var duplicated = circle.points
+        duplicated.insert(circle.points[4], at: 4)
+        XCTAssertEqual(RoundaboutGeometry.direction(points: duplicated, interval: 0...last), .straight)
+    }
+
+    func testNguyenKhuyenShapeUsesApproachBeforeArcAndOutletAfterArc() {
+        // Independently reconstructed headings/lengths, not a raw provider capture.
+        let segments: [(Double, Double)] = [(344, 31), (344, 155), (343, 225),
+            (52, 6), (33, 6), (15, 6), (358, 6), (339, 7), (315, 8), (289, 8), (261, 8), (326, 76)]
+        var points = [GeoPoint(latitude: 20, longitude: 105)]
+        for (heading, meters) in segments {
+            let previous = points.last!, angle = heading * .pi / 180
+            points.append(GeoPoint(latitude: previous.latitude + meters * cos(angle) / 111_195,
+                longitude: previous.longitude + meters * sin(angle) / (111_195 * cos(20 * .pi / 180))))
+        }
+        XCTAssertEqual(RoundaboutGeometry.direction(points: points, interval: 0...(points.count - 2)), .straight)
+    }
+
     func testProviderRoundaboutExitSurvivesIntoDebugGuidance() throws {
         let body = Data(#"{"code":"OK","paths":[{"distance":465,"points_encoded":true,"points":"????","instructions":[{"distance":465,"heading":0,"sign":6,"interval":[0,1],"street_name":"Nguyễn Khuyến","text":"Tại vòng xoay, rẽ lối rẽ 2 vào đường Nguyễn Khuyến"}]}]}"#.utf8)
         let route = try VietmapRouteClient.parse(body)

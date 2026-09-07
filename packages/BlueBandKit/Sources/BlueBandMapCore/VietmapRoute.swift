@@ -29,6 +29,7 @@ public struct RouteInstruction: Equatable, Sendable {
     public let interval: ClosedRange<Int>
     public let streetName: String
     public let roundaboutExit: Int?
+    public internal(set) var roundaboutDirection: NavigationManeuver?
 
     public init(
         distanceMeters: Double,
@@ -44,6 +45,7 @@ public struct RouteInstruction: Equatable, Sendable {
         self.interval = interval
         self.streetName = streetName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.roundaboutExit = sign == 6 ? roundaboutExit.flatMap { (1...12).contains($0) ? $0 : nil } : nil
+        self.roundaboutDirection = nil
     }
 
     public var maneuver: NavigationManeuver {
@@ -71,7 +73,13 @@ public struct RoutePlan: Equatable, Sendable {
         alternativePathCount: Int = 1
     ) {
         self.points = points
-        self.instructions = instructions
+        self.instructions = instructions.map { instruction in
+            var result = instruction
+            if instruction.sign == 6 {
+                result.roundaboutDirection = RoundaboutGeometry.direction(points: points, interval: instruction.interval)
+            }
+            return result
+        }
         self.distanceMeters = distanceMeters
         self.alternativePathCount = alternativePathCount
     }

@@ -3,6 +3,12 @@ import BlueBandCore
 @testable import BlueBandMapCore
 
 final class NavigationUpdateTests: XCTestCase {
+    func testDirectionalRoundaboutPreviewRetainsGeometryDirection() throws {
+        let json = Data(#"{"maneuver":"roundabout","roundaboutExit":2,"roundaboutDirection":"straight","distanceMeters":80,"street":"Road","x":106,"y":374,"headingBucket":0,"destinationMode":"hidden","destinationX":0,"destinationY":0}"#.utf8)
+        let preview = try JSONDecoder().decode(RenderNavigationPreview.self, from: json)
+        XCTAssertEqual(preview.jsonBody()["roundaboutDirection"], .string("straight"))
+    }
+
     func testRoundaboutExitUsesTheSameBoundedValueInPreviewAndLiveUpdate() throws {
         for exit in [nil, 1, 2, 12, 0, 13] as [Int?] {
             let update = try NavigationUpdate(scene: "scene", seq: 1, x: 106, y: 374,

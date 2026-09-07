@@ -68,6 +68,7 @@ public enum NavigationDebugFormatter {
                 "distanceM=\(Int(instruction.distanceMeters.rounded())) " +
                 "interval=\(instruction.interval.lowerBound)...\(instruction.interval.upperBound) " +
                 (instruction.maneuver == .roundabout ? "roundaboutExit=\(instruction.roundaboutExit.map(String.init) ?? "unknown") " : "") +
+                (instruction.maneuver == .roundabout ? "roundaboutDirection=\(instruction.roundaboutDirection?.rawValue ?? "unknown") " : "") +
                 "street=\(oneLine(instruction.streetName))"
             )
         }

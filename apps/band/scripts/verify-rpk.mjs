@@ -50,6 +50,7 @@ for (const required of [
   "common/material-icons-LICENSE.txt",
   "common/mapbox-directions-LICENSE.txt",
   ...Array.from({ length: 12 }, (_, index) => `common/maneuver-roundabout-${index + 1}.png`),
+  ...["straight", "left", "right"].map(direction => `common/maneuver-roundabout-${direction}.png`),
   "common/marker-cursor-v4.png",
   "common/destination-pin.png",
   "common/destination-edge.png",
@@ -79,6 +80,7 @@ if (icon.readUInt32BE(16) !== 256 || icon.readUInt32BE(20) !== 256 || icon[25] !
 for (const name of [
   ...["straight", "left", "right", "uTurn", "roundabout", "arrive"].map(name => `maneuver-${name}.png`),
   ...Array.from({ length: 12 }, (_, index) => `maneuver-roundabout-${index + 1}.png`),
+  ...["straight", "left", "right"].map(direction => `maneuver-roundabout-${direction}.png`),
   "marker-cursor-v4.png",
   ...Array.from({ length: 8 }, (_, index) => `destination-edge-${index}.png`)
 ]) {

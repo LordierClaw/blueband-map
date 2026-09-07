@@ -100,6 +100,7 @@ test("generated HUD resources use the required PNG format at their display size"
     ...Object.fromEntries(["straight", "left", "right", "uTurn", "roundabout", "arrive"]
       .map(name => [`maneuver-${name}.png`, [44, 56, 6]])),
     ...Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`maneuver-roundabout-${index + 1}.png`, [44, 56, 6]])),
+    ...Object.fromEntries(["straight", "left", "right"].map(direction => [`maneuver-roundabout-${direction}.png`, [44, 56, 6]])),
     "marker-cursor-v4.png": [30, 38, 6],
     "destination-pin.png": [28, 34, 3],
     "destination-edge.png": [28, 28, 3],
