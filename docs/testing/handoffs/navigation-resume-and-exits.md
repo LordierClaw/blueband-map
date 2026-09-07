@@ -28,6 +28,10 @@ Theo [Vela background running](https://iot.mi.com/vela/quickapp/en/guide/framewo
 
 ## Một lượt kiểm tra ngắn
 
+Bản nguồn cuối: `b52dd6fb3b82619a81ab60fe55b8932f6e1c156a` trên `main`. IPA được build từ `452cc4d1ed864b5ac784ceb639de794c71dc07b2`; mã iOS và BlueBandKit không đổi giữa hai commit, commit cuối chỉ điều chỉnh khung HUD Band và kiểm thử tương ứng.
+
+Đã đạt: `make test` (177 test Swift portable, 35 test RPK và các bộ kiểm tra repository), `make lint`, `git diff --check`; [iOS CI: 86 test, 0 lỗi và xuất IPA](https://github.com/LordierClaw/blueband-map/actions/runs/34086543880), [Swift CI](https://github.com/LordierClaw/blueband-map/actions/runs/34086543877), [RPK CI bản cuối](https://github.com/LordierClaw/blueband-map/actions/runs/34086729008), [Repository CI](https://github.com/LordierClaw/blueband-map/actions/runs/34086729047) đều thành công. Đây không thay thế kiểm thử iPhone/Band thật bên dưới. File `SHA256SUMS` đi kèm xác định chính xác cặp artifact bàn giao.
+
 1. Cài đúng hai phiên bản. Đi qua vòng xuyến và một chỗ rẽ; kiểm tra số trong icon, tên đường một dòng nằm giữa, map/marker rõ.
 2. Trong cùng phiên, lần lượt để thông báo che Band, để Band tự tắt rồi bật lại, sau đó khóa iPhone. Không bấm Start lại. Khi Band hoạt động lại, map phải tự tiếp tục với vị trí mới.
 3. Xuất **file đầy đủ**, không chỉ chép phần đầu log. Ghi rõ màn nào bị che/tắt và map có tự chạy lại hay không. Kiểm tra `map.resume.start/result`, `band.displayed`, `window=4`, `fixAgeMs` và khoảng cách giữa các frame. Mục tiêu <5 s cần được kiểm chứng bằng nhiều frame thực tế; nếu còn lỗi, giữ log của lần lỗi đầu.
