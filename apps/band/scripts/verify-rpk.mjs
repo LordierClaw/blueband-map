@@ -48,6 +48,8 @@ for (const required of [
   "common/maneuver-roundabout.png",
   "common/maneuver-arrive.png",
   "common/material-icons-LICENSE.txt",
+  "common/mapbox-directions-LICENSE.txt",
+  ...Array.from({ length: 12 }, (_, index) => `common/maneuver-roundabout-${index + 1}.png`),
   "common/marker-cursor-v4.png",
   "common/destination-pin.png",
   "common/destination-edge.png",
@@ -62,7 +64,7 @@ const expectedFeatures = [
   { name: "system.file" }
 ]
 if (manifest.package !== "dev.lordierclaw.bluebandmap.band" || manifest.icon !== "/common/icon.png" ||
-    manifest.versionName !== "0.6.13" || manifest.versionCode !== 28 || manifest.minAPILevel !== 1 ||
+    manifest.versionName !== "0.6.14" || manifest.versionCode !== 29 || manifest.minAPILevel !== 1 ||
     manifest.config.designWidth !== 212 ||
     JSON.stringify(manifest.features) !== JSON.stringify(expectedFeatures)) {
   throw new Error("compiled manifest does not match Band 10 bundle contract")
@@ -76,6 +78,7 @@ if (icon.readUInt32BE(16) !== 256 || icon.readUInt32BE(20) !== 256 || icon[25] !
 }
 for (const name of [
   ...["straight", "left", "right", "uTurn", "roundabout", "arrive"].map(name => `maneuver-${name}.png`),
+  ...Array.from({ length: 12 }, (_, index) => `maneuver-roundabout-${index + 1}.png`),
   "marker-cursor-v4.png",
   ...Array.from({ length: 8 }, (_, index) => `destination-edge-${index}.png`)
 ]) {

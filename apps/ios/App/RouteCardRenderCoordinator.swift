@@ -142,6 +142,37 @@ final class RouteCardRenderCoordinator {
     private var peerDiagnostic = "none"
     private var peerRequestID: String?
     private var peerDiagnosticTask: Task<Void, Never>?
+    private var recoveryTarget: RenderRunIdentity?
+    private var resetTarget: RenderRunIdentity?
+    private var resetReadyRequest: String?
+
+    var canRecoverWithoutReconnect: Bool { recoveryTarget != nil && !disconnectObserved }
+
+    func prepareForRefresh() async -> Bool {
+        guard requiresReconnect else { return true }
+        guard let target = recoveryTarget, !disconnectObserved,
+              operationToken == nil, resetTarget == nil else { return false }
+        resetTarget = target
+        resetReadyRequest = nil
+        defer { resetTarget = nil; resetReadyRequest = nil }
+        do {
+            let request = try await session.sendAwaitingAcknowledgement(topic: "render.reset", body: [
+                "runId": .string(target.runID), "sceneId": .string(target.sceneID)
+            ])
+            // Reply and ACK can arrive in either order. ACK alone (including a
+            // legacy peer's unknown-topic ACK) must never release the latch.
+            for _ in 0..<50 {
+                if resetReadyRequest == request { break }
+                try await clock.sleep(for: .milliseconds(20))
+            }
+            guard !Task.isCancelled, !disconnectObserved, recoveryTarget == target,
+                  resetReadyRequest == request else { return false }
+            requiresReconnect = false
+            recoveryTarget = nil
+            state = .idle
+            return true
+        } catch { return false }
+    }
 
     init(
         session: any RouteCardSessionSending,
@@ -167,7 +198,7 @@ final class RouteCardRenderCoordinator {
     ) async {
         let mode = RouteCardMode.routeCard
         guard operationToken == nil else { return }
-        guard !requiresReconnect else {
+        guard await prepareForRefresh() else {
             state = .failed(mode: mode, code: "TRANSFER_RECONNECT_REQUIRED")
             return
         }
@@ -233,6 +264,14 @@ final class RouteCardRenderCoordinator {
             consumePeerDiagnostic(body)
             return
         }
+        if topic == "render.reset.ready" {
+            guard let target = resetTarget, !disconnectObserved,
+                  string(body, key: "runId") == target.runID,
+                  string(body, key: "sceneId") == target.sceneID,
+                  let request = string(body, key: "request"), !request.isEmpty, request.utf8.count <= 64 else { return }
+            resetReadyRequest = request
+            return
+        }
         guard let pending,
               pending.token == operationToken else { return }
 
@@ -250,6 +289,7 @@ final class RouteCardRenderCoordinator {
 
     func disconnected() {
         disconnectObserved = true
+        recoveryTarget = nil
         peerDiagnosticTask?.cancel()
         peerRequestID = nil
         if peerDiagnostic == "pending" { peerDiagnostic = "unavailable" }
@@ -622,6 +662,9 @@ final class RouteCardRenderCoordinator {
 
     private func finish(code: String, requiresReconnect: Bool) {
         guard let token = operationToken, runContext != nil else { return }
+        if requiresReconnect && ["TRANSFER_TIMEOUT", "ASSET_READY_TIMEOUT", "ASSET_RESULT_TIMEOUT"].contains(code) {
+            recoveryTarget = runContext?.identity
+        }
         if requiresReconnect { self.requiresReconnect = true }
         let failedMode = pending?.mode ?? .routeCard
         state = .failed(mode: failedMode, code: code)

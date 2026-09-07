@@ -2,6 +2,16 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class VietmapRouteTests: XCTestCase {
+    func testProviderRoundaboutExitSurvivesIntoDebugGuidance() throws {
+        let body = Data(#"{"code":"OK","paths":[{"distance":465,"points_encoded":true,"points":"????","instructions":[{"distance":465,"heading":0,"sign":6,"interval":[0,1],"street_name":"Nguyễn Khuyến","text":"Tại vòng xoay, rẽ lối rẽ 2 vào đường Nguyễn Khuyến"}]}]}"#.utf8)
+        let route = try VietmapRouteClient.parse(body)
+        let debug = NavigationDebugFormatter.export(state: "navigating", start: nil, destination: nil,
+            routeDistanceMeters: route.distanceMeters, alternativePathCount: 1,
+            instructions: route.instructions, entries: [])
+        XCTAssertTrue(debug.contains("roundaboutExit=2"), "retain the actual exit; a roundabout sign alone does not mean turn right")
+        XCTAssertEqual(route.instructions[0].streetName, "Nguyễn Khuyến")
+    }
+
     func testDecodesGooglePolylineFive() throws {
         XCTAssertEqual(try GooglePolyline5.decode("_p~iF~ps|U_ulLnnqC_mqNvxq`@"), [
             GeoPoint(latitude: 38.5, longitude: -120.2),

@@ -3,6 +3,20 @@ import BlueBandCore
 @testable import BlueBandMapCore
 
 final class NavigationUpdateTests: XCTestCase {
+    func testRoundaboutExitUsesTheSameBoundedValueInPreviewAndLiveUpdate() throws {
+        for exit in [nil, 1, 2, 12, 0, 13] as [Int?] {
+            let update = try NavigationUpdate(scene: "scene", seq: 1, x: 106, y: 374,
+                maneuver: .roundabout, distanceMeters: 80, street: "Nguyễn Khuyến", status: .navigating,
+                roundaboutExit: exit)
+            let preview = try RenderNavigationPreview(maneuver: .roundabout, distanceMeters: 80,
+                street: "Nguyễn Khuyến", x: 106, y: 374, headingBucket: 0,
+                destinationMode: .hidden, destinationX: 0, destinationY: 0, roundaboutExit: exit)
+            let expected: JSONValue? = exit.flatMap { (1...12).contains($0) ? .number(Double($0)) : nil }
+            XCTAssertEqual(update.jsonBody()["roundaboutExit"], expected)
+            XCTAssertEqual(preview.jsonBody()["roundaboutExit"], expected)
+        }
+    }
+
     func testBodyIsBoundedAndUsesStableFields() throws {
         let update = try NavigationUpdate(
             scene: "scene-0123456789", seq: 7, x: 106, y: 320,

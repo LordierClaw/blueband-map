@@ -15,6 +15,11 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         await coordinator.start(asset: asset)
         XCTAssertEqual(coordinator.failureCode, "ASSET_RESULT_TIMEOUT")
         XCTAssertTrue(coordinator.requiresReconnect)
+        let legacyRecovery = await coordinator.prepareForRefresh()
+        XCTAssertFalse(legacyRecovery, "a legacy ACK without reset.ready cannot unlock transfer")
+        await session.wakeForReset(request: "stale-request")
+        let staleRecovery = await coordinator.prepareForRefresh()
+        XCTAssertFalse(staleRecovery, "a stale reset response cannot unlock transfer")
         await session.wakeForReset()
         await coordinator.start(asset: asset)
         guard case .displayed = coordinator.state else {
@@ -22,7 +27,7 @@ final class RouteCardRenderCoordinatorTests: XCTestCase {
         }
         XCTAssertFalse(coordinator.requiresReconnect)
         let resets = await session.resetCount
-        XCTAssertEqual(resets, 1)
+        XCTAssertEqual(resets, 2)
     }
 
     func testResultAfterFinalACKReturnsToCallerAndAllowsTheNextMap() async throws {
@@ -283,10 +288,11 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     private(set) var chunksStartedWhileFirstPending = 0
     private let chunkDelay: Duration
     private let delayFirstChunk: Bool
-    private let failChunks: Bool
+    private var failChunks: Bool
     private var deferResults: Bool
     private(set) var resetCount = 0
     private var resetEnabled = false
+    private var resetRequest = "ack"
     private var firstChunkPending = false
     private(set) var pendingResult: [String: JSONValue]?
 
@@ -300,7 +306,9 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
 
     func setReceiver(_ receiver: @escaping Receiver) { self.receiver = receiver }
 
-    func wakeForReset() { deferResults = false; resetEnabled = true }
+    func wakeForReset(request: String = "ack") {
+        deferResults = false; failChunks = false; resetEnabled = true; resetRequest = request
+    }
 
     func prepareValue(_ key: String) -> JSONValue? { prepareBody[key] }
 
@@ -314,7 +322,7 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
         if topic == "render.reset", resetEnabled {
             resetCount += 1
             pendingResult = nil
-            await receive("render.reset.ready", body: ["request": .string("ack"),
+            await receive("render.reset.ready", body: ["request": .string(resetRequest),
                 "runId": body["runId"]!, "sceneId": body["sceneId"]!])
         }
         if topic == RenderProtocol.prepareTopic {

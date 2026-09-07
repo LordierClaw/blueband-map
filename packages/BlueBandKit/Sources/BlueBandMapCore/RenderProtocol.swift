@@ -100,6 +100,7 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
     }
 
     public let maneuver: NavigationManeuver
+    public let roundaboutExit: Int?
     public let distanceMeters: Int
     public let street: String
     public let x: Int
@@ -118,7 +119,8 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
         headingBucket: Int,
         destinationMode: DestinationPresentationMode,
         destinationX: Int,
-        destinationY: Int
+        destinationY: Int,
+        roundaboutExit: Int? = nil
     ) throws {
         guard distanceMeters >= 0 else { throw Error.invalidDistance }
         guard BandDisplaySafeMask.smartBand10PhotoEstimate.contains(
@@ -143,6 +145,7 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
         var boundedStreet = street
         while boundedStreet.utf8.count > 48 { boundedStreet.removeLast() }
         self.maneuver = maneuver
+        self.roundaboutExit = maneuver == .roundabout ? roundaboutExit.flatMap { (1...12).contains($0) ? $0 : nil } : nil
         self.distanceMeters = distanceMeters
         self.street = boundedStreet
         self.x = x
@@ -154,7 +157,7 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
     }
 
     public func jsonBody() -> [String: JSONValue] {
-        [
+        var body: [String: JSONValue] = [
             "maneuver": .string(maneuver.rawValue),
             "distanceM": .number(Double(distanceMeters)),
             "street": .string(street),
@@ -165,6 +168,8 @@ public struct RenderNavigationPreview: Equatable, Codable, Sendable {
             "destinationX": .number(Double(destinationX)),
             "destinationY": .number(Double(destinationY)),
         ]
+        if let roundaboutExit { body["roundaboutExit"] = .number(Double(roundaboutExit)) }
+        return body
     }
 }
 

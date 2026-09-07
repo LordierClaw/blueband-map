@@ -131,7 +131,7 @@ final class AppModel: ObservableObject {
         self.defaults = defaults
         self.scanDuration = scanDuration
         self.renderCoordinator = RouteCardRenderCoordinator(
-            session: routeCardSession ?? BandSessionRouteCardSender(session: session), transferWindow: 2)
+            session: routeCardSession ?? BandSessionRouteCardSender(session: session), transferWindow: 4)
         destinationLatitudeInput = defaults.string(forKey: "destinationLatitude") ?? ""
         destinationLongitudeInput = defaults.string(forKey: "destinationLongitude") ?? ""
         rememberedBand = bandStore.load()
@@ -673,7 +673,8 @@ final class AppModel: ObservableObject {
             headingBucket: 0,
             destinationMode: destination.mode,
             destinationX: destination.point.x,
-            destinationY: destination.point.y
+            destinationY: destination.point.y,
+            roundaboutExit: instruction?.roundaboutExit
         )
         logNavigation("map.transfer.start", "session=\(generation) bytes=\(asset.byteCount)")
         await renderCoordinator.start(asset: asset, diagnostics: RouteCardRenderDiagnostics(
@@ -744,6 +745,17 @@ final class AppModel: ObservableObject {
             let delay = max(0, snapshotRetryAfter.timeIntervalSinceNow,
                             1 - (lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? 1))
             do { if delay > 0 { try await Task.sleep(for: .seconds(delay)) } } catch { return }
+            if renderCoordinator.requiresReconnect {
+                guard renderCoordinator.canRecoverWithoutReconnect else { break }
+                logNavigation("map.resume.start", "reset interrupted Band frame")
+                let recovered = await renderCoordinator.prepareForRefresh()
+                guard generation == navigationGeneration, !Task.isCancelled else { return }
+                logNavigation("map.resume.result", recovered ? "ready" : "waiting")
+                if !recovered {
+                    snapshotRetryAfter = Date().addingTimeInterval(5)
+                    continue
+                }
+            }
             guard generation == navigationGeneration, !Task.isCancelled,
                   let request = pendingSnapshotRefresh else { return }
             pendingSnapshotRefresh = nil
@@ -775,6 +787,9 @@ final class AppModel: ObservableObject {
             } catch {
                 guard generation == navigationGeneration else { return }
                 snapshotRetryAfter = Date().addingTimeInterval(5)
+                if renderCoordinator.canRecoverWithoutReconnect && pendingSnapshotRefresh == nil {
+                    pendingSnapshotRefresh = request
+                }
                 navigationState = .limitedMap
                 let guidance = pendingSnapshotRefresh ?? request
                 sendNavigationUpdate(
@@ -825,7 +840,8 @@ final class AppModel: ObservableObject {
             status: status,
             destinationMode: destination.mode,
             destinationX: destination.point.x,
-            destinationY: destination.point.y
+            destinationY: destination.point.y,
+            roundaboutExit: instruction?.roundaboutExit
         ) else { return }
         navigationManeuver = update.maneuver
         navigationDistanceMeters = update.distanceMeters

@@ -66,6 +66,8 @@ function safeCenter(x, y, width, height, margin = 6, inset = 12) {
 function validPreview(preview) {
   return preview && typeof preview === "object" && !Array.isArray(preview) &&
     ["straight", "left", "right", "uTurn", "roundabout", "arrive"].includes(preview.maneuver) &&
+    (preview.roundaboutExit === undefined || (preview.maneuver === "roundabout" &&
+      validInteger(preview.roundaboutExit) && preview.roundaboutExit >= 1 && preview.roundaboutExit <= 12)) &&
     validInteger(preview.distanceM) && preview.distanceM >= 0 &&
     typeof preview.street === "string" && utf8Length(preview.street) <= 48 &&
     validInteger(preview.x) && validInteger(preview.y) && safeCenter(preview.x, preview.y, 30, 38) &&

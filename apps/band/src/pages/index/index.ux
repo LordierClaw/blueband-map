@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.13</text>
+      <text class="version">RPK 0.6.14</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -252,11 +252,22 @@ function renderProtocolReject(code) {
   return { ok: false, code: code }
 }
 
+function validRoundaboutExit(body) {
+  return body.roundaboutExit === undefined || (body.maneuver === "roundabout" &&
+    renderProtocolValidInteger(body.roundaboutExit) && body.roundaboutExit >= 1 && body.roundaboutExit <= 12)
+}
+
+function maneuverPath(body) {
+  return "/common/maneuver-" + body.maneuver +
+    (body.maneuver === "roundabout" && body.roundaboutExit !== undefined ? "-" + body.roundaboutExit : "") + ".png"
+}
+
 function renderProtocolValidPreview(preview) {
   var maneuvers = ["straight", "left", "right", "uTurn", "roundabout", "arrive"]
   var destinationModes = ["visible", "edge", "hidden"]
   return preview && typeof preview === "object" && !Array.isArray(preview) &&
     maneuvers.indexOf(preview.maneuver) >= 0 &&
+    validRoundaboutExit(preview) &&
     renderProtocolValidInteger(preview.distanceM) && preview.distanceM >= 0 &&
     typeof preview.street === "string" && renderProtocolUTF8Length(preview.street) <= 48 &&
     renderProtocolValidInteger(preview.x) && renderProtocolValidInteger(preview.y) &&
@@ -633,7 +644,7 @@ export default {
       this.sendEnvelope({
         v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "diagnostics.report",
         body: {
-          request: request, rpk: 28, phase: this.lastReceivePhase,
+          request: request, rpk: 29, phase: this.lastReceivePhase,
           offset: this.lastReceiveOffset, received: this.lastReceivedBytes, sendCode: this.lastSendCode
         }
       })
@@ -655,6 +666,29 @@ export default {
       }
     }
 
+    if (message.topic === "render.reset") {
+      var reset = message.body
+      if (!renderProtocol.validIdentifier(reset.runId) || !renderProtocol.validIdentifier(reset.sceneId)) return
+      var owned = this.preparedRender
+      if (owned && (owned.runId !== reset.runId || owned.sceneId !== reset.sceneId)) return
+      // Let native file I/O complete before resetting; its callback must not
+      // recreate a file after cleanup. The bounded reset retry can then proceed.
+      if (this.activeMapOperationID && !this.pendingPublication) return
+      if (!owned && (this.activeTransfer || this.pendingPublication || this.activeMapOperationID)) return
+      // A timed-out phone may resume only after the interrupted generation is
+      // invalidated. Late writes/decode callbacks retain their old epoch.
+      if (owned) {
+        this.resetMapLifecycle()
+        this.bindConnectionHandlers(this.connection)
+      }
+      this.sendEnvelope({
+        v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "render.reset.ready",
+        body: { request: message.id, runId: reset.runId, sceneId: reset.sceneId }
+      })
+      this.rememberSuccess(message.id)
+      this.sendACK(message.id)
+      return
+    }
     if (this.recentIDs.indexOf(message.id) >= 0) {
       this.sendACK(message.id)
       return
@@ -728,6 +762,7 @@ export default {
       this.validInteger(body.distanceM) && body.distanceM >= 0 &&
       typeof body.street === "string" && this.utf8Length(body.street) <= 48 &&
       maneuvers.indexOf(body.maneuver) >= 0 && statuses.indexOf(body.status) >= 0 &&
+      validRoundaboutExit(body) &&
       destinationModes.indexOf(body.destinationMode) >= 0 &&
       this.validInteger(body.destinationX) && this.validInteger(body.destinationY) &&
       ((body.destinationMode === "hidden" && body.destinationX === 0 && body.destinationY === 0) ||
@@ -743,7 +778,7 @@ export default {
       this.navMarkerVisible = true
       this.navMarkerPath = "/common/marker-cursor-v4.png"
       var navigation = {
-        arrowPath: "/common/maneuver-" + body.maneuver + ".png",
+        arrowPath: maneuverPath(body),
         distance: body.status === "arrived" ? "ARRIVED" : this.formatDistance(body.distanceM),
         street: body.street,
         status: labels[body.status],
@@ -793,7 +828,7 @@ export default {
     this.preparedRender.preparedAt = Date.now()
     if (!this.confirmedMap) {
       if (result.prepared.preview) {
-        this.navArrowPath = "/common/maneuver-" + result.prepared.preview.maneuver + ".png"
+        this.navArrowPath = maneuverPath(result.prepared.preview)
         this.navDistance = this.formatDistance(result.prepared.preview.distanceM)
         this.navStreet = result.prepared.preview.street
       }
@@ -1551,8 +1586,8 @@ export default {
 .version { margin-top: 22px; font-size: 13px; color: #7897b8; }
 .nav-header { position: absolute; left: 0; top: 0; width: 212px; height: 96px; }
 .nav-arrow { position: absolute; left: 32px; top: 28px; width: 44px; height: 56px; }
-.nav-distance { position: absolute; left: 78px; top: 26px; width: 88px; font-size: 26px; font-weight: bold; text-align: right; color: #ffffff; }
-.nav-street { position: absolute; left: 72px; top: 60px; width: 126px; height: 22px; font-size: 14px; lines: 1; text-align: left; color: #ffffff; }
+.nav-distance { position: absolute; left: 72px; top: 26px; width: 126px; font-size: 26px; font-weight: bold; text-align: center; color: #ffffff; }
+.nav-street { position: absolute; left: 72px; top: 60px; width: 126px; height: 22px; font-size: 14px; lines: 1; text-align: center; color: #ffffff; }
 .nav-status { position: absolute; left: 72px; top: 80px; width: 94px; font-size: 10px; font-weight: bold; text-align: right; color: #5dffb0; }
 .map-frame { width: 212px; height: 520px; position: relative; background-color: #050e16; }
 .map { position: absolute; left: 0; top: 0; width: 212px; height: 520px; object-fit: contain; }

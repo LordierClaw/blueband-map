@@ -28,19 +28,22 @@ public struct RouteInstruction: Equatable, Sendable {
     public let sign: Int
     public let interval: ClosedRange<Int>
     public let streetName: String
+    public let roundaboutExit: Int?
 
     public init(
         distanceMeters: Double,
         headingDegrees: Int,
         sign: Int,
         interval: ClosedRange<Int>,
-        streetName: String
+        streetName: String,
+        roundaboutExit: Int? = nil
     ) {
         self.distanceMeters = distanceMeters
         self.headingDegrees = headingDegrees
         self.sign = sign
         self.interval = interval
         self.streetName = streetName.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.roundaboutExit = sign == 6 ? roundaboutExit.flatMap { (1...12).contains($0) ? $0 : nil } : nil
     }
 
     public var maneuver: NavigationManeuver {
@@ -172,8 +175,9 @@ public struct VietmapRouteClient: Sendable {
                     let sign: Int
                     let interval: [Int]
                     let streetName: String
+                    let text: String?
                     enum CodingKeys: String, CodingKey {
-                        case distance, heading, sign, interval
+                        case distance, heading, sign, interval, text
                         case streetName = "street_name"
                     }
                 }
@@ -206,7 +210,8 @@ public struct VietmapRouteClient: Sendable {
                     headingDegrees: instruction.heading,
                     sign: instruction.sign,
                     interval: instruction.interval[0]...instruction.interval[1],
-                    streetName: instruction.streetName
+                    streetName: instruction.streetName,
+                    roundaboutExit: instruction.sign == 6 ? Self.roundaboutExit(in: instruction.text ?? "") : nil
                 )
             }) else { return nil }
             return RoutePlan(
@@ -227,6 +232,17 @@ public struct VietmapRouteClient: Sendable {
         while result.last == "0" { result.removeLast() }
         if result.last == "." { result.removeLast() }
         return result
+    }
+
+    private static func roundaboutExit(in text: String) -> Int? {
+        // Route v4 currently returns the exit only in this localized instruction.
+        // Do not infer a turn direction from the exit number or heading=0.
+        let pattern = #"(?i)^Tại vòng xoay, rẽ lối rẽ ([1-9][0-9]?)(?:\s|$)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text),
+              let exit = Int(text[range]), (1...12).contains(exit) else { return nil }
+        return exit
     }
 }
 

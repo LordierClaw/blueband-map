@@ -252,11 +252,11 @@ test("full-size maps survive asynchronous file and send callbacks across repeate
       receive(envelope(`prepare-${run}`, "render.prepare", prepare({ sceneId: scene, bytes: bytes.length, sha256, preview: preview() })))
       receive(envelope(`begin-${run}`, "map.asset.begin", begin({ asset, scene, bytes: bytes.length, sha256 })))
       const offsets = Array.from({ length: Math.ceil(bytes.length / 480) }, (_, index) => index * 480)
-      // Alternate stop-and-wait with reordered two-chunk windows, including a
+      // Alternate stop-and-wait with reordered two/four-chunk windows, including a
       // native 204 on the later chunk and its identical command retry.
-      if (run % 2) for (let index = 0; index + 1 < offsets.length; index += 2) {
-        [offsets[index], offsets[index + 1]] = [offsets[index + 1], offsets[index]]
-      }
+      const window = [1, 2, 4][run % 3]
+      for (let index = 0; index < offsets.length; index += window)
+        offsets.splice(index, window, ...offsets.slice(index, index + window).reverse())
       for (const offset of offsets) {
         const chunk = envelope(`chunk-${run}-${offset}`, "map.asset.chunk", {
           asset, scene, run: RUN, offset, data: Buffer.from(bytes.subarray(offset, offset + 480)).toString("base64")
@@ -318,7 +318,7 @@ test("failure diagnostics retain the last chunk boundary without returning paylo
     const report = sent.find(message => message.topic === "diagnostics.report")
     assert.ok(report, "automatically queryable peer diagnostics are required")
     assert.deepEqual(report.body, {
-      request: "probe-1", rpk: 28, phase: "chunk", offset: 0, received: 4, sendCode: 0
+      request: "probe-1", rpk: 29, phase: "chunk", offset: 0, received: 4, sendCode: 0
     })
     assert.ok(Buffer.byteLength(JSON.stringify(report)) < 512)
     sends.find(send => send.data.id === "chunk").fail({ code: 204 })
@@ -535,6 +535,61 @@ test("render.cancel releases a matching prepared generation", async () => {
   assert.ok(page.preparedRender)
   page.receiveMessage({ data: envelope("cancel", "render.cancel", { runId: RUN, sceneId: SCENE }) })
   assert.equal(page.preparedRender, null)
+})
+
+test("roundabout preview and live guidance show the provider exit without inventing a right turn", async () => {
+  const { page } = await harness()
+  page.receiveMessage({ data: envelope("exit-preview", "render.prepare", prepare({
+    preview: preview({ maneuver: "roundabout", roundaboutExit: 2 })
+  })) })
+  assert.equal(page.navArrowPath, "/common/maneuver-roundabout-2.png")
+  page.receiveMessage({ data: envelope("exit-cancel", "render.cancel", { runId: RUN, sceneId: SCENE }) })
+  publish(page)
+  for (const exit of [1, 2, 3, 12]) {
+    page.receiveMessage({ data: envelope(`exit-${exit}`, "nav.update", navigation({
+      seq: exit, maneuver: "roundabout", roundaboutExit: exit
+    })) })
+    assert.equal(page.navArrowPath, `/common/maneuver-roundabout-${exit}.png`)
+  }
+  page.receiveMessage({ data: envelope("exit-bad", "nav.update", navigation({
+    seq: 13, maneuver: "roundabout", roundaboutExit: 99
+  })) })
+  assert.equal(page.navSequence, 12, "invalid exit cannot overwrite valid guidance")
+})
+
+test("explicit reset after suspension releases incomplete publication and ignores its late decode", async () => {
+  const { page, sent, file } = await harness()
+  publish(page)
+  const confirmed = page.mapPath
+  const write = file.writeArrayBuffer
+  let finishWrite
+  file.writeArrayBuffer = options => { finishWrite = () => write(options) }
+  page.receiveMessage({ data: envelope("resume-prepare", "render.prepare", prepare({ sceneId: "resume-scene" })) })
+  page.receiveMessage({ data: envelope("resume-begin", "map.asset.begin", begin({ scene: "resume-scene" })) })
+  page.receiveMessage({ data: envelope("resume-chunk", "map.asset.chunk", { asset: ASSET, run: RUN, scene: "resume-scene", offset: 0, data: Buffer.from(BYTES).toString("base64") }) })
+  page.receiveMessage({ data: envelope("resume-end", "map.asset.end", { asset: ASSET, run: RUN, scene: "resume-scene" }) })
+  page.receiveMessage({ data: envelope("write-reset", "render.reset", { runId: RUN, sceneId: "resume-scene" }) })
+  assert.equal(sent.some(message => message.topic === "render.reset.ready" && message.body.request === "write-reset"), false,
+    "wait for native file I/O before resetting, otherwise a late write can recreate an orphaned asset")
+  finishWrite()
+  const staleToken = page.pendingMapToken
+  assert.ok(staleToken)
+  page.receiveMessage({ data: envelope("wrong-reset", "render.reset", { runId: "wrong", sceneId: "resume-scene" }) })
+  assert.equal(page.pendingMapToken, staleToken, "a reset cannot cancel another live run")
+  assert.equal(sent.some(message => message.topic === "render.reset.ready" && message.body.request === "wrong-reset"), false)
+  page.receiveMessage({ data: envelope("resume-reset", "render.reset", { runId: RUN, sceneId: "resume-scene" }) })
+  assert.equal(page.pendingPublication, null)
+  assert.equal(page.activeTransfer, null)
+  assert.equal(page.preparedRender, null)
+  assert.equal(page.mapPath, confirmed)
+  page.mapComplete(staleToken)
+  assert.equal(page.mapPath, confirmed)
+  assert.ok(sent.some(message => message.topic === "render.reset.ready" && message.body.request === "resume-reset"))
+  page.receiveMessage({ data: envelope("resume-reset", "render.reset", { runId: RUN, sceneId: "resume-scene" }) })
+  assert.equal(sent.filter(message => message.topic === "render.reset.ready" && message.body.request === "resume-reset").length, 2,
+    "an exact-command retry must replay both the ready response and ACK")
+  page.receiveMessage({ data: envelope("resume-fresh", "render.prepare", prepare({ sceneId: "fresh-scene" })) })
+  assert.equal(page.preparedRender.sceneId, "fresh-scene")
 })
 
 test("cancelled refresh restores the confirmed scene guidance", async () => {

@@ -10,6 +10,46 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testTransferTimeoutResumesOnTheLatestGPSWithoutRestartingNavigation() async throws {
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        let sender = WindowedRouteCardSession(failChunks: true)
+        var requests: [VietmapSnapshotRequest] = []
+        let resumed = expectation(description: "fresh map after Band reset")
+        let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
+            routeTransport: ReplayRouteTransport(), sender: sender, render: { request in
+                requests.append(request)
+                if requests.count == 2 { resumed.fulfill() }
+                let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "cpu-warm", configuration: config)
+            })
+        defer { model.stopNavigation() }
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { manager.updating }
+        func fix(_ latitude: Double) -> CLLocation {
+            CLLocation(coordinate: .init(latitude: latitude, longitude: 0), altitude: 0,
+                horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())
+        }
+        location.locationManager(manager, didUpdateLocations: [fix(0)])
+        await waitUntil { model.navigationDebugEntries.contains { $0.stage == "map.refresh.failed" } }
+        model.applicationStateChanged("inactive")
+        model.applicationStateChanged("background")
+        location.locationManager(manager, didUpdateLocations: [fix(0.0004)])
+        await sender.wakeForReset()
+        await fulfillment(of: [resumed], timeout: 8)
+        await waitUntil { model.navigationDebugEntries.contains { $0.stage == "band.displayed" } }
+        XCTAssertEqual(requests.count, 2, "do not reload provider maps while waiting for Band reset")
+        XCTAssertEqual(requests.last?.matchedPosition.latitude ?? -1, 0.0004, accuracy: 0.00001)
+        XCTAssertTrue(model.navigationDebugEntries.contains { $0.stage == "map.resume.result" && $0.detail == "ready" })
+        XCTAssertTrue(manager.updating)
+    }
+
     func testMovingGPSIsNotBlockedByRenderingAndFinalFixPublishesAfterCooldown() async throws {
         let manager = TestLocationManager()
         let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })

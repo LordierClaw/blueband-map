@@ -29,8 +29,8 @@ test("manifest pins BlueBandMap identity and a single Band 10 page", async () =>
   const manifest = JSON.parse(await readFile(new URL("src/manifest.json", root), "utf8"))
   assert.equal(manifest.package, "dev.lordierclaw.bluebandmap.band")
   assert.equal(manifest.name, "BlueBandMap")
-  assert.equal(manifest.versionName, "0.6.13")
-  assert.equal(manifest.versionCode, 28)
+  assert.equal(manifest.versionName, "0.6.14")
+  assert.equal(manifest.versionCode, 29)
   assert.equal(manifest.minAPILevel, 1)
   assert.equal(manifest.config.designWidth, 212)
   assert.deepEqual(Object.keys(manifest.router.pages), ["pages/index"])
@@ -61,7 +61,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /@system\.crypto|crypto\.atob|crypto\.hashDigest/)
   assert.doesNotMatch(page, /transform:rotate\(|transform-origin:/)
   assert.doesNotMatch(page, /transform:\s*JSON\.stringify\(\{\s*rotate:/)
-  assert.match(page, /RPK 0\.6\.13/)
+  assert.match(page, /RPK 0\.6\.14/)
   assert.doesNotMatch(page, /<input[^>]+\/>|class="diagnostics"|ECHO PING|CLEAR EVENTS/)
   assert.match(page, /<image[^>]+src="\{\{ mapPath \}\}"[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ pendingMapPath \}\}"[^>]+@complete="mapComplete\(pendingMapToken\)"[^>]+@error="mapError\(pendingMapToken\)"[^>]+\/>/)
@@ -86,10 +86,10 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.match(page, /navStatus\s*=\s*["']LOADING MAP["']/)
   assert.match(page, /if \(!this\.confirmedMap\) \{[\s\S]*this\.navStatus = "LOADING MAP"/)
   assert.match(page, /\.nav-arrow\s*\{[^}]*left:\s*32px;[^}]*top:\s*28px;[^}]*width:\s*44px;[^}]*height:\s*56px;/s)
-  assert.match(page, /\.nav-distance\s*\{[^}]*left:\s*78px;[^}]*top:\s*26px;[^}]*width:\s*88px;/s)
+  assert.match(page, /\.nav-distance\s*\{[^}]*left:\s*72px;[^}]*top:\s*26px;[^}]*width:\s*126px;[^}]*text-align:\s*center;/s)
   assert.match(page, /\.nav-street\s*\{[^}]*left:\s*72px;[^}]*top:\s*60px;[^}]*width:\s*126px;/s)
-  assert.match(page, /\.nav-street\s*\{[^}]*text-align:\s*left;/s,
-    "short names such as Yên Bình must start beside the maneuver, not at the far right")
+  assert.match(page, /\.nav-street\s*\{[^}]*text-align:\s*center;/s,
+    "short names such as Yên Bình must share the distance label's center")
   assert.match(page, /\.nav-status\s*\{[^}]*left:\s*72px;[^}]*top:\s*80px;[^}]*width:\s*94px;/s)
   assert.match(page, /\.nav-marker\s*\{[^}]*width:\s*30px;[^}]*height:\s*38px;/s)
 })
@@ -98,6 +98,7 @@ test("generated HUD resources use the required PNG format at their display size"
   const expected = {
     ...Object.fromEntries(["straight", "left", "right", "uTurn", "roundabout", "arrive"]
       .map(name => [`maneuver-${name}.png`, [44, 56, 6]])),
+    ...Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`maneuver-roundabout-${index + 1}.png`, [44, 56, 6]])),
     "marker-cursor-v4.png": [30, 38, 6],
     "destination-pin.png": [28, 34, 3],
     "destination-edge.png": [28, 28, 3],
@@ -173,7 +174,7 @@ test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 },
   const diagnostics = result.stdout + result.stderr
   assert.equal(result.status, 0, diagnostics)
   assert.doesNotMatch(diagnostics, /unsupport(?:ed)? attribute|unsupported (?:attribute|property)/i)
-  assert.match(result.stdout, /verified .*\.0\.6\.13\.rpk/)
+  assert.match(result.stdout, /verified .*\.0\.6\.14\.rpk/)
 
   const compiledEntry = await readFile(new URL("build/pages/index/index.js", root), "utf8")
   assert.doesNotMatch(compiledEntry, /\.\/src\/common\/(?:render-protocol|vector-scene)\.js/, "page load must not start a custom module graph")

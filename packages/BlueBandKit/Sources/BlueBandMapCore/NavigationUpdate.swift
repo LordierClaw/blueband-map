@@ -16,6 +16,7 @@ public struct NavigationUpdate: Equatable, Sendable {
     public let x: Int
     public let y: Int
     public let maneuver: NavigationManeuver
+    public let roundaboutExit: Int?
     public let headingBucket: Int
     public let distanceMeters: Int
     public let street: String
@@ -36,7 +37,8 @@ public struct NavigationUpdate: Equatable, Sendable {
         status: NavigationStatus,
         destinationMode: DestinationPresentationMode = .hidden,
         destinationX: Int = 0,
-        destinationY: Int = 0
+        destinationY: Int = 0,
+        roundaboutExit: Int? = nil
     ) throws {
         guard RenderProtocol.isValidIdentifier(scene) else { throw Error.invalidScene }
         guard seq >= 0 else { throw Error.invalidSequence }
@@ -65,6 +67,7 @@ public struct NavigationUpdate: Equatable, Sendable {
         self.x = x
         self.y = y
         self.maneuver = maneuver
+        self.roundaboutExit = maneuver == .roundabout ? roundaboutExit.flatMap { (1...12).contains($0) ? $0 : nil } : nil
         self.headingBucket = headingBucket
         self.distanceMeters = distanceMeters
         self.street = boundedStreet
@@ -75,7 +78,7 @@ public struct NavigationUpdate: Equatable, Sendable {
     }
 
     public func jsonBody() -> [String: JSONValue] {
-        [
+        var body: [String: JSONValue] = [
             "scene": .string(scene), "seq": .number(Double(seq)),
             "x": .number(Double(x)), "y": .number(Double(y)),
             "heading": .number(Double(headingBucket)),
@@ -84,6 +87,8 @@ public struct NavigationUpdate: Equatable, Sendable {
             "destinationMode": .string(destinationMode.rawValue),
             "destinationX": .number(Double(destinationX)), "destinationY": .number(Double(destinationY)),
         ]
+        if let roundaboutExit { body["roundaboutExit"] = .number(Double(roundaboutExit)) }
+        return body
     }
 }
 
