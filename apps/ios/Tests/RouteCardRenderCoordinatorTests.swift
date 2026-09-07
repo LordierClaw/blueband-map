@@ -6,6 +6,25 @@ import BlueBandMapCore
 
 @MainActor
 final class RouteCardRenderCoordinatorTests: XCTestCase {
+    func testSuspendedBandTimeoutRecoversOnlyAfterMatchingResetReplyAndACK() async throws {
+        let session = WindowedRouteCardSession(deferResults: true)
+        let coordinator = RouteCardRenderCoordinator(session: session, resultTimeout: .milliseconds(60))
+        await session.setReceiver { envelope in coordinator.consume(envelope) }
+        let asset = try RenderAsset(kind: .raster, formatVersion: 1, width: 212, height: 520,
+            data: Data(repeating: 0x5A, count: 64), primitives: 0)
+        await coordinator.start(asset: asset)
+        XCTAssertEqual(coordinator.failureCode, "ASSET_RESULT_TIMEOUT")
+        XCTAssertTrue(coordinator.requiresReconnect)
+        await session.wakeForReset()
+        await coordinator.start(asset: asset)
+        guard case .displayed = coordinator.state else {
+            return XCTFail("a suspended Band must resume after an acknowledged reset: \(coordinator.state)")
+        }
+        XCTAssertFalse(coordinator.requiresReconnect)
+        let resets = await session.resetCount
+        XCTAssertEqual(resets, 1)
+    }
+
     func testResultAfterFinalACKReturnsToCallerAndAllowsTheNextMap() async throws {
         let session = WindowedRouteCardSession(deferResults: true)
         let coordinator = RouteCardRenderCoordinator(session: session)
@@ -264,7 +283,9 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     private let chunkDelay: Duration
     private let delayFirstChunk: Bool
     private let failChunks: Bool
-    private let deferResults: Bool
+    private var deferResults: Bool
+    private(set) var resetCount = 0
+    private var resetEnabled = false
     private var firstChunkPending = false
     private(set) var pendingResult: [String: JSONValue]?
 
@@ -278,6 +299,8 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
 
     func setReceiver(_ receiver: @escaping Receiver) { self.receiver = receiver }
 
+    func wakeForReset() { deferResults = false; resetEnabled = true }
+
     func prepareValue(_ key: String) -> JSONValue? { prepareBody[key] }
 
     func deliverResult() async {
@@ -287,6 +310,12 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     }
 
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
+        if topic == "render.reset", resetEnabled {
+            resetCount += 1
+            pendingResult = nil
+            await receive("render.reset.ready", body: ["request": .string("ack"),
+                "runId": body["runId"]!, "sceneId": body["sceneId"]!])
+        }
         if topic == RenderProtocol.prepareTopic {
             prepareBody = body
             await receive(RenderProtocol.readyTopic, body: [
