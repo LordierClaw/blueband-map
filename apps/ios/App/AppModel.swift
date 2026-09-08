@@ -29,6 +29,16 @@ final class AppModel: ObservableObject {
         let location: CLLocation
         let tileMapKey: String
         let bearingDegrees: Double
+        let queuedAt = Date()
+    }
+    private struct PreparedSnapshot {
+        let request: SnapshotRefreshRequest
+        let snapshot: VietmapSnapshotOutput
+        let encoded: SnapshotImageOutput
+        let asset: RenderAsset
+        let preview: RenderNavigationPreview
+        let startedAt: Date
+        let readyAt: Date
     }
     @Published var authKeyInput = ""
     @Published var tileMapKeyInput = ""
@@ -99,6 +109,9 @@ final class AppModel: ObservableObject {
     private var routeRequestMilliseconds = 0
     private var pendingSnapshotRefresh: SnapshotRefreshRequest?
     private var snapshotRefreshTask: Task<Void, Never>?
+    private var nextSnapshotPreparation: Task<PreparedSnapshot, Swift.Error>?
+    private var snapshotIsTransmitting = false
+    private var lastMapDisplayedAt: Date?
     private var guidanceBearingPolicy = GuidanceBearingPolicy()
 
     init(
@@ -317,6 +330,10 @@ final class AppModel: ObservableObject {
         renderCoordinator.cancel()
         snapshotRefreshTask?.cancel()
         snapshotRefreshTask = nil
+        nextSnapshotPreparation?.cancel()
+        nextSnapshotPreparation = nil
+        snapshotIsTransmitting = false
+        lastMapDisplayedAt = nil
         pendingSnapshotRefresh = nil
         navigationTask?.cancel()
         navigationTask = nil
@@ -367,6 +384,9 @@ final class AppModel: ObservableObject {
                 pendingReroute = nil
                 snapshotRefreshTask?.cancel()
                 snapshotRefreshTask = nil
+                nextSnapshotPreparation?.cancel()
+                nextSnapshotPreparation = nil
+                snapshotIsTransmitting = false
                 pendingSnapshotRefresh = nil
                 navigationTask = nil
             }
@@ -594,19 +614,16 @@ final class AppModel: ObservableObject {
         return route
     }
 
-    private func publish(
-        route: RoutePlan,
-        progress: RouteProgress,
-        location: CLLocation,
-        tileMapKey: String,
-        bearingDegrees: Double,
+    private func prepareSnapshot(
+        _ request: SnapshotRefreshRequest,
         generation: Int
-    ) async throws -> Bool {
+    ) async throws -> PreparedSnapshot {
+        let route = request.route, progress = request.progress, location = request.location
+        let tileMapKey = request.tileMapKey, bearingDegrees = request.bearingDegrees
         try checkNavigationOwner(generation)
         guard !renderCoordinator.requiresReconnect else {
             throw NavigationRuntimeError.bandDisplayFailed("TRANSFER_RECONNECT_REQUIRED")
         }
-        navigationState = .transferring
         let snapshotStartedAt = Date()
         lastSnapshotRefreshStartedAt = snapshotStartedAt
         logNavigation("map.render.start", "session=\(generation) fixAgeMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1000))) app=\(applicationState)")
@@ -677,6 +694,18 @@ final class AppModel: ObservableObject {
             roundaboutExit: instruction?.roundaboutExit,
             roundaboutDirection: instruction?.roundaboutDirection
         )
+        return PreparedSnapshot(request: request, snapshot: snapshot, encoded: encoded,
+            asset: asset, preview: preview, startedAt: snapshotStartedAt, readyAt: Date())
+    }
+
+    private func publish(_ prepared: PreparedSnapshot, generation: Int) async throws {
+        try checkNavigationOwner(generation)
+        let request = prepared.request
+        let snapshot = prepared.snapshot, asset = prepared.asset, encoded = prepared.encoded
+        let location = request.location, progress = request.progress, bearingDegrees = request.bearingDegrees
+        let snapshotStartedAt = prepared.startedAt
+        let transferStartedAt = Date()
+        navigationState = .transferring
         logNavigation("map.transfer.start", "session=\(generation) bytes=\(asset.byteCount)")
         await renderCoordinator.start(asset: asset, diagnostics: RouteCardRenderDiagnostics(
             gpsWaitMilliseconds: gpsWaitMilliseconds,
@@ -689,7 +718,7 @@ final class AppModel: ObservableObject {
             retainedLineLayers: snapshot.retainedLineLayers,
             retainedSymbolLayers: snapshot.retainedSymbolLayers,
             cacheState: snapshot.cacheState
-        ), preview: preview)
+        ), preview: prepared.preview)
         try checkNavigationOwner(generation)
         guard case .displayed = renderCoordinator.state,
               let sceneID = renderCoordinator.lastDisplayedSceneID else {
@@ -709,7 +738,16 @@ final class AppModel: ObservableObject {
             "fixAgeMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1_000).rounded())) " +
             "publishMs=\(Int(max(0, Date().timeIntervalSince(snapshotStartedAt) * 1_000).rounded()))"
         )
-        return false
+        let displayedAt = Date(), metrics = renderCoordinator.lastRunRecord?.metrics
+        func milliseconds(_ interval: TimeInterval) -> Int { Int(max(0, interval * 1000).rounded()) }
+        logNavigation("map.pipeline",
+            "queueMs=\(milliseconds(prepared.startedAt.timeIntervalSince(request.queuedAt))) " +
+            "prepareMs=\(milliseconds(prepared.readyAt.timeIntervalSince(prepared.startedAt))) " +
+            "encodeMs=\(encoded.durationMilliseconds) readyWaitMs=\(milliseconds(transferStartedAt.timeIntervalSince(prepared.readyAt))) " +
+            "transferMs=\(metrics?.transferMilliseconds ?? 0) txToDisplayMs=\(milliseconds(displayedAt.timeIntervalSince(transferStartedAt))) " +
+            "bandWriteMs=\(metrics?.bandWriteMilliseconds ?? 0) bandDecodeMs=\(metrics?.bandDecodeMilliseconds ?? 0) " +
+            "frameGapMs=\(lastMapDisplayedAt.map { milliseconds(displayedAt.timeIntervalSince($0)) } ?? 0)")
+        lastMapDisplayedAt = displayedAt
     }
 
     private func scheduleRefresh(
@@ -733,18 +771,46 @@ final class AppModel: ObservableObject {
             "reason=\(reason) bearing=\(Int(bearingDegrees.rounded())) " +
             "fixAgeMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1_000).rounded())) queued=\(queued)"
         )
-        guard snapshotRefreshTask == nil else { return }
+        if snapshotRefreshTask != nil {
+            prepareNextSnapshotIfNeeded(generation: navigationGeneration)
+            return
+        }
         let generation = navigationGeneration
         snapshotRefreshTask = Task { @MainActor [weak self] in
             await self?.drainSnapshotRefreshes(generation: generation)
         }
     }
 
+    private func prepareNextSnapshotIfNeeded(generation: Int) {
+        guard snapshotIsTransmitting, nextSnapshotPreparation == nil, pendingSnapshotRefresh != nil,
+              !renderCoordinator.requiresReconnect else { return }
+        nextSnapshotPreparation = Task { @MainActor [weak self] in
+            guard let self else { throw CancellationError() }
+            let delay = max(0, 1 - (lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? 1))
+            if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
+            try checkNavigationOwner(generation)
+            guard let request = pendingSnapshotRefresh else { throw CancellationError() }
+            // Leave the request available for guidance/retry while this single slot prepares.
+            return try await prepareSnapshot(request, generation: generation)
+        }
+    }
+
+    private func reusable(_ prepared: PreparedSnapshot, for latest: SnapshotRefreshRequest) -> Bool {
+        guard prepared.request.route == latest.route,
+              prepared.request.tileMapKey == latest.tileMapKey else { return false }
+        if prepared.request.location.timestamp == latest.location.timestamp { return true }
+        let angle = abs(prepared.request.bearingDegrees - latest.bearingDegrees)
+        return Date().timeIntervalSince(prepared.request.location.timestamp) <= 1.5 &&
+            Self.meters(prepared.request.location.geoPoint, latest.location.geoPoint) <= 10 &&
+            min(angle, 360 - angle) <= 15 &&
+            prepared.request.progress.pointIndex == latest.progress.pointIndex
+    }
+
     private func drainSnapshotRefreshes(generation: Int) async {
         defer { if generation == navigationGeneration { snapshotRefreshTask = nil } }
         while !Task.isCancelled, generation == navigationGeneration, pendingSnapshotRefresh != nil {
             let delay = max(0, snapshotRetryAfter.timeIntervalSinceNow,
-                            1 - (lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? 1))
+                            nextSnapshotPreparation == nil ? 1 - (lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? 1) : 0)
             do { if delay > 0 { try await Task.sleep(for: .seconds(delay)) } } catch { return }
             if renderCoordinator.requiresReconnect {
                 guard renderCoordinator.canRecoverWithoutReconnect else { break }
@@ -758,17 +824,33 @@ final class AppModel: ObservableObject {
                 }
             }
             guard generation == navigationGeneration, !Task.isCancelled,
-                  let request = pendingSnapshotRefresh else { return }
-            pendingSnapshotRefresh = nil
+                  var request = pendingSnapshotRefresh else { return }
             do {
-                _ = try await publish(
-                    route: request.route,
-                    progress: request.progress,
-                    location: request.location,
-                    tileMapKey: request.tileMapKey,
-                    bearingDegrees: request.bearingDegrees,
-                    generation: generation
-                )
+                var prepared: PreparedSnapshot?
+                if let task = nextSnapshotPreparation {
+                    let candidate = try await task.value
+                    try checkNavigationOwner(generation)
+                    nextSnapshotPreparation = nil
+                    request = pendingSnapshotRefresh ?? request
+                    if reusable(candidate, for: request) { prepared = candidate }
+                    else { logNavigation("map.prepared.discard", "newer GPS or route superseded prepared camera") }
+                }
+                if let prepared, prepared.request.location.timestamp != request.location.timestamp {
+                    // Keep the newer pending fix for the next frame and current guidance.
+                    request = prepared.request
+                } else { pendingSnapshotRefresh = nil }
+                let frame: PreparedSnapshot
+                if let prepared { frame = prepared }
+                else { frame = try await prepareSnapshot(request, generation: generation) }
+                try checkNavigationOwner(generation)
+                if let latest = pendingSnapshotRefresh, latest.route != frame.request.route {
+                    logNavigation("map.prepared.discard", "reroute superseded prepared frame")
+                    continue
+                }
+                snapshotIsTransmitting = true
+                prepareNextSnapshotIfNeeded(generation: generation)
+                try await publish(frame, generation: generation)
+                snapshotIsTransmitting = false
                 // Rendering and BLE await while GPS advances. Bind the newest
                 // guidance to the newly displayed scene, never replay the old fix.
                 let guidance = pendingSnapshotRefresh ?? request
@@ -781,12 +863,19 @@ final class AppModel: ObservableObject {
                     status: .navigating
                 )
             } catch is CancellationError {
+                guard generation == navigationGeneration else { return }
+                snapshotIsTransmitting = false
+                nextSnapshotPreparation?.cancel()
+                nextSnapshotPreparation = nil
                 if Task.isCancelled { break }
                 // The SDK is cancelled when iOS becomes inactive. Keep the final fix
                 // for the CPU path even if movement stops before another GPS callback.
                 if pendingSnapshotRefresh == nil { pendingSnapshotRefresh = request }
             } catch {
                 guard generation == navigationGeneration else { return }
+                snapshotIsTransmitting = false
+                nextSnapshotPreparation?.cancel()
+                nextSnapshotPreparation = nil
                 snapshotRetryAfter = Date().addingTimeInterval(5)
                 if renderCoordinator.canRecoverWithoutReconnect && pendingSnapshotRefresh == nil {
                     pendingSnapshotRefresh = request

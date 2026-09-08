@@ -318,7 +318,7 @@ test("failure diagnostics retain the last chunk boundary without returning paylo
     const report = sent.find(message => message.topic === "diagnostics.report")
     assert.ok(report, "automatically queryable peer diagnostics are required")
     assert.deepEqual(report.body, {
-      request: "probe-1", rpk: 29, phase: "chunk", offset: 0, received: 4, sendCode: 0
+      request: "probe-1", rpk: 30, phase: "chunk", offset: 0, received: 4, sendCode: 0
     })
     assert.ok(Buffer.byteLength(JSON.stringify(report)) < 512)
     sends.find(send => send.data.id === "chunk").fail({ code: 204 })

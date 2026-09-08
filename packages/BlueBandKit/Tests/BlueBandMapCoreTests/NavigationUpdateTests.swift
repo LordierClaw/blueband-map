@@ -7,6 +7,22 @@ final class NavigationUpdateTests: XCTestCase {
         let json = Data(#"{"maneuver":"roundabout","roundaboutExit":2,"roundaboutDirection":"straight","distanceMeters":80,"street":"Road","x":106,"y":374,"headingBucket":0,"destinationMode":"hidden","destinationX":0,"destinationY":0}"#.utf8)
         let preview = try JSONDecoder().decode(RenderNavigationPreview.self, from: json)
         XCTAssertEqual(preview.jsonBody()["roundaboutDirection"], .string("straight"))
+        for direction in [NavigationManeuver.straight, .left, .right, .uTurn, .arrive, .roundabout] {
+            for maneuver in [NavigationManeuver.roundabout, .right] {
+                let update = try NavigationUpdate(scene: "scene-1", seq: 1, x: 106, y: 374,
+                    maneuver: maneuver, distanceMeters: 80, street: "Road", status: .navigating,
+                    roundaboutExit: 2, roundaboutDirection: direction)
+                let preview = try RenderNavigationPreview(maneuver: maneuver, distanceMeters: 80,
+                    street: "Road", x: 106, y: 374, headingBucket: 0, destinationMode: .hidden,
+                    destinationX: 0, destinationY: 0, roundaboutExit: 2, roundaboutDirection: direction)
+                let valid = maneuver == .roundabout && [.straight, .left, .right, .uTurn].contains(direction)
+                let expected: JSONValue? = valid ? .string(direction.rawValue) : nil
+                XCTAssertEqual(update.jsonBody()["roundaboutDirection"], expected)
+                XCTAssertEqual(preview.jsonBody()["roundaboutDirection"], expected)
+                XCTAssertLessThanOrEqual(try ApplicationEnvelope.message(id: "nav-1", source: .ios,
+                    topic: NavigationUpdate.topic, body: update.jsonBody()).encoded().count, 512)
+            }
+        }
     }
 
     func testRoundaboutExitUsesTheSameBoundedValueInPreviewAndLiveUpdate() throws {

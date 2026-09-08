@@ -11,6 +11,18 @@ import BlueBandProtocol
 @MainActor
 final class AppModelPickerTests: XCTestCase {
     func testNextMapRendersWhilePreviousMapAwaitsBandDisplay() async throws {
+        try await exercisePreparedFrame(supersede: false, stop: false)
+    }
+
+    func testPreparedMapIsDiscardedWhenNewGPSMovesBeyondItsCamera() async throws {
+        try await exercisePreparedFrame(supersede: true, stop: false)
+    }
+
+    func testStoppingNavigationDiscardsThePreparedFrameAndLateDisplay() async throws {
+        try await exercisePreparedFrame(supersede: false, stop: true)
+    }
+
+    private func exercisePreparedFrame(supersede: Bool, stop: Bool) async throws {
         let manager = TestLocationManager()
         let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
         let sender = WindowedRouteCardSession(deferResults: true)
@@ -43,12 +55,29 @@ final class AppModelPickerTests: XCTestCase {
         let stillFirstScene = await sender.prepareValue("sceneId")
         XCTAssertEqual(stillFirstScene, firstScene, "preparing B must not send it before A is confirmed")
         XCTAssertNil(model.routePreviewPNG)
+        if stop {
+            model.stopNavigation()
+            await sender.deliverResult()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertNil(model.routePreviewPNG)
+            XCTAssertEqual(model.navigationState, .idle)
+            XCTAssertEqual(requests.count, 2)
+            let sceneAfterStop = await sender.prepareValue("sceneId")
+            XCTAssertEqual(sceneAfterStop, firstScene)
+            return
+        }
+        if supersede {
+            location.locationManager(manager, didUpdateLocations: [fix(0.0006)])
+            await waitUntil { model.navigationDebugEntries.contains { $0.stage == "guidance.fix" && $0.detail.contains("remainingM=44") } }
+        }
         await sender.deliverResult()
         await waitUntil { await sender.prepareValue("sceneId") != firstScene }
         await waitUntil { await sender.pendingResult != nil }
         await sender.deliverResult()
         await waitUntil { model.navigationDebugEntries.filter { $0.stage == "band.displayed" }.count == 2 }
-        XCTAssertEqual(requests.count, 2, "reuse the prepared newest frame instead of rendering it again")
+        XCTAssertEqual(requests.count, supersede ? 3 : 2, "reuse only a current prepared camera")
+        XCTAssertEqual(requests.last?.matchedPosition.latitude ?? -1, supersede ? 0.0006 : 0.0002, accuracy: 0.00001)
+        if supersede { XCTAssertTrue(model.navigationDebugEntries.contains { $0.stage == "map.prepared.discard" }) }
         XCTAssertTrue(model.navigationDebugEntries.contains { $0.stage == "map.pipeline" && $0.detail.contains("queueMs=") && $0.detail.contains("frameGapMs=") })
     }
 

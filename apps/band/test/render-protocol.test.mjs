@@ -81,4 +81,11 @@ test("prepare admits a bounded navigation preview", () => {
     { ...preview, destinationY: undefined },
     { ...preview, destinationMode: "hidden", destinationX: 1 }
   ]) assert.equal(validatePrepare(prepare({ preview: invalid })).ok, false)
+  for (const direction of ["straight", "left", "right", "uTurn"]) {
+    assert.equal(validatePrepare(prepare({ preview: { ...preview, maneuver: "roundabout", roundaboutDirection: direction } })).ok, true)
+  }
+  for (const direction of ["arrive", "../wrong", null, 2]) {
+    assert.equal(validatePrepare(prepare({ preview: { ...preview, maneuver: "roundabout", roundaboutDirection: direction } })).ok, false)
+  }
+  assert.equal(validatePrepare(prepare({ preview: { ...preview, roundaboutDirection: "straight" } })).ok, false)
 })

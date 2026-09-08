@@ -1,8 +1,8 @@
 {
   "package": "dev.lordierclaw.bluebandmap.band",
   "name": "BlueBandMap",
-  "versionName": "0.6.14",
-  "versionCode": 29,
+  "versionName": "0.6.15",
+  "versionCode": 30,
   "minAPILevel": 1,
   "minPlatformVersion": 1000,
   "icon": "/common/icon.png",
