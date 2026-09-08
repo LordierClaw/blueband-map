@@ -75,8 +75,10 @@ final class AppModelPickerTests: XCTestCase {
         if supersede {
             if reroute {
                 for _ in 0..<3 {
+                    let processed = model.navigationDebugEntries.filter { $0.stage == "guidance.fix" }.count
                     location.locationManager(manager, didUpdateLocations: [CLLocation(coordinate: .init(latitude: 0.0002, longitude: -0.001),
                         altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())])
+                    await waitUntil { model.navigationDebugEntries.filter { $0.stage == "guidance.fix" }.count > processed }
                 }
                 await waitUntil { model.navigationInstructions.first?.streetName == "Replacement" }
             }
