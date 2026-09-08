@@ -22,13 +22,19 @@ final class AppModelPickerTests: XCTestCase {
         try await exercisePreparedFrame(supersede: false, stop: true)
     }
 
-    private func exercisePreparedFrame(supersede: Bool, stop: Bool) async throws {
+    func testRerouteDiscardsThePreparedFrameFromThePreviousRoute() async throws {
+        try await exercisePreparedFrame(supersede: true, stop: false, reroute: true)
+    }
+
+    private func exercisePreparedFrame(supersede: Bool, stop: Bool, reroute: Bool = false) async throws {
         let manager = TestLocationManager()
         let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
         let sender = WindowedRouteCardSession(deferResults: true)
+        let replacementTransport = ReplacementRouteTransport()
+        let routeTransport: any MapHTTPTransport = reroute ? replacementTransport : ReplayRouteTransport()
         var requests: [VietmapSnapshotRequest] = []
         let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
-            routeTransport: ReplayRouteTransport(), sender: sender, render: { request in
+            routeTransport: routeTransport, sender: sender, render: { request in
                 requests.append(request)
                 let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
                     bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
@@ -67,6 +73,13 @@ final class AppModelPickerTests: XCTestCase {
             return
         }
         if supersede {
+            if reroute {
+                for _ in 0..<3 {
+                    location.locationManager(manager, didUpdateLocations: [CLLocation(coordinate: .init(latitude: 0.0002, longitude: -0.001),
+                        altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())])
+                }
+                await waitUntil { model.navigationInstructions.first?.streetName == "Replacement" }
+            }
             location.locationManager(manager, didUpdateLocations: [fix(0.0006)])
             await waitUntil { model.navigationDebugEntries.contains { $0.stage == "guidance.fix" && $0.detail.contains("remainingM=44") } }
         }
@@ -78,6 +91,7 @@ final class AppModelPickerTests: XCTestCase {
         XCTAssertEqual(requests.count, supersede ? 3 : 2, "reuse only a current prepared camera")
         XCTAssertEqual(requests.last?.matchedPosition.latitude ?? -1, supersede ? 0.0006 : 0.0002, accuracy: 0.00001)
         if supersede { XCTAssertTrue(model.navigationDebugEntries.contains { $0.stage == "map.prepared.discard" }) }
+        if reroute { XCTAssertEqual(requests.last?.route.instructions.first?.streetName, "Replacement") }
         XCTAssertTrue(model.navigationDebugEntries.contains { $0.stage == "map.pipeline" && $0.detail.contains("queueMs=") && $0.detail.contains("frameGapMs=") })
     }
 
@@ -515,5 +529,16 @@ private enum PickerCentralError: Swift.Error {
 private struct ReplayRouteTransport: MapHTTPTransport {
     func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
         MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: Data(#"{"code":"OK","paths":[{"distance":270,"points_encoded":true,"points":"??gE?gEgE","instructions":[{"distance":111,"heading":0,"sign":0,"interval":[0,1],"street_name":"Đường A"},{"distance":157,"heading":45,"sign":2,"interval":[1,2],"street_name":"Đường B"},{"distance":0,"heading":0,"sign":4,"interval":[2,2],"street_name":""}]}]}"#.utf8))
+    }
+}
+
+private actor ReplacementRouteTransport: MapHTTPTransport {
+    private var calls = 0
+    func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
+        calls += 1
+        let response = try await ReplayRouteTransport().execute(request)
+        if calls == 1 { return response }
+        let body = String(decoding: response.body, as: UTF8.self).replacingOccurrences(of: "Đường A", with: "Replacement")
+        return MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: Data(body.utf8))
     }
 }
