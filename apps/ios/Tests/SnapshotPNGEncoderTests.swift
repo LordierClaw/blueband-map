@@ -5,6 +5,18 @@ import BlueBandMapCore
 @testable import BlueBandMap
 
 final class SnapshotPNGEncoderTests: XCTestCase {
+    func testEncodesCorridorCellAtNativeDimensionsWithoutSpatialBlocking() throws {
+        for size in [128, 256] {
+            let output = try SnapshotPNGEncoder.encode(solidImage(width: size, height: size), profiles: [.colors16Labels])
+            XCTAssertEqual(output.pixelBlockSize, 1)
+            XCTAssertLessThanOrEqual(output.data.count, 8192)
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(output.data as CFData, nil))
+            let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            XCTAssertEqual(decoded.width, 128)
+            XCTAssertEqual(decoded.height, 128)
+        }
+    }
+
     func testEncodesFullScreenIndexedPNGUsingFirstTransferOptimizedProfile() throws {
         let image = try solidImage(width: 212, height: 520)
         let output = try SnapshotPNGEncoder.encode(

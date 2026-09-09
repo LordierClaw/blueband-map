@@ -1,0 +1,63 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+
+// Load dynamically so a missing implementation is reported by this behavioral test.
+test("corridor coverage handles negative offsets, pins visible cells and bounds decode demand", async () => {
+  const { default: corridor } = await import("./helpers/corridor.mjs")
+  assert.deepEqual(corridor.cells(0, 0), ["0:0", "1:0", "0:1", "1:1", "0:2", "1:2", "0:3", "1:3", "0:4", "1:4"])
+  const cells = corridor.cells(1, 1)
+  assert.equal(cells.length, 18)
+  assert.equal(cells[0], "-1:-1")
+  assert.equal(cells.at(-1), "1:4")
+  assert.deepEqual(corridor.cells(NaN, 0), [])
+  assert.deepEqual(corridor.cells(32769, 0), [])
+  for (const x of [-32768, 32768]) for (const y of [-32768, 32768]) {
+    assert.ok(corridor.cells(x, y).every(corridor.validKey), "every admitted viewport must have legal cell keys")
+  }
+  const state = corridor.create("epoch-1")
+  for (const key of corridor.cells(0, 0)) assert.equal(state.store(key, `file-${key}`, 100).ok, true)
+  assert.equal(state.request(1, 0, 0).ok, true)
+  assert.equal(state.visible, false, "stored is not decoded/displayed")
+  for (const item of state.images()) state.decoded(item.key, item.uri)
+  assert.equal(state.visible, true)
+  assert.deepEqual(state.position, { x: 0, y: 0, seq: 1 })
+  const previous = state.images()
+  const missing = state.request(2, 0, 100)
+  assert.ok(missing.missing.length > 0)
+  assert.deepEqual(state.position, { x: 0, y: 0, seq: 1 }, "no uncovered pixels on cache miss")
+  for (const key of missing.missing) state.store(key, `file-${key}`, 100)
+  state.request(2, 0, 100)
+  for (const item of state.images()) state.decoded(item.key, item.uri)
+  assert.deepEqual(state.position, { x: 0, y: 100, seq: 2 })
+  assert.ok(state.images().length <= 24)
+  assert.equal(state.request(1, 0, 0).ok, false, "old GPS cannot rewind the map")
+  assert.ok(previous.length > 0)
+  // Cache insertion must never evict cells backing the current viewport.
+  for (let i = 10; i < 60; i++) assert.equal(state.store(`${i}:0`, `file-${i}`, 100).ok, true)
+  assert.ok(state.count <= 30)
+  for (const key of corridor.cells(0, 100)) assert.ok(state.has(key))
+  assert.equal(state.store("../escape", "bad", 1).ok, false)
+  assert.equal(state.store("1:1", "bad", 8193).ok, false)
+})
+
+test("failed decode and large GPS jumps preserve the last complete map", async () => {
+  const { default: corridor } = await import("./helpers/corridor.mjs")
+  const state = corridor.create("epoch-2")
+  for (const key of corridor.cells(0, 0)) state.store(key, key, 10)
+  state.request(1, 0, 0)
+  for (const item of state.images()) state.decoded(item.key, item.uri)
+  const wanted = state.request(2, 0, 100)
+  for (const key of wanted.missing) state.store(key, key, 10)
+  state.request(2, 0, 100)
+  const failed = state.images().find(item => item.opacity === 0)
+  assert.ok(failed)
+  state.failed(failed.key, failed.uri)
+  assert.equal(state.position.seq, 1)
+  assert.equal(state.visible, true)
+  // Invalid callbacks from a retired file cannot affect its replacement.
+  assert.equal(state.decoded(failed.key, "stale-file"), false)
+  const jump = state.request(3, 5000, 5000)
+  assert.equal(jump.ok, false)
+  assert.equal(jump.reason, "resetRequired")
+  assert.equal(state.position.seq, 1)
+})

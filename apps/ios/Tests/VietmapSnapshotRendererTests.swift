@@ -8,6 +8,25 @@ import BlueBandMapCore
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
 
+    func testCPURasterRespectsSharedPlaneWindowSizeForCorridorCells() throws {
+        let origin = GeoPoint(latitude: 20, longitude: 105)
+        let ahead = GeoPoint(latitude: 20.001, longitude: 105)
+        let route = RoutePlan(points: [origin, ahead], instructions: [], distanceMeters: 111)
+        let request = VietmapSnapshotRequest(route: route, matchedPosition: origin,
+            overlayGeometry: .init(subdued: [], traveled: [], active: [], context: []),
+            headingDegrees: 0, nextManeuver: ahead, tileMapKey: "fixture-key")
+        let style = try VietmapStyleClient.parseMapStyle(Data(Self.styleJSON.utf8), tileMapKey: "fixture-key")
+        for side in [128, 512] {
+            let config = VietmapSnapshotConfiguration(size: CGSize(width: side, height: side), scale: 2, pitch: 0,
+                heading: 0, userVerticalFraction: 0.72,
+                overlayInsets: .init(top: 0, left: 0, bottom: 0, right: 0), zoom: 17, center: origin)
+            let image = try VietmapCPURenderer.draw(request, configuration: config, style: style, tiles: [])
+            XCTAssertEqual(image.width, side * 2)
+            XCTAssertEqual(image.height, side * 2)
+            XCTAssertEqual(config.point(for: origin), CGPoint(x: side / 2, y: side / 2))
+        }
+    }
+
     func testHairpinAndCoincidentManeuversKeepALocalHeadingUpCamera() throws {
         let origin = GeoPoint(latitude: 20.97184, longitude: 105.78985)
         for heading in [0.0, 20, 90, 180, 270, 323, 327] {

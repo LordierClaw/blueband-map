@@ -10,8 +10,10 @@
 
     <div class="connected" if="{{ connected }}">
       <div class="map-frame" if="{{ mapReady || pendingPublication }}">
-        <image class="map" if="{{ mapReady }}" src="{{ mapPath }}" />
+        <image class="map" if="{{ mapReady && !streamVisible }}" src="{{ mapPath }}" />
         <image class="map map-pending" if="{{ pendingPublication }}" src="{{ pendingMapPath }}" @complete="mapComplete(pendingMapToken)" @error="mapError(pendingMapToken)" />
+        <image class="stream-cell" for="{{ streamImages }}" tid="key" src="{{ $item.uri }}" style="{{ $item.style }}" @complete="streamImageComplete($item.key, $item.uri)" @error="streamImageError($item.key, $item.uri)" />
+        <text class="stream-attribution" if="{{ streamVisible }}">© Vietmap</text>
         <image class="nav-destination" if="{{ mapReady && navDestinationVisible }}" src="{{ navDestinationPath }}" style="{{ navDestinationStyle }}" />
         <image class="nav-marker" if="{{ mapReady && navMarkerVisible }}" src="{{ navMarkerPath }}" style="{{ navMarkerStyle }}" />
       </div>
@@ -29,6 +31,134 @@
 <script>
 import interconnect from "@system.interconnect"
 import file from "@system.file"
+// BEGIN CORRIDOR MAP
+var corridorMap = (function () {
+// Bounded file/decode bookkeeping; the page owns native file and image callbacks.
+const CELL = 128
+const MAX_FILES = 30
+const MAX_RESIDENT = 24
+
+function integer(value, limit) {
+  return Number.isInteger(value) && Math.abs(value) <= limit
+}
+
+function validKey(key) {
+  if (typeof key !== "string" || !/^-?(0|[1-9][0-9]{0,2}):-?(0|[1-9][0-9]{0,2})$/.test(key)) return false
+  const parts = key.split(":").map(Number)
+  return parts.every(value => integer(value, 261)) && `${parts[0]}:${parts[1]}` === key
+}
+
+function cells(x, y) {
+  if (!integer(x, 32768) || !integer(y, 32768)) return []
+  const output = []
+  for (let row = Math.floor(-y / CELL); row < Math.ceil((520 - y) / CELL); row++) {
+    for (let column = Math.floor(-x / CELL); column < Math.ceil((212 - x) / CELL); column++) {
+      output.push(`${column}:${row}`)
+    }
+  }
+  return output
+}
+
+function create(epoch) {
+  const files = Object.create(null)
+  let order = [], active = [], wanted = null, latest = null
+  const state = {
+    epoch,
+    visible: false,
+    position: { x: 0, y: 0, seq: -1 },
+    get count() { return order.length },
+    has(key) { return !!files[key] },
+    records() { return order.map(key => files[key]) },
+    store(key, uri, bytes) {
+      if (!validKey(key) || typeof uri !== "string" || !uri || !Number.isInteger(bytes) || bytes < 1 || bytes > 8192) {
+        return { ok: false, evicted: [] }
+      }
+      if (files[key]) return { ok: files[key].uri === uri && files[key].bytes === bytes, evicted: [] }
+      const pinned = active.concat(wanted ? wanted.keys : [])
+      const evicted = []
+      if (order.length >= MAX_FILES) {
+        const victim = order.find(candidate => pinned.indexOf(candidate) < 0)
+        if (!victim) return { ok: false, evicted: [] }
+        evicted.push(files[victim])
+        delete files[victim]
+        order = order.filter(candidate => candidate !== victim)
+      }
+      files[key] = { key, uri, bytes, decoded: false }
+      order.push(key)
+      return { ok: true, evicted }
+    },
+    request(seq, x, y) {
+      const keys = cells(x, y)
+      if (!integer(seq, 2147483647) || seq < 0 || !keys.length ||
+          (latest && (seq < latest.seq || (seq === latest.seq && (x !== latest.x || y !== latest.y))))) {
+        return { ok: false, reason: "invalidView", missing: [] }
+      }
+      if (state.visible && (Math.abs(x - state.position.x) > CELL || Math.abs(y - state.position.y) > CELL)) {
+        return { ok: false, reason: "resetRequired", missing: [] }
+      }
+      const resident = active.concat(keys.filter(key => active.indexOf(key) < 0))
+      if (resident.length > MAX_RESIDENT) return { ok: false, reason: "resetRequired", missing: [] }
+      latest = { seq, x, y }
+      wanted = { seq, x, y, keys }
+      for (const key of keys) {
+        if (files[key]) { order = order.filter(candidate => candidate !== key); order.push(key) }
+      }
+      const missing = keys.filter(key => !files[key])
+      promote()
+      return { ok: true, missing }
+    },
+    images() {
+      // An unmounted native image must decode again if its file is later reused.
+      const pending = wanted && wanted.keys.every(key => files[key]) ? wanted.keys : []
+      const resident = active.concat(pending.filter(key => active.indexOf(key) < 0))
+      for (const key of order) if (resident.indexOf(key) < 0) files[key].decoded = false
+      return resident.map(key => {
+        const file = files[key], parts = key.split(":").map(Number)
+        const shown = active.indexOf(key) >= 0 && state.visible
+        return { key, uri: file.uri, opacity: shown ? 1 : 0,
+          x: parts[0] * CELL + state.position.x, y: parts[1] * CELL + state.position.y }
+      })
+    },
+    decoded(key, uri) {
+      const file = files[key]
+      if (!file || file.uri !== uri || state.images().every(item => item.key !== key)) return false
+      file.decoded = true
+      promote()
+      return true
+    },
+    failed(key, uri) {
+      const file = files[key]
+      if (!file || file.uri !== uri) return false
+      if (active.indexOf(key) >= 0) { state.visible = false; active = [] }
+      delete files[key]
+      order = order.filter(candidate => candidate !== key)
+      wanted = null
+      return true
+    }
+  }
+  function promote() {
+    if (!wanted || !wanted.keys.every(key => files[key] && files[key].decoded)) return
+    active = wanted.keys
+    state.position = { seq: wanted.seq, x: wanted.x, y: wanted.y }
+    state.visible = true
+    wanted = null
+    for (const key of order) if (active.indexOf(key) < 0) files[key].decoded = false
+  }
+  return state
+}
+
+function validPNG(bytes) {
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]
+  if (!bytes || bytes.length < 33 || signature.some((value, index) => bytes[index] !== value)) return false
+  // Reject image-size bombs before a native decoder sees the file.
+  if ([16, 20].some(index => bytes[index] !== 0 || bytes[index + 1] !== 0 || bytes[index + 2] !== 0 || bytes[index + 3] !== CELL)) return false
+  return (bytes[24] === 8 || (bytes[24] === 4 && bytes[25] === 3)) &&
+    [0, 2, 3, 4, 6].indexOf(bytes[25]) >= 0 && bytes[26] === 0 && bytes[27] === 0 && bytes[28] === 0
+}
+
+return { cellSize: CELL, maximumFiles: MAX_FILES, maximumResident: MAX_RESIDENT, cells, validKey, validPNG, create }
+})()
+// END CORRIDOR MAP
 
 var base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
@@ -383,6 +513,8 @@ export default {
     unconfirmedURI: "",
     unconfirmedTouched: false,
     mapReady: false,
+    streamVisible: false,
+    streamImages: [],
     mapPath: "",
     mapHashPrefix: "",
     mapRenderer: "",
@@ -413,6 +545,10 @@ export default {
   },
 
   onReady() {
+    this.streamState = null
+    this.streamTransfer = null
+    this.streamWritePending = false
+    this.streamGarbage = []
     this.destroyed = false
     this.acceptingMessages = false
     this.connected = false
@@ -533,6 +669,7 @@ export default {
   },
 
   resetMapLifecycle() {
+    this.resetStream()
     this.restorePreparedNavigation()
     this.lifecycleEpoch = this.lifecycleEpoch + 1
     this.navScene = ""
@@ -700,6 +837,14 @@ export default {
       return
     }
     if (this.inFlightIDs.indexOf(message.id) >= 0) return
+    if (message.topic.indexOf("map.cell.") === 0) {
+      this.handleCellMessage(message)
+      return
+    }
+    if (message.topic.indexOf("map.stream.") === 0) {
+      this.handleStreamMessage(message)
+      return
+    }
     if (message.topic === "nav.update") {
       this.handleNavigationUpdate(message)
       return
@@ -810,6 +955,198 @@ export default {
     }
     this.rememberSuccess(message.id)
     this.sendACK(message.id)
+  },
+
+  resetStream() {
+    var previous = this.streamState
+    var transfer = this.streamTransfer
+    this.streamState = null
+    this.streamTransfer = null
+    this.streamImages = []
+    this.streamVisible = false
+    if (previous) {
+      var page = this
+      previous.records().forEach(function (record) { page.retireCellFile(record.uri) })
+    }
+    if (transfer && transfer.uri) this.retireCellFile(transfer.uri)
+  },
+
+  retireCellFile(uri) {
+    if (typeof uri !== "string" || uri.indexOf("internal://files/cell-") !== 0) return
+    if (this.streamGarbage.indexOf(uri) < 0) this.streamGarbage.push(uri)
+    var page = this
+    this.scheduleDelete(uri, function () {
+      page.streamGarbage = page.streamGarbage.filter(function (entry) { return entry !== uri })
+    }, null)
+  },
+
+  cellResult(epoch, cell, status, code, evicted) {
+    this.sendStreamEnvelope("map.cell.result", {
+      epoch: this.validRun(epoch) ? epoch : "", cell: corridorMap.validKey(cell) ? cell : "",
+      status: status, code: code, evicted: evicted || []
+    })
+  },
+
+  handleCellMessage(message) {
+    var body = message.body || {}, state = this.streamState, transfer = this.streamTransfer
+    var page = this
+    var finish = function () { page.rememberSuccess(message.id); page.sendACK(message.id) }
+    var reject = function (code, abandon) {
+      if (abandon && page.streamTransfer === transfer) page.streamTransfer = null
+      page.cellResult(body.epoch, body.cell, "error", code)
+      finish()
+    }
+    if (!state || body.epoch !== state.epoch || !corridorMap.validKey(body.cell)) {
+      reject("invalidCell", false)
+      return
+    }
+    if (message.topic === "map.cell.begin") {
+      if (transfer || this.streamWritePending || this.streamGarbage.length || this.preparedRender || this.activeTransfer || this.pendingPublication) {
+        reject("busy", false)
+        return
+      }
+      if (!this.validInteger(body.bytes) || body.bytes < 33 || body.bytes > 8192 || !renderProtocol.validSHA256(body.sha256)) {
+        reject("invalidPayload", false)
+        return
+      }
+      if (state.has(body.cell)) {
+        this.cellResult(body.epoch, body.cell, "stored", "cached")
+        finish()
+        return
+      }
+      this.streamTransfer = { epoch: body.epoch, cell: body.cell, bytes: body.bytes, sha256: body.sha256,
+        buffer: new Uint8Array(body.bytes), offsets: [], received: 0, uri: "" }
+      finish()
+      return
+    }
+    if (!transfer || transfer.epoch !== body.epoch || transfer.cell !== body.cell || this.streamWritePending) {
+      reject("noTransfer", false)
+      return
+    }
+    if (message.topic === "map.cell.chunk") {
+      var bytes = this.decodeBase64(body.data), offset = body.offset
+      if (!bytes || !this.validInteger(offset) || offset < 0 || offset % 216 !== 0 ||
+        offset >= transfer.bytes || offset > transfer.received + 648 ||
+        bytes.length !== Math.min(216, transfer.bytes - offset) || transfer.offsets.indexOf(offset) >= 0) {
+        reject("invalidChunk", true)
+        return
+      }
+      transfer.buffer.set(bytes, offset)
+      transfer.offsets.push(offset)
+      while (transfer.offsets.indexOf(transfer.received) >= 0) transfer.received += Math.min(216, transfer.bytes - transfer.received)
+      finish()
+      return
+    }
+    if (message.topic !== "map.cell.end" || transfer.received !== transfer.bytes) {
+      reject("incomplete", true)
+      return
+    }
+    var digest = sha256Create()
+    sha256Update(digest, transfer.buffer)
+    if (sha256Finish(digest) !== transfer.sha256 || !corridorMap.validPNG(transfer.buffer)) {
+      reject("invalidPNG", true)
+      return
+    }
+    transfer.uri = "internal://files/cell-" + transfer.epoch + "-" + this.lifecycleEpoch + "-" + this.nextRenderToken + ".png"
+    this.nextRenderToken += 1
+    this.streamWritePending = true
+    var settled = false
+    var complete = function (success) {
+      if (settled) return
+      settled = true
+      page.streamWritePending = false
+      transfer.buffer = null
+      if (page.streamState !== state || page.streamTransfer !== transfer) {
+        page.retireCellFile(transfer.uri)
+        return
+      }
+      page.streamTransfer = null
+      if (!success) {
+        page.retireCellFile(transfer.uri)
+        page.cellResult(transfer.epoch, transfer.cell, "error", "writeFailed")
+        return
+      }
+      var stored = state.store(transfer.cell, transfer.uri, transfer.bytes)
+      if (!stored.ok) page.retireCellFile(transfer.uri)
+      stored.evicted.forEach(function (record) { page.retireCellFile(record.uri) })
+      page.cellResult(transfer.epoch, transfer.cell, stored.ok ? "stored" : "error", stored.ok ? "ok" : "cacheFull",
+        stored.evicted.map(function (record) { return record.key }))
+      page.syncStreamImages()
+    }
+    // End ACK releases the sender; the separate result proves the native write completed.
+    finish()
+    try {
+      file.writeArrayBuffer({ uri: transfer.uri, buffer: transfer.buffer, position: 0,
+        success: function () { complete(true) }, fail: function () { complete(false) } })
+    } catch (error) { complete(false) }
+  },
+
+  sendStreamEnvelope(topic, body) {
+    this.sendEnvelope({ v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: topic, body: body })
+  },
+
+  handleStreamMessage(message) {
+    var body = message.body || {}
+    if (message.topic === "map.stream.open" && this.streamGarbage.length) {
+      var page = this
+      this.streamGarbage.slice().forEach(function (uri) { page.retireCellFile(uri) })
+    }
+    if (message.topic === "map.stream.open" && body.version === 1 &&
+      this.confirmedMap && body.scene === this.confirmedMap.scene &&
+      this.validRun(body.epoch) && !this.activeTransfer && !this.pendingPublication && !this.preparedRender &&
+      !this.streamWritePending && !this.streamGarbage.length) {
+      if (!this.streamState || this.streamState.epoch !== body.epoch) {
+        this.resetStream()
+        this.streamState = corridorMap.create(body.epoch)
+      }
+      this.sendStreamEnvelope("map.stream.ready", {
+        scene: body.scene, epoch: body.epoch, version: 1, cellSize: corridorMap.cellSize,
+        maximumFiles: corridorMap.maximumFiles, maximumResident: corridorMap.maximumResident
+      })
+    } else if (this.streamState && body.epoch === this.streamState.epoch) {
+      if (message.topic === "map.stream.view") {
+        var result = this.streamState.request(body.seq, body.x, body.y)
+        this.syncStreamImages()
+        this.sendStreamEnvelope("map.stream.state", {
+          epoch: body.epoch, seq: body.seq, displayedSeq: this.streamState.position.seq,
+          missing: result.missing, code: result.ok ? "ok" : result.reason
+        })
+      } else if (message.topic === "map.stream.close") this.resetStream()
+    }
+    this.rememberSuccess(message.id)
+    this.sendACK(message.id)
+  },
+
+  syncStreamImages() {
+    if (!this.streamState) return
+    this.streamImages = this.streamState.images().map(function (item) {
+      return { key: item.key, uri: item.uri,
+        style: "left:" + item.x + "px;top:" + item.y + "px;opacity:" + item.opacity + ";" }
+    })
+    this.streamVisible = this.streamState.visible
+  },
+
+  streamImageComplete(key, uri) {
+    if (!this.streamState) return
+    var previous = this.streamState.position.seq
+    if (!this.streamState.decoded(key, uri)) return
+    this.syncStreamImages()
+    if (this.streamState.position.seq !== previous) {
+      this.sendStreamEnvelope("map.stream.state", {
+        epoch: this.streamState.epoch, seq: this.streamState.position.seq,
+        displayedSeq: this.streamState.position.seq, missing: [], code: "ok"
+      })
+    }
+  },
+
+  streamImageError(key, uri) {
+    if (!this.streamState || !this.streamState.failed(key, uri)) return
+    this.syncStreamImages()
+    this.retireCellFile(uri)
+    this.sendStreamEnvelope("map.stream.state", {
+      epoch: this.streamState.epoch, displayedSeq: this.streamState.position.seq,
+      missing: [key], code: "decodeFailed"
+    })
   },
 
   handleRenderPrepare(message) {
@@ -1492,6 +1829,7 @@ export default {
     if (!publication || token !== publication.token || this.lifecycleEpoch !== publication.epoch ||
       this.activeMapOperationID !== publication.operationID || publication.cleanupStarted) return
     publication.cleanupStarted = true
+    this.resetStream()
     var priorMap = this.confirmedMap
     this.unconfirmedURI = ""
     this.unconfirmedTouched = false
@@ -1597,6 +1935,8 @@ export default {
 .nav-status { position: absolute; left: 72px; top: 80px; width: 94px; font-size: 10px; font-weight: bold; text-align: right; color: #5dffb0; }
 .map-frame { width: 212px; height: 520px; position: relative; background-color: #050e16; }
 .map { position: absolute; left: 0; top: 0; width: 212px; height: 520px; object-fit: contain; }
+.stream-cell { position: absolute; width: 128px; height: 128px; object-fit: contain; }
+.stream-attribution { position: absolute; left: 75px; top: 481px; width: 62px; height: 18px; font-size: 9px; text-align: center; color: #f4f3e5; }
 .nav-destination { position: absolute; width: 28px; }
 .nav-marker { position: absolute; width: 30px; height: 38px; object-fit: contain; }
 </style>

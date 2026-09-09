@@ -2,6 +2,22 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class VietmapRouteTests: XCTestCase {
+    func testFrozenPlaybackRoundaboutIntervalAlreadyIncludesOutlet() {
+        // Translated E5 offsets from the user's frozen playback shape; no raw capture or location.
+        let offsets = [(0, 0), (134, -42), (328, -104), (331, -99), (336, -96),
+                       (341, -94), (347, -95), (353, -97), (358, -103), (360, -110),
+                       (359, -118), (416, -158), (538, -258)]
+        let points = offsets.map { GeoPoint(latitude: 20 + Double($0.0) / 100_000,
+                                            longitude: 105 + Double($0.1) / 100_000) }
+        for end in [10, 11, 12] {
+            let route = RoutePlan(points: points, instructions: [
+                RouteInstruction(distanceMeters: 465, headingDegrees: 0, sign: 6,
+                                 interval: 0...end, streetName: "Circle", roundaboutExit: 2)
+            ], distanceMeters: 465)
+            XCTAssertEqual(route.instructions[0].roundaboutDirection, .straight, "interval end=\(end)")
+        }
+    }
+
     func testRoundaboutGeometrySelectsRelativeExitNotLocalExitTurnOrExitNumber() {
         for (sweep, expected) in [(90, "right"), (180, "straight"), (270, "left"), (360, "uTurn")] {
             for rotation in [0.0, 73, 181, 350] {
@@ -10,6 +26,9 @@ final class VietmapRouteTests: XCTestCase {
                     routeDistanceMeters: route.distanceMeters, alternativePathCount: 1,
                     instructions: route.instructions, entries: [])
                 XCTAssertTrue(debug.contains("roundaboutDirection=\(expected)"), "sweep=\(sweep), rotation=\(rotation): \(debug)")
+                XCTAssertEqual(RoundaboutGeometry.direction(points: route.points,
+                    interval: 0...(route.points.count - 1))?.rawValue, expected,
+                    "same circle with outlet inside instruction: sweep=\(sweep), rotation=\(rotation)")
             }
         }
     }
@@ -40,7 +59,7 @@ final class VietmapRouteTests: XCTestCase {
     func testRoundaboutGeometryRejectsMissingOutletStraightAndClockwisePaths() {
         let circle = circularRoute(sweep: 180, rotation: 0)
         let last = circle.points.count - 1
-        XCTAssertNil(RoundaboutGeometry.direction(points: circle.points, interval: 0...last))
+        XCTAssertNil(RoundaboutGeometry.direction(points: Array(circle.points.dropLast()), interval: 0...(last - 1)))
         let straight = (0..<10).map { GeoPoint(latitude: 20 + Double($0) * 0.0001, longitude: 105) }
         XCTAssertNil(RoundaboutGeometry.direction(points: straight, interval: 0...8))
         let mirrored = circle.points.map { GeoPoint(latitude: $0.latitude, longitude: 210 - $0.longitude) }

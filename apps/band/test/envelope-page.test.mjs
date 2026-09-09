@@ -2,12 +2,15 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import test from "node:test"
+import corridorMap from "./helpers/corridor.mjs"
 
 const RUN = "run-0123456789abcdef"
 const SCENE = "scene-0123456789"
 const BYTES = Uint8Array.from([0, 1, 2, 3])
 const DIGEST = createHash("sha256").update(BYTES).digest("hex")
 const ASSET = `nav-${DIGEST.slice(0, 16)}`
+// Generated 128x128 grayscale gradient, independent of the app renderer/encoder.
+const CELL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAAAAADmVT4XAAACI0lEQVR4nMXNA5IYAAAAsa1t27Zt27Zt82rbtm3btm3bnj5j84FAoMBBggYLHiJkqNBhwoYLHyFipMhRokaLHiNmrNhx4saLnyBhosRJkiZLniJlqtRp0qZLnyFjpsxZsmbLniNnrtx58ubLX6BgocJFihYrXqJkqdJlypYrX6FipcpVqlarXqNmrdp16tar36Bho8ZNmjZr3qJlq9Zt2rZr36Fjp85dunbr3qNnr959+vbrH2D/A5D/gcj/IOR/MPI/BPkfivwPQ/6HI/8jkP+RyP8o5H808j8G+R+L/I9D/scj/xOQ/4nI/yTkfzLyPwX5n4r8T0P+pyP/M5D/mcj/LOR/NvI/B/mfi/zPQ/7nI/8LkP+FyP8i5H8x8r8E+V+K/C9D/pcj/yuQ/5XI/yrkfzXyvwb5X4v8r0P+1yP/G5D/jcj/JuR/M/K/BfnfivxvQ/63I/87kP+dyP8u5H838r8H+d+L/O9D/vcj/weQ/4PI/yHk/zDyfwT5P4r8H0P+jyP/J5D/k8j/KeT/NPJ/Bvk/i/yfQ/7PI/8XkP+LyP8l5P8y8n8F+b+K/F9D/q8j/zeQ/5vI/y3k/zbyfwf5v4v830P+7yP/D5D/h8j/I+T/MfL/BPl/ivw/Q/6fI/8vkP+XyP8r5P818v8G+X+L/L9D/t8j/x+Q/4/I/yfk/zPy/wX5/4r8f0P+vyP/P5D/n8j/L+T/N/L/B/n/i/z/+w96ocHS/e4O/QAAAABJRU5ErkJggg==", "base64")
 
 async function loadPage(connection, file = memoryFile()) {
   const ux = await readFile(new URL("../src/pages/index/index.ux", import.meta.url), "utf8")
@@ -91,6 +94,128 @@ async function harness() {
   }
   return { page: await loadPage(connection, file), sent, file, connection }
 }
+
+test("corridor streaming requires a confirmed scene and resets on full-map replacement", async () => {
+  const { page, sent } = await harness()
+  try {
+    page.receiveMessage({ data: envelope("stream-before-map", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    assert.equal(sent.some(message => message.topic === "map.stream.ready"), false)
+    publish(page)
+    page.receiveMessage({ data: envelope("stream-open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    const ready = sent.find(message => message.topic === "map.stream.ready")
+    assert.ok(ready, "application capability reply is required; unknown-topic ACK is insufficient")
+    assert.deepEqual(ready.body, { scene: SCENE, epoch: "e1", version: 1, cellSize: 128, maximumFiles: 30, maximumResident: 24 })
+    assert.equal(page.streamVisible, false, "opening cannot hide the confirmed full map")
+    page.receiveMessage({ data: envelope("stream-view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    const need = sent.find(message => message.topic === "map.stream.state")
+    assert.deepEqual(need.body.missing, corridorMap.cells(0, 0))
+    assert.equal(page.streamImages.length, 0, "missing images never decode or display")
+    publish(page, "next-scene", "-next")
+    assert.equal(page.streamState, null, "old camera coordinates must not survive scene replacement")
+    assert.equal(page.streamVisible, false)
+  } finally { page.onDestroy() }
+})
+
+function streamCell(page, key, suffix = key, data = CELL_PNG) {
+  const digest = createHash("sha256").update(data).digest("hex")
+  page.receiveMessage({ data: envelope(`cb-${suffix}`, "map.cell.begin", { epoch: "e1", cell: key, bytes: data.length, sha256: digest }) })
+  const offsets = Array.from({ length: Math.ceil(data.length / 216) }, (_, i) => i * 216)
+  if (offsets.length > 1) [offsets[0], offsets[1]] = [offsets[1], offsets[0]]
+  for (const offset of offsets) page.receiveMessage({ data: envelope(`cc-${suffix}-${offset}`, "map.cell.chunk", {
+    epoch: "e1", cell: key, offset, data: data.subarray(offset, offset + 216).toString("base64")
+  }) })
+  page.receiveMessage({ data: envelope(`ce-${suffix}`, "map.cell.end", { epoch: "e1", cell: key }) })
+}
+
+test("windowed cell transfers populate a moving viewport without replacing the full map", async () => {
+  const { page, sent, file } = await harness()
+  try {
+    publish(page)
+    const originalScene = page.confirmedMap.scene
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    page.receiveMessage({ data: envelope("view1", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
+    assert.equal(sent.filter(m => m.topic === "map.cell.result" && m.body.status === "stored").length, 10)
+    assert.equal(page.streamVisible, false, "write completion alone must not hide the full map")
+    page.receiveMessage({ data: envelope("view1-retry", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    assert.equal(page.streamImages.length, 10)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+    assert.equal(page.streamVisible, true)
+    const writes = file.writes.length
+    page.receiveMessage({ data: envelope("view2", "map.stream.view", { epoch: "e1", seq: 2, x: 0, y: 4 }) })
+    for (const key of corridorMap.cells(0, 4).filter(key => !page.streamState.has(key))) streamCell(page, key)
+    page.receiveMessage({ data: envelope("view2-retry", "map.stream.view", { epoch: "e1", seq: 2, x: 0, y: 4 }) })
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+    assert.equal(page.streamState.position.y, 4)
+    assert.equal(file.writes.length - writes, 2, "only the entering row is transferred")
+    page.receiveMessage({ data: envelope("view3", "map.stream.view", { epoch: "e1", seq: 3, x: 0, y: 8 }) })
+    assert.equal(page.streamState.position.y, 8)
+    assert.equal(file.writes.length - writes, 2, "cached movement needs no image writes")
+    assert.equal(page.confirmedMap.scene, originalScene)
+    assert.ok(page.streamImages.length <= 24)
+  } finally { page.onDestroy() }
+})
+
+test("cell admission rejects oversized or malformed PNGs before native image allocation", async () => {
+  const { page, sent, file } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    const before = file.writes.length
+    page.receiveMessage({ data: envelope("oversize", "map.cell.begin", { epoch: "e1", cell: "0:0", bytes: 8193, sha256: DIGEST }) })
+    assert.ok(sent.some(m => m.topic === "map.cell.result" && m.body.status === "error"))
+    const invalid = Buffer.from(CELL_PNG)
+    invalid.writeUInt32BE(4096, 16)
+    streamCell(page, "0:0", "bad-dimensions", invalid)
+    assert.equal(file.writes.length, before)
+    assert.equal(page.streamImages.length, 0)
+    assert.equal(page.streamState.count, 0)
+    assert.equal(page.mapReady, true)
+  } finally { page.onDestroy() }
+})
+
+test("late cell writes are retired and duplicate callbacks cannot release a newer write", async () => {
+  const { page, file } = await harness()
+  const pending = []
+  try {
+    publish(page)
+    const write = file.writeArrayBuffer.bind(file)
+    file.writeArrayBuffer = options => pending.push(options)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    streamCell(page, "0:0")
+    assert.equal(page.streamWritePending, true)
+    page.receiveMessage({ data: envelope("close", "map.stream.close", { epoch: "e1" }) })
+    const old = pending.shift()
+    write(old)
+    assert.equal(file.storage.has(old.uri), false, "a write completing after close must not leak its file")
+    page.receiveMessage({ data: envelope("open-again", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    streamCell(page, "0:1")
+    assert.equal(page.streamWritePending, true)
+    old.success()
+    assert.equal(page.streamWritePending, true, "duplicate old completion cannot clear current write ownership")
+    write(pending.shift())
+    assert.equal(page.streamState.has("0:1"), true)
+  } finally { page.onDestroy() }
+})
+
+test("failed cell retirement blocks further file admission until cleanup succeeds", async () => {
+  const { page, file } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    streamCell(page, "0:0")
+    const remove = file.delete.bind(file)
+    file.delete = options => options.uri.includes("/cell-") ? options.fail() : remove(options)
+    page.receiveMessage({ data: envelope("close", "map.stream.close", { epoch: "e1" }) })
+    assert.equal(page.streamGarbage.length, 1)
+    page.receiveMessage({ data: envelope("blocked-open", "map.stream.open", { scene: SCENE, epoch: "e2", version: 1 }) })
+    assert.equal(page.streamState, null)
+    file.delete = remove
+    page.receiveMessage({ data: envelope("clean-open", "map.stream.open", { scene: SCENE, epoch: "e2", version: 1 }) })
+    assert.equal(page.streamGarbage.length, 0)
+    assert.equal(page.streamState.epoch, "e2")
+  } finally { page.onDestroy() }
+})
 
 test("waiting page probes immediately with one in flight and owns one retry timer", async () => {
   const timers = new Map()

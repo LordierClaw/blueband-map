@@ -179,6 +179,9 @@ test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 },
   assert.match(result.stdout, /verified .*\.0\.6\.15\.rpk/)
 
   const compiledEntry = await readFile(new URL("build/pages/index/index.js", root), "utf8")
+  assert.equal(/\.\/src\/common\//.test(compiledEntry), false,
+    "corridor helper must not reintroduce the custom module loader that breaks the firmware entry")
+  assert.match(compiledEntry, /var __webpack_modules__ = \{\};/, "custom helper module table stays empty")
   assert.doesNotMatch(compiledEntry, /\.\/src\/common\/(?:render-protocol|vector-scene)\.js/, "page load must not start a custom module graph")
   assert.doesNotMatch(compiledEntry, /exports\.(?:validIdentifier|decodeBBMV)|Object\.freeze\(/, "page entry must not evaluate imported helper modules")
 })
