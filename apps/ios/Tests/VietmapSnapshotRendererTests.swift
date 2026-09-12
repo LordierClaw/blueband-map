@@ -186,6 +186,30 @@ final class VietmapSnapshotRendererTests: XCTestCase {
             attachment.name = "CPU-map-\(Int(heading))-\(encoded.data.count)bytes"
             attachment.lifetime = .keepAlways
             add(attachment)
+            let mosaic = CGContext(data: nil, width: 212, height: 520, bitsPerComponent: 8, bytesPerRow: 848,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            var atlases: [String: CGImage] = [:]
+            for cell in try CorridorViewport(x: 0, y: 0).visibleCells {
+                let column = cell.column / 4, row = cell.row / 4, key = "\(column):\(row)"
+                let bounds = CGRect(x: column * 512 - 128, y: row * 512 - 128, width: 768, height: 768)
+                if atlases[key] == nil {
+                    atlases[key] = try VietmapCPURenderer.draw(request, configuration: configuration.window(bounds),
+                        style: style, tiles: [source], baseOnly: true)
+                }
+                let rect = CGRect(x: cell.column * 128, y: cell.row * 128, width: 128, height: 128)
+                let crop = CGRect(x: (rect.minX - bounds.minX) * 2, y: (rect.minY - bounds.minY) * 2, width: 256, height: 256)
+                let base = try XCTUnwrap(atlases[key]?.cropping(to: crop))
+                let raster = try VietmapCPURenderer.cellImage(base: base, request: request, configuration: configuration.window(rect))
+                let cellData = try SnapshotPNGEncoder.encode(raster, profiles: [.colors16Labels]).data
+                let decoded = try XCTUnwrap(CGImageSourceCreateWithData(cellData as CFData, nil))
+                let pixels = try XCTUnwrap(CGImageSourceCreateImageAtIndex(decoded, 0, nil))
+                mosaic.draw(pixels, in: CGRect(x: rect.minX, y: 520 - rect.maxY, width: 128, height: 128))
+            }
+            let mosaicData = try SnapshotPNGEncoder.encode(XCTUnwrap(mosaic.makeImage()), profiles: [.colors16Labels]).data
+            let cellAttachment = XCTAttachment(data: mosaicData, uniformTypeIdentifier: "public.png")
+            cellAttachment.name = "Corridor-mosaic-\(Int(heading))"
+            cellAttachment.lifetime = .keepAlways
+            add(cellAttachment)
         }
     }
 

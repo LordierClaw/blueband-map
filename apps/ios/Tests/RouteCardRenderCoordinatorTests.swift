@@ -299,6 +299,7 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     private(set) var cellKeys = Set<String>()
     private(set) var streamY = 0
     private(set) var streamViews = 0
+    private(set) var streamOpens = 0
     private var streamView: [String: JSONValue]?
 
     init(chunkDelay: Duration = .milliseconds(5), delayFirstChunk: Bool = false,
@@ -327,9 +328,13 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
         if streaming {
             if topic == "map.stream.open" {
+                streamOpens += 1
                 cellKeys.removeAll(); streamView = nil
                 await receive("map.stream.ready", body: ["epoch": body["epoch"]!, "scene": body["scene"]!,
                     "version": .number(1), "cellSize": .number(128), "maximumFiles": .number(30), "maximumResident": .number(24)])
+            } else if topic == "map.cell.begin" {
+                await receive("map.cell.result", body: ["epoch": body["epoch"]!, "cell": body["cell"]!,
+                    "request": .string("ack"), "status": .string("accepted"), "code": .string("ok"), "evicted": .array([])])
             } else if topic == "map.cell.end", case let .string(key)? = body["cell"] {
                 cellKeys.insert(key)
                 await receive("map.cell.result", body: ["epoch": body["epoch"]!, "cell": .string(key),

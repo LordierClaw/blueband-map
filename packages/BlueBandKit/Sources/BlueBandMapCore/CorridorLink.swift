@@ -12,7 +12,6 @@ public final class CorridorLink {
     public private(set) var displayedViewport: CorridorViewport?
     public private(set) var displayedSequence = -1
     public private(set) var displayedFixTimestamp: Date?
-    public var latestSequence: Int { sequence }
     public private(set) var failure: String?
     public var onDisplay: ((CorridorViewport, Int) -> Void)?
     private let send: Send
@@ -21,7 +20,7 @@ public final class CorridorLink {
     private var sequence = 0
     private var views: [Int: (viewport: CorridorViewport, timestamp: Date)] = [:]
     private var cellInFlight: String?
-    private var cellReply: (request: String, status: String)?
+    private var cellReply: (request: String, status: String, code: String)?
     private var hashes: [String: String] = [:]
     private var decodedHash: String?
     private var expectedHash: String?
@@ -70,9 +69,19 @@ public final class CorridorLink {
             var begin = identity
             begin["bytes"] = .number(Double(data.count))
             begin["sha256"] = .string(hash)
-            let beginID = try await send("map.cell.begin", begin)
-            guard epoch == owned, ready, cellReply?.status != "error" else { return false }
-            if cellReply?.request == beginID, cellReply?.status == "stored" {
+            let deadline = ContinuousClock.now.advanced(by: timeout)
+            while true {
+                cellReply = nil
+                let beginID = try await send("map.cell.begin", begin)
+                guard await wait(epoch: owned, until: { self.cellReply?.request == beginID }), let reply = cellReply else {
+                    if epoch == owned { fail("admissionTimeout") }; return false
+                }
+                if reply.status != "error" { break }
+                guard reply.code == "busy", ContinuousClock.now < deadline else { fail("cellRejected"); return false }
+                try await Task.sleep(for: .milliseconds(100))
+                guard epoch == owned, ready else { return false }
+            }
+            if cellReply?.status == "stored" {
                 cachedCells.insert(cell.key)
                 hashes[cell.key] = hash
                 return checkCacheBound()
@@ -97,7 +106,9 @@ public final class CorridorLink {
             let stored = await wait(epoch: owned) { self.cellReply?.request == request && self.cellReply?.status == "stored" }
             guard stored, ready else { if epoch == owned { fail("cellTimeout") }; return false }
             if replacingVisible {
-                let decoded = await wait(epoch: owned) { self.decodedHash == hash }
+                let decoded = await wait(epoch: owned) {
+                    self.decodedHash == hash || self.displayedViewport?.visibleCells.contains(cell) == false
+                }
                 guard decoded else { if epoch == owned { fail("decodeTimeout") }; return false }
             }
             cachedCells.insert(cell.key)
@@ -143,12 +154,13 @@ public final class CorridorLink {
         case "map.cell.result":
             guard ready, body["cell"] == cellInFlight.map(JSONValue.string),
                   case let .string(request)? = body["request"], RenderProtocol.isValidIdentifier(request),
-                  case let .string(status)? = body["status"], ["stored", "error"].contains(status),
+                  case let .string(status)? = body["status"], ["accepted", "stored", "error"].contains(status),
+                  case let .string(code)? = body["code"],
                   let evicted = Self.cellList(body["evicted"], maximum: 1) else { return }
             cachedCells.subtract(evicted)
             for key in evicted { hashes.removeValue(forKey: key) }
-            cellReply = (request, status)
-            if status == "error" { fail("cellRejected") }
+            cellReply = (request, status, code)
+            if status == "error", code != "busy" { fail("cellRejected") }
         case "map.cell.decoded":
             guard ready, body["cell"] == cellInFlight.map(JSONValue.string),
                   case let .string(hash)? = body["sha256"], hash == expectedHash else { return }

@@ -136,6 +136,7 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
     page.receiveMessage({ data: envelope("view1", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
     for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
+    assert.equal(sent.filter(m => m.topic === "map.cell.result" && m.body.status === "accepted").length, 10)
     assert.equal(sent.filter(m => m.topic === "map.cell.result" && m.body.status === "stored").length, 10)
     for (const result of sent.filter(m => m.topic === "map.cell.result" && m.body.status === "stored")) {
       assert.equal(result.body.request, `ce-${result.body.cell}`, "stored replies bind to the exact end command")
@@ -162,6 +163,15 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     assert.equal(file.writes.length - writes, 2, "cached movement needs no image writes")
     assert.equal(page.confirmedMap.scene, originalScene)
     assert.ok(page.streamImages.length <= 24)
+    const visible = page.streamImages.map(item => item.uri)
+    page.receiveMessage({ data: envelope("retain", "map.stream.close", { epoch: "e1", retain: true }) })
+    assert.equal(page.streamVisible, true, "recovery holds the latest mosaic instead of flashing the initial snapshot")
+    page.receiveMessage({ data: envelope("late-view", "map.stream.view", { epoch: "e1", seq: 4, x: 0, y: 12 }) })
+    assert.equal(page.streamState.position.y, 8, "a retained epoch is display-only")
+    assert.deepEqual(page.streamImages.map(item => item.uri), visible)
+    publish(page, "recovered-scene", "-recovery")
+    assert.equal(page.streamState, null)
+    for (const uri of visible) assert.equal(file.storage.has(uri), false, "new confirmed frame retires the held mosaic")
   } finally { page.onDestroy() }
 })
 
@@ -497,7 +507,7 @@ test("failure diagnostics retain the last chunk boundary without returning paylo
     const report = sent.find(message => message.topic === "diagnostics.report")
     assert.ok(report, "automatically queryable peer diagnostics are required")
     assert.deepEqual(report.body, {
-      request: "probe-1", rpk: 30, phase: "chunk", offset: 0, received: 4, sendCode: 0
+      request: "probe-1", rpk: 31, phase: "chunk", offset: 0, received: 4, sendCode: 0
     })
     assert.ok(Buffer.byteLength(JSON.stringify(report)) < 512)
     sends.find(send => send.data.id === "chunk").fail({ code: 204 })

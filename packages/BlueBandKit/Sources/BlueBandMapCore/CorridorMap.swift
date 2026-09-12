@@ -4,6 +4,13 @@ public struct CorridorCell: Hashable, Sendable {
     public let column: Int
     public let row: Int
     public var key: String { "\(column):\(row)" }
+    /// Conservative changed-path bounds, including the route casing and antialiasing gutter.
+    public func intersectsRouteChange(_ points: [ScreenPoint]) -> Bool {
+        guard !points.isEmpty else { return false }
+        let left = column * 128 - 8, top = row * 128 - 8
+        return points.map(\.x).max()! >= left && points.map(\.x).min()! <= left + 144 &&
+            points.map(\.y).max()! >= top && points.map(\.y).min()! <= top + 144
+    }
 }
 
 /// Integer translation in the confirmed camera's pixel plane, not GPS coordinates.

@@ -14,6 +14,7 @@ final class AppModelPickerTests: XCTestCase {
         let manager = TestLocationManager()
         let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
         let sender = WindowedRouteCardSession(streaming: true)
+        let cellProbe = CellRenderProbe()
         var fullFrames = 0
         let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
             routeTransport: ReplayRouteTransport(), sender: sender, render: { request in
@@ -24,7 +25,7 @@ final class AppModelPickerTests: XCTestCase {
                 return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
                     retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
                     cacheState: "fixture", configuration: config)
-            }, cellRender: { _, _, _ in Data(repeating: 42, count: 100) })
+            }, cellRender: { _, _, cell in await cellProbe.render(cell) })
         defer { model.stopNavigation() }
         await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
         model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
@@ -36,15 +37,23 @@ final class AppModelPickerTests: XCTestCase {
         }
         location.locationManager(manager, didUpdateLocations: [fix(0)])
         await waitUntil { model.navigationDebugEntries.contains { $0.stage == "map.stream.displayed" } }
+        await waitUntil { await sender.cellKeys.count >= 12 }
+        let initialRenders = await cellProbe.count
         model.applicationStateChanged("inactive")
         model.applicationStateChanged("background")
         location.locationManager(manager, didUpdateLocations: [fix(0.00001), fix(0.00002)])
         await waitUntil { await sender.streamY > 0 }
+        await waitUntil { await sender.cellKeys.count >= 14 }
+        let additionalRenders = await cellProbe.count - initialRenders
+        XCTAssertLessThanOrEqual(additionalRenders, 5, "reuse unchanged base/route cells, render only changed path plus entering margin")
         XCTAssertEqual(fullFrames, 1, "movement must translate the cached map, not render another full frame")
         XCTAssertTrue(manager.updating)
         XCTAssertLessThan(model.lastMapFixAgeMilliseconds ?? .max, 1_000)
         let cells = await sender.cellKeys.count
         XCTAssertLessThanOrEqual(cells, 30)
+        location.locationManager(manager, didUpdateLocations: [fix(0.0011)])
+        await waitUntil { await sender.streamOpens >= 2 }
+        XCTAssertEqual(fullFrames, 2, "a large camera change needs one fresh full frame and epoch")
         model.stopNavigation()
         let views = await sender.streamViews
         location.locationManager(manager, didUpdateLocations: [fix(0.00003)])
@@ -502,6 +511,11 @@ final class AppModelPickerTests: XCTestCase {
         }
         XCTFail("Condition was not met", file: file, line: line)
     }
+}
+
+private actor CellRenderProbe {
+    private(set) var count = 0
+    func render(_ cell: CorridorCell) -> Data { count += 1; return Data(repeating: 42, count: 100) }
 }
 
 private struct PickerAuthKeyStore: AuthKeyStoreProtocol, Sendable {

@@ -2,6 +2,15 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class CorridorMapTests: XCTestCase {
+    func testRouteRecoloringTouchesOnlyCellsAlongTheChangedPathWithStrokeMargin() throws {
+        let cells = try CorridorViewport(x: 0, y: 0).visibleCells
+        let changed = [ScreenPoint(x: 106, y: 374), ScreenPoint(x: 106, y: 370)]
+        XCTAssertEqual(cells.filter { $0.intersectsRouteChange(changed) }.map(\.key), ["0:2"])
+        let boundary = [ScreenPoint(x: 127, y: 250), ScreenPoint(x: 130, y: 260)]
+        XCTAssertEqual(cells.filter { $0.intersectsRouteChange(boundary) }.map(\.key), ["0:1", "1:1", "0:2", "1:2"])
+        XCTAssertFalse(cells[0].intersectsRouteChange([]))
+    }
+
     func testViewportMatchesIndependentBandVectorsAndRejectsUnboundedCoordinates() throws {
         XCTAssertEqual(try CorridorViewport(x: 0, y: 0).visibleCells.map(\.key),
             ["0:0", "1:0", "0:1", "1:1", "0:2", "1:2", "0:3", "1:3", "0:4", "1:4"])

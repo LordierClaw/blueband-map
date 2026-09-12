@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.15</text>
+      <text class="version">RPK 0.6.16</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -65,6 +65,7 @@ function create(epoch) {
   const state = {
     epoch,
     visible: false,
+    closed: false,
     destination: null,
     position: { x: 0, y: 0, seq: -1 },
     get count() { return records().length },
@@ -72,8 +73,15 @@ function create(epoch) {
     hash(key) { return files[key] && files[key].hash },
     records() { return records().concat(retired) },
     takeRetired() { const result = retired; retired = []; return result },
+    freeze() {
+      const removed = unique(records().concat(retired)).filter(record => activeRecords.indexOf(record) < 0)
+      for (const key of order) delete files[key]
+      for (const record of activeRecords) files[record.key] = record
+      order = active.slice(); wanted = null; retired = []; state.closed = true
+      return removed
+    },
     store(key, uri, bytes, hash) {
-      if (!validKey(key) || typeof uri !== "string" || !uri || !Number.isInteger(bytes) || bytes < 1 || bytes > 8192) {
+      if (state.closed || !validKey(key) || typeof uri !== "string" || !uri || !Number.isInteger(bytes) || bytes < 1 || bytes > 8192) {
         return { ok: false, evicted: [] }
       }
       const old = files[key]
@@ -102,7 +110,7 @@ function create(epoch) {
     },
     request(seq, x, y, destination) {
       const keys = cells(x, y)
-      if (!integer(seq, 2147483647) || seq < 0 || !keys.length ||
+      if (state.closed || !integer(seq, 2147483647) || seq < 0 || !keys.length ||
           (latest && (seq < latest.seq || (seq === latest.seq && (x !== latest.x || y !== latest.y))))) {
         return { ok: false, reason: "invalidView", missing: [] }
       }
@@ -815,7 +823,7 @@ export default {
       this.sendEnvelope({
         v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "diagnostics.report",
         body: {
-          request: request, rpk: 30, phase: this.lastReceivePhase,
+          request: request, rpk: 31, phase: this.lastReceivePhase,
           offset: this.lastReceiveOffset, received: this.lastReceivedBytes, sendCode: this.lastSendCode
         }
       })
@@ -1029,11 +1037,12 @@ export default {
       page.cellResult(body.epoch, body.cell, "error", code, [], message.id)
       finish()
     }
-    if (!state || body.epoch !== state.epoch || !corridorMap.validKey(body.cell)) {
+    if (!state || state.closed || body.epoch !== state.epoch || !corridorMap.validKey(body.cell)) {
       reject("invalidCell", false)
       return
     }
     if (message.topic === "map.cell.begin") {
+      this.streamGarbage.slice().forEach(function (uri) { page.retireCellFile(uri) })
       if (transfer || this.streamWritePending || this.streamGarbage.length || this.preparedRender || this.activeTransfer || this.pendingPublication) {
         reject("busy", false)
         return
@@ -1049,6 +1058,7 @@ export default {
       }
       this.streamTransfer = { epoch: body.epoch, cell: body.cell, bytes: body.bytes, sha256: body.sha256,
         buffer: new Uint8Array(body.bytes), offsets: [], received: 0, uri: "" }
+      this.cellResult(body.epoch, body.cell, "accepted", "ok", [], message.id)
       finish()
       return
     }
@@ -1152,7 +1162,15 @@ export default {
           epoch: body.epoch, seq: body.seq, displayedSeq: this.streamState.position.seq,
           missing: result.missing, code: result.ok ? "ok" : result.reason
         })
-      } else if (message.topic === "map.stream.close") this.resetStream()
+      } else if (message.topic === "map.stream.close") {
+        if (body.retain === true && this.streamState.visible) {
+          var transfer = this.streamTransfer, page = this
+          this.streamTransfer = null
+          this.streamState.freeze().forEach(function (record) { page.retireCellFile(record.uri) })
+          if (transfer && transfer.uri) this.retireCellFile(transfer.uri)
+          this.syncStreamImages()
+        } else this.resetStream()
+      }
     }
     this.rememberSuccess(message.id)
     this.sendACK(message.id)

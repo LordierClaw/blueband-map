@@ -19,9 +19,9 @@ if grep -Fq 'INFOPLIST_KEY_UIBackgroundModes' "$project"; then
   exit 1
 fi
 grep -Fq 'path: ../../packages/BlueBandKit' "$project"
-grep -Fq 'CURRENT_PROJECT_VERSION: 36' "$project"
-grep -Fq 'MARKETING_VERSION: 0.5.20' "$project"
-grep -Fq 'static let version = "0.5.20"' apps/ios/App/BlueBandMapApp.swift
+grep -Fq 'CURRENT_PROJECT_VERSION: 37' "$project"
+grep -Fq 'MARKETING_VERSION: 0.5.21' "$project"
+grep -Fq 'static let version = "0.5.21"' apps/ios/App/BlueBandMapApp.swift
 grep -Fq 'transferWindow: Int = 1,' apps/ios/App/RouteCardRenderCoordinator.swift
 grep -Fq 'expected_short_version=$(awk' scripts/verify-ios-artifact.sh
 grep -Fq '[[ "$short_version" == "$expected_short_version" ]]' scripts/verify-ios-artifact.sh

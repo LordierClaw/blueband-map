@@ -126,6 +126,7 @@ final class AppModel: ObservableObject {
     private var corridorCloseTask: Task<Void, Never>?
     private var corridorGeneration = 0
     private var corridorUnavailable = false
+    private var corridorCellProgress: [CorridorCell: RouteProgress] = [:]
 
     init(
         keyStore: any AuthKeyStoreProtocol,
@@ -343,7 +344,7 @@ final class AppModel: ObservableObject {
 
     func stopNavigation() {
         navigationGeneration += 1
-        invalidateCorridor()
+        invalidateCorridor(keepMap: false)
         corridorUnavailable = false
         rerouteTask?.cancel()
         rerouteTask = nil
@@ -1009,20 +1010,22 @@ final class AppModel: ObservableObject {
                 let missing = view.visibleCells.filter { !corridorLink.cachedCells.contains($0.key) }
                 for cell in missing {
                     if pendingCorridorCells != nil { continue updates }
-                    try await sendCorridorCell(cell, request: request, plane: plane, owner: owner)
+                    try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner)
                 }
                 if pendingCorridorCells != nil { continue updates }
                 guard await corridorLink.waitForDisplay() else { throw NavigationRuntimeError.bandDisplayFailed("CORRIDOR_DECODE") }
                 // Missing coverage first; only then replace changed route pixels in resident cells.
                 for cell in view.visibleCells where !missing.contains(cell) {
                     if pendingCorridorCells != nil { continue updates }
-                    try await sendCorridorCell(cell, request: request, plane: plane, owner: owner)
+                    if routePixelsChanged(in: cell, progress: fix.progress, request: request, plane: plane) {
+                        try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner)
+                    }
                 }
                 let forward = plane.point(for: request.nextManeuver)
                 let target = ScreenPoint(x: Int(max(-100000, min(100000, forward.x))), y: Int(max(-100000, min(100000, forward.y))))
                 for cell in view.prioritizedCells(toward: target) where !corridorLink.cachedCells.contains(cell.key) {
                     if pendingCorridorCells != nil { continue updates }
-                    try await sendCorridorCell(cell, request: request, plane: plane, owner: owner)
+                    try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner)
                 }
             } catch {
                 guard owner == corridorGeneration, !Task.isCancelled else { return }
@@ -1032,13 +1035,29 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func sendCorridorCell(_ cell: CorridorCell, request: VietmapSnapshotRequest,
+    private func routePixelsChanged(in cell: CorridorCell, progress: RouteProgress, request: VietmapSnapshotRequest,
+                                    plane: VietmapSnapshotConfiguration) -> Bool {
+        guard let prior = corridorCellProgress[cell], let from = prior.matchedLocation, let to = progress.matchedLocation else { return true }
+        if from == to && prior.matchedSegmentIndex == progress.matchedSegmentIndex { return false }
+        let low = min(prior.matchedSegmentIndex, progress.matchedSegmentIndex)
+        let high = max(prior.matchedSegmentIndex, progress.matchedSegmentIndex)
+        let middle = low < high ? Array(request.route.points[(low + 1)...high]) : []
+        let path = ([from] + middle + [to]).map { point -> ScreenPoint in
+            let p = plane.point(for: point)
+            return ScreenPoint(x: Int(max(-100000, min(100000, p.x)).rounded()), y: Int(max(-100000, min(100000, p.y)).rounded()))
+        }
+        return cell.intersectsRouteChange(path)
+    }
+
+    private func sendCorridorCell(_ cell: CorridorCell, request: VietmapSnapshotRequest, progress: RouteProgress,
                                   plane: VietmapSnapshotConfiguration, owner: Int) async throws {
         let started = Date()
         let bytes = try await cellRender(request, plane, cell)
         guard owner == corridorGeneration, !Task.isCancelled else { throw CancellationError() }
         guard await corridorLink.sendCell(cell, data: bytes) else { throw NavigationRuntimeError.bandDisplayFailed("CORRIDOR_CELL") }
         guard owner == corridorGeneration, !Task.isCancelled else { throw CancellationError() }
+        corridorCellProgress[cell] = progress
+        corridorCellProgress = corridorCellProgress.filter { corridorLink.cachedCells.contains($0.key.key) }
         logNavigation("map.cell.ready", "cell=\(cell.key) encodedBytes=\(bytes.count) totalMs=\(Int(Date().timeIntervalSince(started) * 1000)) files=\(corridorLink.cachedCells.count)")
     }
 
@@ -1060,11 +1079,12 @@ final class AppModel: ObservableObject {
             tileMapKey: request.tileMapKey, bearingDegrees: request.bearingDegrees, reason: "corridor-recovery")
     }
 
-    private func invalidateCorridor() {
+    private func invalidateCorridor(keepMap: Bool = true) {
         corridorGeneration += 1
         corridorTask?.cancel(); corridorTask = nil
         corridorViewTask?.cancel(); corridorViewTask = nil
         corridorPlane = nil; corridorRoute = nil; corridorLatest = nil
+        corridorCellProgress.removeAll()
         pendingCorridorCells = nil; pendingCorridorView = nil
         let old = corridorLink.epoch
         corridorLink.reset()
@@ -1072,7 +1092,7 @@ final class AppModel: ObservableObject {
             let sender = routeCardSender, preceding = corridorCloseTask
             corridorCloseTask = Task {
                 await preceding?.value
-                _ = try? await sender.sendAwaitingAcknowledgement(topic: "map.stream.close", body: ["epoch": .string(old)])
+                _ = try? await sender.sendAwaitingAcknowledgement(topic: "map.stream.close", body: ["epoch": .string(old), "retain": .bool(keepMap)])
             }
         }
     }

@@ -12,6 +12,19 @@ final class CorridorLinkTests: XCTestCase {
         XCTAssertFalse(link.ready)
     }
 
+    func testNativeCleanupBackpressureRetriesAdmissionWithoutResettingTheMap() async throws {
+        let peer = CorridorPeer()
+        peer.busyBegins = 2
+        let link = CorridorLink(timeout: .seconds(1)) { try await peer.send($0, $1) }
+        peer.receive = link.consume
+        _ = await link.open(scene: "scene-1")
+        let stored = await link.sendCell(try CorridorViewport(x: 0, y: 0).visibleCells[0], data: Data(repeating: 42, count: 100))
+        XCTAssertTrue(stored)
+        XCTAssertEqual(peer.messages.filter { $0.topic == "map.cell.begin" }.count, 3)
+        XCTAssertEqual(peer.messages.filter { $0.topic == "map.cell.chunk" }.count, 1, "do not send payload before admission")
+        XCTAssertTrue(link.ready)
+    }
+
     func testCellChunksAreBoundedAndStoredReplyIsCorrelatedToCommand() async throws {
         let peer = CorridorPeer()
         let link = CorridorLink(timeout: .milliseconds(30)) { try await peer.send($0, $1) }
@@ -101,6 +114,25 @@ final class CorridorLinkTests: XCTestCase {
         XCTAssertFalse(unconfirmed, "stored bytes alone cannot release a visible replacement decode slot")
     }
 
+    func testReplacementDoesNotWaitForDecodeAfterItsCellLeavesTheDisplayedViewport() async throws {
+        let peer = CorridorPeer()
+        let link = CorridorLink(timeout: .milliseconds(50)) { try await peer.send($0, $1) }
+        peer.receive = link.consume
+        _ = await link.open(scene: "scene-1")
+        let view = try CorridorViewport(x: 0, y: 0), cell = view.visibleCells[0]
+        _ = await link.sendCell(cell, data: Data(repeating: 42, count: 100))
+        _ = await link.sendView(view)
+        peer.reply(topic: "map.stream.state", body: ["epoch": .string(link.epoch!), "displayedSeq": .number(1),
+            "code": .string("ok"), "missing": .array([])])
+        let transfer = Task { await link.sendCell(cell, data: Data(repeating: 43, count: 100)) }
+        while peer.messages.filter({ $0.topic == "map.cell.end" }).count < 2 { await Task.yield() }
+        _ = await link.sendView(try CorridorViewport(x: -128, y: 0))
+        peer.reply(topic: "map.stream.state", body: ["epoch": .string(link.epoch!), "displayedSeq": .number(2),
+            "code": .string("ok"), "missing": .array([])])
+        let stored = await transfer.value
+        XCTAssertTrue(stored, "an unmounted prefetch file must not force a decode-timeout recovery")
+    }
+
     private func number(_ body: [String: JSONValue], _ key: String) -> Double {
         guard case let .number(value)? = body[key] else { return -1 }; return value
     }
@@ -111,6 +143,7 @@ private final class CorridorPeer {
     var messages: [(topic: String, body: [String: JSONValue])] = []
     var receive: ((ApplicationEnvelope) -> Void)?
     var correlate = true
+    var busyBegins = 0
     var holdChunks = false
     var held: [CheckedContinuation<Void, Never>] = []
     func send(_ topic: String, _ body: [String: JSONValue]) async throws -> String {
@@ -119,6 +152,12 @@ private final class CorridorPeer {
         if topic == "map.stream.open" {
             reply(topic: "map.stream.ready", body: ["epoch": body["epoch"]!, "scene": body["scene"]!,
                 "version": .number(1), "cellSize": .number(128), "maximumFiles": .number(30), "maximumResident": .number(24)])
+        } else if topic == "map.cell.begin" {
+            let busy = busyBegins > 0
+            if busy { busyBegins -= 1 }
+            reply(topic: "map.cell.result", body: ["epoch": body["epoch"]!, "cell": body["cell"]!,
+                "status": .string(busy ? "error" : "accepted"), "code": .string(busy ? "busy" : "ok"),
+                "evicted": .array([]), "request": .string(id)])
         } else if topic == "map.cell.end" {
             reply(topic: "map.cell.result", body: ["epoch": body["epoch"]!, "cell": body["cell"]!,
                 "status": .string("stored"), "code": .string("ok"), "evicted": .array([]),
