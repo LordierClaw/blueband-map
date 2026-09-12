@@ -10,6 +10,49 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testCorridorConsumesGPSInBackgroundWithoutFullFrameReloads() async throws {
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        let sender = WindowedRouteCardSession(streaming: true)
+        var fullFrames = 0
+        let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
+            routeTransport: ReplayRouteTransport(), sender: sender, render: { request in
+                fullFrames += 1
+                let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "fixture", configuration: config)
+            }, cellRender: { _, _, _ in Data(repeating: 42, count: 100) })
+        defer { model.stopNavigation() }
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { manager.updating }
+        func fix(_ latitude: Double) -> CLLocation {
+            CLLocation(coordinate: .init(latitude: latitude, longitude: 0), altitude: 0,
+                horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())
+        }
+        location.locationManager(manager, didUpdateLocations: [fix(0)])
+        await waitUntil { model.navigationDebugEntries.contains { $0.stage == "map.stream.displayed" } }
+        model.applicationStateChanged("inactive")
+        model.applicationStateChanged("background")
+        location.locationManager(manager, didUpdateLocations: [fix(0.00001), fix(0.00002)])
+        await waitUntil { await sender.streamY > 0 }
+        XCTAssertEqual(fullFrames, 1, "movement must translate the cached map, not render another full frame")
+        XCTAssertTrue(manager.updating)
+        XCTAssertLessThan(model.lastMapFixAgeMilliseconds ?? .max, 1_000)
+        let cells = await sender.cellKeys.count
+        XCTAssertLessThanOrEqual(cells, 30)
+        model.stopNavigation()
+        let views = await sender.streamViews
+        location.locationManager(manager, didUpdateLocations: [fix(0.00003)])
+        try await Task.sleep(for: .milliseconds(50))
+        let stoppedViews = await sender.streamViews
+        XCTAssertEqual(stoppedViews, views)
+    }
+
     func testNextMapRendersWhilePreviousMapAwaitsBandDisplay() async throws {
         try await exercisePreparedFrame(supersede: false, stop: false)
     }
@@ -409,7 +452,8 @@ final class AppModelPickerTests: XCTestCase {
         navigationConfigured: Bool = false,
         routeTransport: (any MapHTTPTransport)? = nil,
         sender: (any RouteCardSessionSending)? = nil,
-        render: (@MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput)? = nil
+        render: (@MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput)? = nil,
+        cellRender: @escaping @Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data = { _, _, _ in Data() }
     ) -> AppModel {
         let cipher = PickerCipher()
         let trustStore = PickerTrustStore()
@@ -432,6 +476,7 @@ final class AppModelPickerTests: XCTestCase {
             locationClient: location ?? ForegroundLocationClient(),
             routeCardSession: sender,
             snapshotRender: render,
+            cellRender: cellRender,
             scanDuration: .seconds(3_600)
         )
     }

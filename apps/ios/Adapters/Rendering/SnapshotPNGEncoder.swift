@@ -25,8 +25,9 @@ enum SnapshotPNGEncoder {
         profiles: [SnapshotPaletteProfile] = SnapshotPaletteProfile.allCases,
         blockSizes: [Int] = [1]
     ) throws -> SnapshotPNGOutput {
-        let width = RenderProtocol.viewportWidth
-        let height = RenderProtocol.viewportHeight
+        let cell = image.width == image.height && [128, 256].contains(image.width)
+        let width = cell ? 128 : RenderProtocol.viewportWidth
+        let height = cell ? 128 : RenderProtocol.viewportHeight
         guard (image.width == width && image.height == height) ||
               (image.width == width * 2 && image.height == height * 2),
               !profiles.isEmpty, !blockSizes.isEmpty,

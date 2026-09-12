@@ -81,6 +81,7 @@ final class AppModel: ObservableObject {
     private let routeClient: VietmapRouteClient
     private let snapshotRenderer: VietmapSnapshotRenderer
     private let snapshotRender: @MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput
+    private let cellRender: @Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data
     private let locationClient: ForegroundLocationClient
     private let renderCoordinator: RouteCardRenderCoordinator
     private let updateClock: any BlueBandClock
@@ -126,6 +127,9 @@ final class AppModel: ObservableObject {
         locationClient: ForegroundLocationClient,
         routeCardSession: (any RouteCardSessionSending)? = nil,
         snapshotRender: (@MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput)? = nil,
+        cellRender: @escaping @Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data = { _, _, _ in
+            throw VietmapSnapshotRenderer.Error.invalidRequest
+        },
         updateClock: any BlueBandClock = ContinuousBlueBandClock(),
         defaults: UserDefaults = .standard,
         scanDuration: Duration = .seconds(15)
@@ -139,6 +143,7 @@ final class AppModel: ObservableObject {
         self.routeClient = routeClient
         self.snapshotRenderer = snapshotRenderer
         self.snapshotRender = snapshotRender ?? { try await snapshotRenderer.render($0) }
+        self.cellRender = cellRender
         self.locationClient = locationClient
         self.updateClock = updateClock
         self.defaults = defaults

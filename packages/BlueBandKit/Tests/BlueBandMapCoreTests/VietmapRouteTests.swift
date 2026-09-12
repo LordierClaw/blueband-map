@@ -2,6 +2,22 @@ import XCTest
 @testable import BlueBandMapCore
 
 final class VietmapRouteTests: XCTestCase {
+    func testFrozenPlaybackShapeSurvivesParserThroughPreviewAndLiveUpdate() throws {
+        // Same E5 deltas translated to (0,0): a literal, non-secret independent replay vector.
+        let body = Data(#"{"code":"OK","paths":[{"distance":465,"points_encoded":true,"points":"??kGrAcKzBEIIEICK@KBIJCL@NqBnAsFfE","instructions":[{"distance":465,"heading":0,"sign":6,"interval":[0,11],"street_name":"Circle","text":"Tại vòng xoay, rẽ lối rẽ 2 vào đường Circle"}]}]}"#.utf8)
+        let route = try VietmapRouteClient.parse(body), instruction = try XCTUnwrap(route.instructions.first)
+        XCTAssertEqual(instruction.roundaboutDirection, .straight)
+        XCTAssertEqual(instruction.roundaboutExit, 2)
+        let preview = try RenderNavigationPreview(maneuver: .roundabout, distanceMeters: 80, street: "Circle",
+            x: 106, y: 374, headingBucket: 0, destinationMode: .hidden, destinationX: 0, destinationY: 0,
+            roundaboutExit: instruction.roundaboutExit, roundaboutDirection: instruction.roundaboutDirection)
+        let live = try NavigationUpdate(scene: "scene-1", seq: 1, x: 106, y: 374, maneuver: .roundabout,
+            distanceMeters: 80, street: "Circle", status: .navigating,
+            roundaboutExit: instruction.roundaboutExit, roundaboutDirection: instruction.roundaboutDirection)
+        XCTAssertEqual(preview.jsonBody()["roundaboutDirection"], .string("straight"))
+        XCTAssertEqual(live.jsonBody()["roundaboutDirection"], .string("straight"))
+    }
+
     func testFrozenPlaybackRoundaboutIntervalAlreadyIncludesOutlet() {
         // Translated E5 offsets from the user's frozen playback shape; no raw capture or location.
         let offsets = [(0, 0), (134, -42), (328, -104), (331, -99), (336, -96),

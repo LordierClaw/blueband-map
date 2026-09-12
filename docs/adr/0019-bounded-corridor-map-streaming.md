@@ -17,6 +17,8 @@ Demand priority: current viewport, then one viewport shifted along the forthcomi
 - Only resident nodes count as decoded. Removing an image node invalidates its decoded flag even when its compressed file stays cached. Vela resource reclamation, including native image caching, needs device verification.
 - Coordinate offsets are integral and bounded to ±32768 pixels; sequence is 0...2147483647. A move over one cell from a visible viewport or over the decode-node budget requests a fresh full frame instead of speculative allocation.
 - Stop, disconnect, new confirmed full frame and close retire the epoch. Late write/decode/delete callbacks must not mutate another epoch. Delete only owned `cell-` files, never directories or provider caches.
+- On startup, list the app's files and remove only canonical `cell-*.png` files before accepting a stream. A failed list or deletion keeps streaming disabled; the existing full-frame path remains available.
+- A cell key identifies a region, not immutable pixels. The SHA-256 identifies its content. Route-progress changes may replace a cell: retain the old decoded URI until the new URI completes, then retire the old file. Both versions count toward the file/resident bounds. Vela list identity is the URI, not the shared cell key.
 
 ## Independent application vectors
 
@@ -30,7 +32,7 @@ These are new application messages, not proprietary captures. All use the existi
 {"topic":"map.stream.close","body":{"epoch":"epoch-1"}}
 ```
 
-Cell transfer contract: `map.cell.begin` carries `epoch`, `cell` (canonical signed decimal `column:row`), `bytes` and lowercase SHA-256. `map.cell.chunk` carries `epoch`, `cell`, integral `offset` and base64 `data`; chunks are 216 bytes except the final chunk. `map.cell.end` carries `epoch` and `cell`. Verify size, coverage, digest, PNG signature/IHDR dimensions before writing or decoding. `map.cell.result` reports stored/error, never equates a file write with display. Report the evicted key so iOS does not assume a discarded file is resident. A displayed view is acknowledged only after all its image callbacks succeed.
+Cell transfer contract: `map.cell.begin` carries `epoch`, `cell` (canonical signed decimal `column:row`), `bytes` and lowercase SHA-256. `map.cell.chunk` carries `epoch`, `cell`, integral `offset` and base64 `data`; chunks are 216 bytes except the final chunk. `map.cell.end` carries `epoch` and `cell`. Verify size, coverage, digest, PNG signature/IHDR dimensions before writing or decoding. `map.cell.result` reports stored/error and `request`, the exact begin (cached hit) or end (completed write) command ID; a stale result cannot complete another transfer. Report the evicted key so iOS does not assume a discarded file is resident; a replaced version of the same key is not an eviction. A displayed view is acknowledged only after all its image callbacks succeed, independently of stored results.
 
 ## Required acceptance
 

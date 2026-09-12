@@ -12,7 +12,7 @@
       <div class="map-frame" if="{{ mapReady || pendingPublication }}">
         <image class="map" if="{{ mapReady && !streamVisible }}" src="{{ mapPath }}" />
         <image class="map map-pending" if="{{ pendingPublication }}" src="{{ pendingMapPath }}" @complete="mapComplete(pendingMapToken)" @error="mapError(pendingMapToken)" />
-        <image class="stream-cell" for="{{ streamImages }}" tid="key" src="{{ $item.uri }}" style="{{ $item.style }}" @complete="streamImageComplete($item.key, $item.uri)" @error="streamImageError($item.key, $item.uri)" />
+        <image class="stream-cell" for="{{ streamImages }}" tid="uri" src="{{ $item.uri }}" style="{{ $item.style }}" @complete="streamImageComplete($item.key, $item.uri)" @error="streamImageError($item.key, $item.uri)" />
         <text class="stream-attribution" if="{{ streamVisible }}">© Vietmap</text>
         <image class="nav-destination" if="{{ mapReady && navDestinationVisible }}" src="{{ navDestinationPath }}" style="{{ navDestinationStyle }}" />
         <image class="nav-marker" if="{{ mapReady && navMarkerVisible }}" src="{{ navMarkerPath }}" style="{{ navMarkerStyle }}" />
@@ -61,30 +61,42 @@ function cells(x, y) {
 
 function create(epoch) {
   const files = Object.create(null)
-  let order = [], active = [], wanted = null, latest = null
+  let order = [], active = [], activeRecords = [], retired = [], wanted = null, latest = null
   const state = {
     epoch,
     visible: false,
     position: { x: 0, y: 0, seq: -1 },
-    get count() { return order.length },
+    get count() { return records().length },
     has(key) { return !!files[key] },
-    records() { return order.map(key => files[key]) },
-    store(key, uri, bytes) {
+    hash(key) { return files[key] && files[key].hash },
+    records() { return records().concat(retired) },
+    takeRetired() { const result = retired; retired = []; return result },
+    store(key, uri, bytes, hash) {
       if (!validKey(key) || typeof uri !== "string" || !uri || !Number.isInteger(bytes) || bytes < 1 || bytes > 8192) {
         return { ok: false, evicted: [] }
       }
-      if (files[key]) return { ok: files[key].uri === uri && files[key].bytes === bytes, evicted: [] }
+      const old = files[key]
+      if (old && old.uri === uri) return { ok: old.bytes === bytes && old.hash === hash, evicted: [] }
+      const next = { key, uri, bytes, hash, decoded: false }
+      const target = wanted ? wanted.keys : active
+      const future = target.map(candidate => candidate === key ? next : files[candidate]).filter(Boolean)
+      if (unique(activeRecords.concat(future)).length > MAX_RESIDENT) return { ok: false, evicted: [] }
       const pinned = active.concat(wanted ? wanted.keys : [])
       const evicted = []
-      if (order.length >= MAX_FILES) {
+      if (records().length >= MAX_FILES && (!old || activeRecords.indexOf(old) >= 0)) {
         const victim = order.find(candidate => pinned.indexOf(candidate) < 0)
         if (!victim) return { ok: false, evicted: [] }
         evicted.push(files[victim])
         delete files[victim]
         order = order.filter(candidate => candidate !== victim)
       }
-      files[key] = { key, uri, bytes, decoded: false }
+      if (old && activeRecords.indexOf(old) < 0) evicted.push(old)
+      files[key] = next
+      order = order.filter(candidate => candidate !== key)
       order.push(key)
+      if (state.visible && active.indexOf(key) >= 0 && !wanted) {
+        wanted = { seq: state.position.seq, x: state.position.x, y: state.position.y, keys: active.slice() }
+      }
       return { ok: true, evicted }
     },
     request(seq, x, y) {
@@ -96,7 +108,7 @@ function create(epoch) {
       if (state.visible && (Math.abs(x - state.position.x) > CELL || Math.abs(y - state.position.y) > CELL)) {
         return { ok: false, reason: "resetRequired", missing: [] }
       }
-      const resident = active.concat(keys.filter(key => active.indexOf(key) < 0))
+      const resident = unique(activeRecords.concat(keys.map(key => files[key] || { key, uri: "missing-" + key })))
       if (resident.length > MAX_RESIDENT) return { ok: false, reason: "resetRequired", missing: [] }
       latest = { seq, x, y }
       wanted = { seq, x, y, keys }
@@ -109,19 +121,19 @@ function create(epoch) {
     },
     images() {
       // An unmounted native image must decode again if its file is later reused.
-      const pending = wanted && wanted.keys.every(key => files[key]) ? wanted.keys : []
-      const resident = active.concat(pending.filter(key => active.indexOf(key) < 0))
-      for (const key of order) if (resident.indexOf(key) < 0) files[key].decoded = false
-      return resident.map(key => {
-        const file = files[key], parts = key.split(":").map(Number)
-        const shown = active.indexOf(key) >= 0 && state.visible
-        return { key, uri: file.uri, opacity: shown ? 1 : 0,
+      const pending = wanted && wanted.keys.every(key => files[key]) ? wanted.keys.map(key => files[key]) : []
+      const resident = unique(activeRecords.concat(pending))
+      for (const key of order) if (resident.indexOf(files[key]) < 0) files[key].decoded = false
+      return resident.map(file => {
+        const parts = file.key.split(":").map(Number)
+        const shown = activeRecords.indexOf(file) >= 0 && state.visible
+        return { key: file.key, uri: file.uri, opacity: shown ? 1 : 0,
           x: parts[0] * CELL + state.position.x, y: parts[1] * CELL + state.position.y }
       })
     },
     decoded(key, uri) {
-      const file = files[key]
-      if (!file || file.uri !== uri || state.images().every(item => item.key !== key)) return false
+      const file = records().find(file => file.key === key && file.uri === uri)
+      if (!file || state.images().every(item => item.uri !== uri)) return false
       file.decoded = true
       promote()
       return true
@@ -129,16 +141,24 @@ function create(epoch) {
     failed(key, uri) {
       const file = files[key]
       if (!file || file.uri !== uri) return false
-      if (active.indexOf(key) >= 0) { state.visible = false; active = [] }
-      delete files[key]
-      order = order.filter(candidate => candidate !== key)
+      const fallback = activeRecords.find(record => record.key === key && record.uri !== uri)
+      if (fallback) files[key] = fallback
+      else {
+        if (active.indexOf(key) >= 0) { state.visible = false; active = []; activeRecords = [] }
+        delete files[key]
+        order = order.filter(candidate => candidate !== key)
+      }
       wanted = null
       return true
     }
   }
+  function unique(items) { return items.filter((item, index) => items.findIndex(other => other.uri === item.uri) === index) }
+  function records() { return unique(order.map(key => files[key]).concat(activeRecords)) }
   function promote() {
     if (!wanted || !wanted.keys.every(key => files[key] && files[key].decoded)) return
+    for (const record of activeRecords) if (files[record.key] !== record) retired.push(record)
     active = wanted.keys
+    activeRecords = active.map(key => files[key])
     state.position = { seq: wanted.seq, x: wanted.x, y: wanted.y }
     state.visible = true
     wanted = null
@@ -549,7 +569,10 @@ export default {
     this.streamTransfer = null
     this.streamWritePending = false
     this.streamGarbage = []
+    this.streamCleanupPending = false
+    this.streamCleanupDone = false
     this.destroyed = false
+    this.cleanAbandonedCells()
     this.acceptingMessages = false
     this.connected = false
     try {
@@ -972,7 +995,7 @@ export default {
   },
 
   retireCellFile(uri) {
-    if (typeof uri !== "string" || uri.indexOf("internal://files/cell-") !== 0) return
+    if (typeof uri !== "string" || !/^internal:\/\/files\/cell-[a-z0-9-]{1,80}\.png$/.test(uri)) return
     if (this.streamGarbage.indexOf(uri) < 0) this.streamGarbage.push(uri)
     var page = this
     this.scheduleDelete(uri, function () {
@@ -980,10 +1003,30 @@ export default {
     }, null)
   },
 
-  cellResult(epoch, cell, status, code, evicted) {
+  cleanAbandonedCells() {
+    if (this.streamCleanupDone || this.streamCleanupPending || this.destroyed) return
+    this.streamCleanupPending = true
+    var page = this, settled = false
+    var finish = function (result) {
+      if (settled) return
+      settled = true
+      page.streamCleanupPending = false
+      if (page.destroyed || !result || !Array.isArray(result.fileList) || result.fileList.length > 256) return
+      result.fileList.forEach(function (entry) {
+        if (!entry || typeof entry.uri !== "string") return
+        var uri = entry.uri.indexOf("internal://") === 0 ? entry.uri : "internal://files/" + entry.uri
+        page.retireCellFile(uri)
+      })
+      page.streamCleanupDone = true
+    }
+    try { file.list({ uri: "internal://files/", success: finish, fail: function () { finish(null) } }) }
+    catch (error) { finish(null) }
+  },
+
+  cellResult(epoch, cell, status, code, evicted, request) {
     this.sendStreamEnvelope("map.cell.result", {
       epoch: this.validRun(epoch) ? epoch : "", cell: corridorMap.validKey(cell) ? cell : "",
-      status: status, code: code, evicted: evicted || []
+      status: status, code: code, evicted: evicted || [], request: request
     })
   },
 
@@ -993,7 +1036,7 @@ export default {
     var finish = function () { page.rememberSuccess(message.id); page.sendACK(message.id) }
     var reject = function (code, abandon) {
       if (abandon && page.streamTransfer === transfer) page.streamTransfer = null
-      page.cellResult(body.epoch, body.cell, "error", code)
+      page.cellResult(body.epoch, body.cell, "error", code, [], message.id)
       finish()
     }
     if (!state || body.epoch !== state.epoch || !corridorMap.validKey(body.cell)) {
@@ -1009,8 +1052,8 @@ export default {
         reject("invalidPayload", false)
         return
       }
-      if (state.has(body.cell)) {
-        this.cellResult(body.epoch, body.cell, "stored", "cached")
+      if (state.hash(body.cell) === body.sha256) {
+        this.cellResult(body.epoch, body.cell, "stored", "cached", [], message.id)
         finish()
         return
       }
@@ -1063,14 +1106,14 @@ export default {
       page.streamTransfer = null
       if (!success) {
         page.retireCellFile(transfer.uri)
-        page.cellResult(transfer.epoch, transfer.cell, "error", "writeFailed")
+        page.cellResult(transfer.epoch, transfer.cell, "error", "writeFailed", [], message.id)
         return
       }
-      var stored = state.store(transfer.cell, transfer.uri, transfer.bytes)
+      var stored = state.store(transfer.cell, transfer.uri, transfer.bytes, transfer.sha256)
       if (!stored.ok) page.retireCellFile(transfer.uri)
       stored.evicted.forEach(function (record) { page.retireCellFile(record.uri) })
       page.cellResult(transfer.epoch, transfer.cell, stored.ok ? "stored" : "error", stored.ok ? "ok" : "cacheFull",
-        stored.evicted.map(function (record) { return record.key }))
+        stored.evicted.filter(function (record) { return record.key !== transfer.cell }).map(function (record) { return record.key }), message.id)
       page.syncStreamImages()
     }
     // End ACK releases the sender; the separate result proves the native write completed.
@@ -1087,6 +1130,7 @@ export default {
 
   handleStreamMessage(message) {
     var body = message.body || {}
+    if (message.topic === "map.stream.open") this.cleanAbandonedCells()
     if (message.topic === "map.stream.open" && this.streamGarbage.length) {
       var page = this
       this.streamGarbage.slice().forEach(function (uri) { page.retireCellFile(uri) })
@@ -1095,6 +1139,11 @@ export default {
       this.confirmedMap && body.scene === this.confirmedMap.scene &&
       this.validRun(body.epoch) && !this.activeTransfer && !this.pendingPublication && !this.preparedRender &&
       !this.streamWritePending && !this.streamGarbage.length) {
+      if (!this.streamCleanupDone || this.streamCleanupPending) {
+        this.rememberSuccess(message.id)
+        this.sendACK(message.id)
+        return
+      }
       if (!this.streamState || this.streamState.epoch !== body.epoch) {
         this.resetStream()
         this.streamState = corridorMap.create(body.epoch)
@@ -1124,6 +1173,8 @@ export default {
         style: "left:" + item.x + "px;top:" + item.y + "px;opacity:" + item.opacity + ";" }
     })
     this.streamVisible = this.streamState.visible
+    var page = this
+    this.streamState.takeRetired().forEach(function (record) { page.retireCellFile(record.uri) })
   },
 
   streamImageComplete(key, uri) {

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import XCTest
 import BlueBandMapCore
 @testable import BlueBandMap
@@ -7,6 +8,37 @@ import BlueBandMapCore
 @MainActor
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
+
+    func testCPUCellsReuseBaseAtlasButUpdateRoutePixels() async throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106)
+        let forward = GeoPoint(latitude: 10.001, longitude: 106)
+        let route = RoutePlan(points: [origin, forward], instructions: [], distanceMeters: 111)
+        let request = VietmapSnapshotRequest(route: route, matchedPosition: origin,
+            overlayGeometry: .init(subdued: [], traveled: [], active: route.points, context: []),
+            headingDegrees: 0, nextManeuver: forward, tileMapKey: "fixture-key", profile: .colors16Labels)
+        let transport = CPUMapTestTransport()
+        let renderer = VietmapCPURenderer(transport: transport)
+        let plane = try VietmapSnapshotConfiguration.make(request)
+        let cell = try XCTUnwrap(CorridorViewport(x: 0, y: 0).visibleCells.first { $0.key == "0:2" })
+        let first = try await renderer.renderCell(request, plane: plane, cell: cell)
+        let counts = await transport.counts()
+        let same = try await renderer.renderCell(request, plane: plane, cell: cell)
+        XCTAssertEqual(first, same)
+        let completed = VietmapSnapshotRequest(route: route, matchedPosition: forward,
+            overlayGeometry: .init(subdued: [], traveled: route.points, active: [], context: []),
+            headingDegrees: 0, nextManeuver: forward, tileMapKey: "fixture-key", profile: .colors16Labels)
+        let changed = try await renderer.renderCell(completed, plane: plane, cell: cell)
+        XCTAssertNotEqual(first, changed, "cached base must not freeze the route's traveled/active styling")
+        let reused = await transport.counts()
+        XCTAssertEqual(counts.style, reused.style)
+        XCTAssertEqual(counts.tiles, reused.tiles)
+        for data in [first, changed] {
+            XCTAssertLessThanOrEqual(data.count, 8192)
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+            let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            XCTAssertEqual(image.width, 128); XCTAssertEqual(image.height, 128)
+        }
+    }
 
     func testCPURasterRespectsSharedPlaneWindowSizeForCorridorCells() throws {
         let origin = GeoPoint(latitude: 20, longitude: 105)

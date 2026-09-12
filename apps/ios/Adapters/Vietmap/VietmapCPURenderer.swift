@@ -17,6 +17,10 @@ actor VietmapCPURenderer {
         self.transport = transport
     }
 
+    func renderCell(_ request: VietmapSnapshotRequest, plane: VietmapSnapshotConfiguration, cell: CorridorCell) async throws -> Data {
+        throw VietmapSnapshotRenderer.Error.invalidRequest
+    }
+
     func render(_ request: VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput {
         try Task.checkCancellation()
         let started = Date()
@@ -102,7 +106,8 @@ actor VietmapCPURenderer {
     }
 
     nonisolated static func tileCoordinates(_ config: VietmapSnapshotConfiguration, zoom: Int) -> [(x: Int, y: Int)] {
-        let corners = [CGPoint(x: -24, y: -24), CGPoint(x: 236, y: -24), CGPoint(x: -24, y: 544), CGPoint(x: 236, y: 544)]
+        let w = config.size.width + 24, h = config.size.height + 24
+        let corners = [CGPoint(x: -24, y: -24), CGPoint(x: w, y: -24), CGPoint(x: -24, y: h), CGPoint(x: w, y: h)]
         let count = Double(1 << zoom)
         let world = corners.map { config.worldPoint(for: $0) }
         let scale = 512 * pow(2, config.zoom - Double(zoom))
@@ -125,16 +130,24 @@ actor VietmapCPURenderer {
 
     nonisolated static func draw(_ request: VietmapSnapshotRequest, configuration: VietmapSnapshotConfiguration,
                                  style: VietmapMapStyle, tiles: [VietmapSceneTile]) throws -> CGImage {
-        guard let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8, bytesPerRow: 424 * 4,
+        let size = configuration.size, scale = configuration.scale
+        guard size.width > 0, size.height > 0, size.width <= 1024, size.height <= 1024, scale == 2 else {
+            throw VietmapSnapshotRenderer.Error.invalidRequest
+        }
+        let pixelWidth = Int(size.width * scale), pixelHeight = Int(size.height * scale)
+        guard let context = CGContext(data: nil, width: pixelWidth, height: pixelHeight, bitsPerComponent: 8, bytesPerRow: pixelWidth * 4,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw VietmapSnapshotRenderer.Error.imageUnavailable
         }
-        context.translateBy(x: 0, y: 1040)
-        context.scaleBy(x: 2, y: -2)
+        context.translateBy(x: 0, y: CGFloat(pixelHeight))
+        context.scaleBy(x: scale, y: -scale)
         context.setFillColor(VietmapDarkStyle.color(id: "background", type: "background").cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: 212, height: 520))
-        var occupied = [CGRect(x: 75, y: 481, width: 62, height: 18)], names = Set<String>()
-        let centerWorld = configuration.worldPoint(for: CGPoint(x: 106, y: 260))
+        context.fill(CGRect(origin: .zero, size: size))
+        let fullFrame = size == CGSize(width: 212, height: 520)
+        var occupied = fullFrame ? [CGRect(x: 75, y: 481, width: 62, height: 18)] : [], names = Set<String>()
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let centerWorld = configuration.worldPoint(for: center)
+        let labelBounds = CGRect(x: 4, y: 4, width: size.width - 8, height: size.height - (fullFrame ? 22 : 8))
         let angle = configuration.heading * .pi / 180, cosine = cos(angle), sine = sin(angle)
         for layer in layers(style, request: request, configuration: configuration) {
             try Task.checkCancellation()
@@ -163,12 +176,12 @@ actor VietmapCPURenderer {
                     let lines = feature.lines.map { line in line.map { point in
                         let x = (Double(tile.x) + Double(point.x) / Double(source.extent)) * scale - centerWorld.x
                         let y = (Double(tile.y) + Double(point.y) / Double(source.extent)) * scale - centerWorld.y
-                        return CGPoint(x: 106 + x * cosine + y * sine, y: 260 - x * sine + y * cosine)
+                        return CGPoint(x: center.x + x * cosine + y * sine, y: center.y - x * sine + y * cosine)
                     } }
                     if layer.type == "symbol" {
                         let name = layer.text(for: feature)
                         guard !name.isEmpty, !names.contains(name), occupied.count < 48 else { continue }
-                        if drawLabel(name, lines: lines, context: context, occupied: &occupied) { names.insert(name) }
+                        if drawLabel(name, lines: lines, context: context, occupied: &occupied, bounds: labelBounds) { names.insert(name) }
                         continue
                     }
                     context.beginPath()
@@ -192,7 +205,7 @@ actor VietmapCPURenderer {
         }
         context.setAlpha(1)
         VietmapRouteOverlay.draw(request, context: context, project: configuration.point(for:))
-        drawText("© Vietmap", at: CGPoint(x: 106, y: 490), angle: 0, size: 9, context: context)
+        if fullFrame { drawText("© Vietmap", at: CGPoint(x: 106, y: 490), angle: 0, size: 9, context: context) }
         guard let image = context.makeImage() else { throw VietmapSnapshotRenderer.Error.imageUnavailable }
         return image
     }
@@ -200,7 +213,7 @@ actor VietmapCPURenderer {
     // ponytail: labels use the longest visible near-straight run; add glyph-on-curve layout
     // only if device comparisons show a readability loss on curved streets.
     private nonisolated static func drawLabel(_ text: String, lines: [[CGPoint]], context: CGContext,
-                                              occupied: inout [CGRect]) -> Bool {
+                                              occupied: inout [CGRect], bounds: CGRect) -> Bool {
         let font = CTFontCreateUIFontForLanguage(.system, 14, "vi" as CFString)!
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: text,
             attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font]))
@@ -215,13 +228,13 @@ actor VietmapCPURenderer {
                     let a = atan2(previous.y - first.y, previous.x - first.x)
                     let b = atan2(point.y - previous.y, point.x - previous.x)
                     if abs(atan2(sin(a - b), cos(a - b))) > 0.18 {
-                        if let clipped = clip(first, previous) { candidates.append(clipped) }
+                        if let clipped = clip(first, previous, bounds: bounds) { candidates.append(clipped) }
                         run = [previous]
                     }
                 }
                 run.append(point)
             }
-            if let first = run.first, let last = run.last, let clipped = clip(first, last) { candidates.append(clipped) }
+            if let first = run.first, let last = run.last, let clipped = clip(first, last, bounds: bounds) { candidates.append(clipped) }
         }
         candidates.sort { hypot($0.1.x - $0.0.x, $0.1.y - $0.0.y) > hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) }
         for (a, b) in candidates where hypot(b.x - a.x, b.y - a.y) >= width + 8 {
@@ -263,10 +276,10 @@ actor VietmapCPURenderer {
         context.restoreGState()
     }
 
-    private nonisolated static func clip(_ a: CGPoint, _ b: CGPoint) -> (CGPoint, CGPoint)? {
+    private nonisolated static func clip(_ a: CGPoint, _ b: CGPoint, bounds: CGRect) -> (CGPoint, CGPoint)? {
         let dx = b.x - a.x, dy = b.y - a.y
         var lo: CGFloat = 0, hi: CGFloat = 1
-        for (p, q) in [(-dx, a.x - 4), (dx, 208 - a.x), (-dy, a.y - 4), (dy, 502 - a.y)] {
+        for (p, q) in [(-dx, a.x - bounds.minX), (dx, bounds.maxX - a.x), (-dy, a.y - bounds.minY), (dy, bounds.maxY - a.y)] {
             if p == 0 { if q < 0 { return nil }; continue }
             if p < 0 { lo = max(lo, q / p) } else { hi = min(hi, q / p) }
             if lo > hi { return nil }

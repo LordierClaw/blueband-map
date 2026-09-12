@@ -71,6 +71,7 @@ function memoryFile() {
   const deletes = []
   return {
     storage, writes, deletes,
+    list({ uri, success }) { success({ fileList: [...storage.keys()].filter(key => key.startsWith(uri)).map(uri => ({ uri })) }) },
     access({ uri, success, fail }) { storage.has(uri) ? success() : fail() },
     delete({ uri, success }) { deletes.push(uri); storage.delete(uri); success() },
     writeArrayBuffer({ uri, buffer, position, success }) {
@@ -136,6 +137,9 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     page.receiveMessage({ data: envelope("view1", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
     for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
     assert.equal(sent.filter(m => m.topic === "map.cell.result" && m.body.status === "stored").length, 10)
+    for (const result of sent.filter(m => m.topic === "map.cell.result" && m.body.status === "stored")) {
+      assert.equal(result.body.request, `ce-${result.body.cell}`, "stored replies bind to the exact end command")
+    }
     assert.equal(page.streamVisible, false, "write completion alone must not hide the full map")
     page.receiveMessage({ data: envelope("view1-retry", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
     assert.equal(page.streamImages.length, 10)
@@ -153,6 +157,28 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     assert.equal(file.writes.length - writes, 2, "cached movement needs no image writes")
     assert.equal(page.confirmedMap.scene, originalScene)
     assert.ok(page.streamImages.length <= 24)
+  } finally { page.onDestroy() }
+})
+
+test("changed cell content retires old pixels only after native decode", async () => {
+  const { page, sent, file } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+    const old = page.streamImages.find(item => item.key === "0:0").uri
+    // A different valid image byte stream (ancillary bytes after IEND do not change native dimensions).
+    streamCell(page, "0:0", "replacement", Buffer.concat([CELL_PNG, Buffer.from([0])]))
+    assert.equal(sent.filter(m => m.topic === "map.cell.result").at(-1).body.status, "stored")
+    assert.equal(file.storage.has(old), true)
+    const replacement = page.streamImages.find(item => item.key === "0:0" && item.uri !== old)
+    assert.ok(replacement)
+    page.streamImageComplete(replacement.key, replacement.uri)
+    assert.equal(file.storage.has(old), false)
+    assert.equal(page.streamVisible, true)
+    assert.equal(page.streamImages.length, 10)
   } finally { page.onDestroy() }
 })
 
@@ -214,6 +240,29 @@ test("failed cell retirement blocks further file admission until cleanup succeed
     page.receiveMessage({ data: envelope("clean-open", "map.stream.open", { scene: SCENE, epoch: "e2", version: 1 }) })
     assert.equal(page.streamGarbage.length, 0)
     assert.equal(page.streamState.epoch, "e2")
+  } finally { page.onDestroy() }
+})
+
+test("restart scrubs only owned cell files before admitting a new stream", async () => {
+  const file = memoryFile(), sent = []
+  file.storage.set("internal://files/cell-old-0-1.png", CELL_PNG)
+  file.storage.set("internal://files/nav-kept.png", CELL_PNG)
+  let listing
+  file.list = options => { listing = options }
+  const page = await loadPage({ getReadyState({ success }) { success({ status: 1 }) },
+    send({ data, success }) { sent.push(data); if (success) success() } }, file)
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open-before-clean", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    assert.equal(sent.some(m => m.topic === "map.stream.ready"), false)
+    assert.ok(listing)
+    listing.success({ fileList: [{ uri: "cell-old-0-1.png" }, { uri: "internal://files/nav-kept.png" },
+      { uri: "internal://files/cell-../foreign.png" }] })
+    assert.equal(file.storage.has("internal://files/cell-old-0-1.png"), false)
+    assert.equal(file.storage.has("internal://files/nav-kept.png"), true)
+    assert.equal(file.deletes.some(uri => uri.includes("..")), false)
+    page.receiveMessage({ data: envelope("open-clean", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    assert.equal(page.streamState.epoch, "e1")
   } finally { page.onDestroy() }
 })
 

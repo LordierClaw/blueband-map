@@ -295,13 +295,19 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     private var resetRequest = "ack"
     private var firstChunkPending = false
     private(set) var pendingResult: [String: JSONValue]?
+    private let streaming: Bool
+    private(set) var cellKeys = Set<String>()
+    private(set) var streamY = 0
+    private(set) var streamViews = 0
+    private var streamView: [String: JSONValue]?
 
     init(chunkDelay: Duration = .milliseconds(5), delayFirstChunk: Bool = false,
-         failChunks: Bool = false, deferResults: Bool = false) {
+         failChunks: Bool = false, deferResults: Bool = false, streaming: Bool = false) {
         self.chunkDelay = chunkDelay
         self.delayFirstChunk = delayFirstChunk
         self.failChunks = failChunks
         self.deferResults = deferResults
+        self.streaming = streaming
     }
 
     func setReceiver(_ receiver: @escaping Receiver) { self.receiver = receiver }
@@ -319,6 +325,21 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     }
 
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
+        if streaming {
+            if topic == "map.stream.open" {
+                cellKeys.removeAll(); streamView = nil
+                await receive("map.stream.ready", body: ["epoch": body["epoch"]!, "scene": body["scene"]!,
+                    "version": .number(1), "cellSize": .number(128), "maximumFiles": .number(30), "maximumResident": .number(24)])
+            } else if topic == "map.cell.end", case let .string(key)? = body["cell"] {
+                cellKeys.insert(key)
+                await receive("map.cell.result", body: ["epoch": body["epoch"]!, "cell": .string(key),
+                    "request": .string("ack"), "status": .string("stored"), "code": .string("ok"), "evicted": .array([])])
+                await confirmStreamView()
+            } else if topic == "map.stream.view" {
+                streamView = body; streamViews += 1
+                await confirmStreamView()
+            } else if topic == "map.stream.close" { streamView = nil; cellKeys.removeAll() }
+        }
         if topic == "render.reset", resetEnabled {
             resetCount += 1
             pendingResult = nil
@@ -362,6 +383,16 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
             else { await receive(RenderProtocol.resultTopic, body: result) }
         }
         return "ack"
+    }
+
+    private func confirmStreamView() async {
+        guard let body = streamView, case let .number(x)? = body["x"], case let .number(y)? = body["y"],
+              let view = try? CorridorViewport(x: Int(x), y: Int(y)) else { return }
+        let missing = view.visibleCells.filter { !cellKeys.contains($0.key) }
+        if missing.isEmpty { streamY = Int(y) }
+        await receive("map.stream.state", body: ["epoch": body["epoch"]!, "seq": body["seq"]!,
+            "displayedSeq": missing.isEmpty ? body["seq"]! : .number(-1), "code": .string("ok"),
+            "missing": .array(missing.map { .string($0.key) })])
     }
 
     private func receive(_ topic: String, body: [String: JSONValue]) async {
