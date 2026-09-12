@@ -301,6 +301,13 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
     private(set) var streamViews = 0
     private(set) var streamOpens = 0
     private var streamView: [String: JSONValue]?
+    private var holdsViewACK = false
+    private var viewACK: CheckedContinuation<Void, Never>?
+
+    func holdViewAcknowledgements() { holdsViewACK = true }
+    func releaseViewAcknowledgements() {
+        holdsViewACK = false; viewACK?.resume(); viewACK = nil
+    }
 
     init(chunkDelay: Duration = .milliseconds(5), delayFirstChunk: Bool = false,
          failChunks: Bool = false, deferResults: Bool = false, streaming: Bool = false) {
@@ -343,6 +350,7 @@ actor WindowedRouteCardSession: RouteCardSessionSending {
             } else if topic == "map.stream.view" {
                 streamView = body; streamViews += 1
                 await confirmStreamView()
+                if holdsViewACK { await withCheckedContinuation { viewACK = $0 } }
             } else if topic == "map.stream.close" { streamView = nil; cellKeys.removeAll() }
         }
         if topic == "render.reset", resetEnabled {

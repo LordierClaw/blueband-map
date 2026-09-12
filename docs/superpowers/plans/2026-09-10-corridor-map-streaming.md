@@ -55,7 +55,15 @@ this release or claim a measured one-second device result.
   GPS. Only change priority after a failing behavioral test reproduces starvation.
   CI `34694659756` at `80bedda` fails exactly the first-forward-cell priority
   assertion; its other 94 iOS tests pass. Move the existing forward-file loop
-  before visible-cell recoloring. The next iOS CI must verify GREEN.
+  before visible-cell recoloring. CI `34695238494` at `3f797cc` verifies GREEN:
+  all 95 iOS tests pass and the unsigned arm64 app builds. The handoff remains
+  unchanged while the independently identified view-ACK barrier is tested.
+- [ ] Hold a view ACK while cached movement is confirmed in the AppModel test;
+  require the next cell render to start before releasing the ACK. A cell worker
+  awaiting the whole latest-only view task can starve indefinitely under continuous
+  GPS. Verify RED, remove that cross-worker wait, verify GREEN. Keep epoch guards,
+  cell admission/ACKs and Band coverage pinning. Actual-page coverage also tests
+  stored files arriving before the first view without exposing an incomplete map.
 - [x] Preserve upstream Mapbox roundabout geometry, directions and the 44x56 HUD
   footprint; rasterize at higher source resolution with a rounded cyan stroke
   matching the existing Material arrows. Inspect the generated native-size PNGs.

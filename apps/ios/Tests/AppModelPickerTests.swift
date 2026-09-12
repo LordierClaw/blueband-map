@@ -41,6 +41,7 @@ final class AppModelPickerTests: XCTestCase {
         let initialRenders = await cellProbe.count
         let initialCells = await sender.cellKeys
         await cellProbe.pause()
+        await sender.holdViewAcknowledgements()
         model.applicationStateChanged("inactive")
         model.applicationStateChanged("background")
         location.locationManager(manager, didUpdateLocations: [fix(0.00001), fix(0.00002)])
@@ -52,6 +53,7 @@ final class AppModelPickerTests: XCTestCase {
             XCTAssertFalse(initialCells.contains(nextCell.key),
                 "entering forward coverage must precede route recoloring, or continuous GPS can starve prefetch")
         }
+        await sender.releaseViewAcknowledgements()
         await cellProbe.resume()
         await waitUntil { await sender.cellKeys.count >= 14 }
         let additionalRenders = await cellProbe.count - initialRenders

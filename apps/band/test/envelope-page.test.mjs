@@ -134,7 +134,8 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     publish(page)
     const originalScene = page.confirmedMap.scene
     page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
-    page.receiveMessage({ data: envelope("view1", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    // Files may arrive before the position message; admission/cache bounds must
+    // protect the old frame without making payload progress wait on view ACKs.
     for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
     assert.equal(sent.filter(m => m.topic === "map.cell.result" && m.body.status === "accepted").length, 10)
     assert.equal(sent.filter(m => m.topic === "map.cell.result" && m.body.status === "stored").length, 10)
