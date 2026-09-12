@@ -197,6 +197,46 @@ test("changed cell content retires old pixels only after native decode", async (
   } finally { page.onDestroy() }
 })
 
+test("a replacement decodes while the moving viewport still awaits entering cells", async () => {
+  const { page, sent, file } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+    const old = page.streamImages.find(item => item.key === "0:0").uri
+    // GPS advances while iOS is replacing a visible cell. The sender cannot send
+    // the entering row until this replacement has received its native decode reply.
+    page.receiveMessage({ data: envelope("move", "map.stream.view", { epoch: "e1", seq: 2, x: 0, y: 4 }) })
+    const missing = corridorMap.cells(0, 4).filter(key => !page.streamState.has(key))
+    assert.equal(missing.length, 2)
+    const replacementBytes = Buffer.concat([CELL_PNG, Buffer.from([0])])
+    streamCell(page, "0:0", "moving-replacement", replacementBytes)
+    const replacement = page.streamImages.find(item => item.key === "0:0" && item.uri !== old)
+    assert.ok(replacement, "available cells must mount before all entering files arrive, or sender and decoder deadlock")
+    page.streamImageComplete(replacement.key, replacement.uri)
+    assert.ok(sent.some(message => message.topic === "map.cell.decoded" &&
+      message.body.sha256 === createHash("sha256").update(replacementBytes).digest("hex")))
+    assert.equal(page.streamState.position.seq, 1, "partial decoding must not expose an uncovered viewport")
+    assert.equal(file.storage.has(old), true)
+    for (const key of missing) {
+      streamCell(page, key)
+      for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+      assert.ok(page.streamImages.length <= 24)
+    }
+    assert.equal(page.streamState.position.seq, 2)
+    assert.equal(file.storage.has(old), false)
+    const writes = file.writes.length
+    for (let seq = 3; seq <= 30; seq++) {
+      page.receiveMessage({ data: envelope(`move-${seq}`, "map.stream.view", { epoch: "e1", seq, x: 0, y: seq }) })
+      assert.equal(page.streamState.position.seq, seq, "cached GPS updates cannot wait on image transfer or another callback")
+    }
+    assert.equal(file.writes.length, writes)
+    assert.equal(page.confirmedMap.scene, SCENE)
+  } finally { page.onDestroy() }
+})
+
 test("cell admission rejects oversized or malformed PNGs before native image allocation", async () => {
   const { page, sent, file } = await harness()
   try {

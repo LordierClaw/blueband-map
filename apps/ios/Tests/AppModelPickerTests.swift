@@ -39,10 +39,20 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil { model.navigationDebugEntries.contains { $0.stage == "map.stream.displayed" } }
         await waitUntil { await sender.cellKeys.count >= 12 }
         let initialRenders = await cellProbe.count
+        let initialCells = await sender.cellKeys
+        await cellProbe.pause()
         model.applicationStateChanged("inactive")
         model.applicationStateChanged("background")
         location.locationManager(manager, didUpdateLocations: [fix(0.00001), fix(0.00002)])
         await waitUntil { await sender.streamY > 0 }
+        await waitUntil { await cellProbe.blockedCell != nil }
+        let nextCell = await cellProbe.blockedCell
+        XCTAssertNotNil(nextCell)
+        if let nextCell {
+            XCTAssertFalse(initialCells.contains(nextCell.key),
+                "entering forward coverage must precede route recoloring, or continuous GPS can starve prefetch")
+        }
+        await cellProbe.resume()
         await waitUntil { await sender.cellKeys.count >= 14 }
         let additionalRenders = await cellProbe.count - initialRenders
         XCTAssertLessThanOrEqual(additionalRenders, 5, "reuse unchanged base/route cells, render only changed path plus entering margin")
@@ -515,7 +525,19 @@ final class AppModelPickerTests: XCTestCase {
 
 private actor CellRenderProbe {
     private(set) var count = 0
-    func render(_ cell: CorridorCell) -> Data { count += 1; return Data(repeating: 42, count: 100) }
+    private(set) var blockedCell: CorridorCell?
+    private var paused = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func pause() { paused = true }
+    func resume() { paused = false; waiter?.resume(); waiter = nil; blockedCell = nil }
+    func render(_ cell: CorridorCell) async -> Data {
+        count += 1
+        if paused {
+            blockedCell = cell
+            await withCheckedContinuation { waiter = $0 }
+        }
+        return Data(repeating: 42, count: 100)
+    }
 }
 
 private struct PickerAuthKeyStore: AuthKeyStoreProtocol, Sendable {

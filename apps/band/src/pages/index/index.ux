@@ -130,7 +130,9 @@ function create(epoch) {
     },
     images() {
       // An unmounted native image must decode again if its file is later reused.
-      const pending = wanted && wanted.keys.every(key => files[key]) ? wanted.keys.map(key => files[key]) : []
+      // Decode arrivals independently: a visible replacement's sender waits for
+      // its decode reply before it can transfer the still-missing entering cells.
+      const pending = wanted ? wanted.keys.map(key => files[key]).filter(Boolean) : []
       const resident = unique(activeRecords.concat(pending))
       for (const key of order) if (resident.indexOf(files[key]) < 0) files[key].decoded = false
       return resident.map(file => {

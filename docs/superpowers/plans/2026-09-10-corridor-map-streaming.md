@@ -35,7 +35,33 @@
 - [x] Run full iOS CI including renderer/integration tests. Bump each changed component version/build; package current IPA/RPK with hashes and concise manual checks.
 - [ ] Validate Vela transforms, clipping and image resource retirement on real Band, including blur/resume and locked iPhone. Report physical latency separately from automated evidence; do not claim near-realtime hardware behavior without measurements.
 
-## Current checkpoint (2026-09-12)
+## Device feedback follow-up (2026-09-12)
+
+The user tested the latest artifacts: roundabout direction is correct, but movement
+still appears only every few seconds and the directional artwork is too thin.
+There is no new device log. Do not treat the older 0.5.18 export as evidence for
+this release or claim a measured one-second device result.
+
+- [ ] Reproduce replacement/decode circular wait in the actual page runtime:
+  show view `(0,0)`, request `(0,4)` with its entering row missing, replace `0:0`,
+  require `map.cell.decoded` before sending that row. Run `make test-rpk-runtime`;
+  expected RED: the replacement node is absent.
+- [ ] Mount available pending files incrementally in `corridorMap.images()` using
+  `wanted ? wanted.keys.map(key => files[key]).filter(Boolean) : []`;
+  retain the existing all-decoded promotion and 24-node bound. Run the same test
+  and `make test-corridor`; verify old pixels remain until complete coverage and
+  28 subsequent cached views move without file writes.
+- [ ] Inspect sender prefetch scheduling with a slow cell transfer and advancing
+  GPS. Only change priority after a failing behavioral test reproduces starvation.
+- [ ] Preserve upstream Mapbox roundabout geometry, directions and the 44x56 HUD
+  footprint; rasterize at higher source resolution with a rounded cyan stroke
+  matching the existing Material arrows. Inspect the generated native-size PNGs.
+  Keep icon mapping, unrelated artwork and Xiaomi wire bytes unchanged.
+- [ ] Run `make test`, `make lint`, `git diff --check`, then component-specific
+  version/build bumps, CI/package checks and an updated handoff. Report code/test
+  evidence separately from the remaining device cadence measurement.
+
+## Previous release checkpoint (2026-09-12)
 
 - Roundabout fixture now passes through the real parser into both preview and live guidance as `straight`; the provider interval includes part of the exit road.
 - GPS integration, CPU atlas/cell rendering, content-hash reuse, safe cell replacement, destination registration and capability fallback are implemented. CI `34676221943` at `43dec58` passed 95 iOS tests and built arm64. This is not the final artifact source.
