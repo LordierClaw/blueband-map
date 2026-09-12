@@ -1,6 +1,7 @@
 import Combine
 import CoreLocation
 import Foundation
+import UIKit
 import BlueBandCore
 import BlueBandMapCore
 import BlueBandProtocol
@@ -60,6 +61,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var navigationDistanceMeters = 0
     @Published private(set) var navigationStreet = ""
     @Published private(set) var routePreviewPNG: Data?
+    @Published private(set) var routePreviewTiles: (viewport: CorridorViewport, images: [CorridorCell: UIImage])?
     @Published private(set) var navigationStart: GeoPoint?
     @Published private(set) var navigationDestination: GeoPoint?
     @Published private(set) var navigationRouteDistanceMeters: Int?
@@ -1013,8 +1015,8 @@ final class AppModel: ObservableObject {
             pendingCorridorCells = nil
             do {
                 let view = try corridorViewport(fix, plane: plane), request = mapRequest(fix)
-                // Let the small position message pin coverage before transferring any files.
-                await corridorViewTask?.value
+                // Band pins coverage at admission. A slow view ACK must not
+                // block cell progress by awaiting the whole latest-only worker.
                 guard owner == corridorGeneration, !Task.isCancelled else { return }
                 let missing = view.visibleCells.filter { !corridorLink.cachedCells.contains($0.key) }
                 for cell in missing {

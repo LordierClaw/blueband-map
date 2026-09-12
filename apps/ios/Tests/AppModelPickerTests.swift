@@ -25,7 +25,7 @@ final class AppModelPickerTests: XCTestCase {
                 return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
                     retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
                     cacheState: "fixture", configuration: config)
-            }, cellRender: { _, _, cell in await cellProbe.render(cell) })
+            }, cellRender: { _, _, cell in try await cellProbe.render(cell) })
         defer { model.stopNavigation() }
         await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
         model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
@@ -38,6 +38,10 @@ final class AppModelPickerTests: XCTestCase {
         location.locationManager(manager, didUpdateLocations: [fix(0)])
         await waitUntil { model.navigationDebugEntries.contains { $0.stage == "map.stream.displayed" } }
         await waitUntil { await sender.cellKeys.count >= 12 }
+        await waitUntil { model.routePreviewTiles != nil }
+        let initialPreview = model.routePreviewTiles
+        XCTAssertEqual(initialPreview?.viewport, try CorridorViewport(x: 0, y: 0))
+        XCTAssertEqual(initialPreview?.images.count, initialPreview?.viewport.visibleCells.count)
         let initialRenders = await cellProbe.count
         let initialCells = await sender.cellKeys
         await cellProbe.pause()
@@ -61,17 +65,31 @@ final class AppModelPickerTests: XCTestCase {
         XCTAssertEqual(fullFrames, 1, "movement must translate the cached map, not render another full frame")
         XCTAssertTrue(manager.updating)
         XCTAssertLessThan(model.lastMapFixAgeMilliseconds ?? .max, 1_000)
+        XCTAssertEqual(model.routePreviewTiles?.viewport, initialPreview?.viewport,
+            "background navigation should not do invisible phone preview work")
+        model.applicationStateChanged("active")
+        let displayedY = await sender.streamY
+        await waitUntil { model.routePreviewTiles?.viewport.y == displayedY }
+        if let moved = model.routePreviewTiles, let initialPreview {
+            XCTAssertNotEqual(moved.viewport, initialPreview.viewport)
+            XCTAssertEqual(Set(moved.images.keys), Set(moved.viewport.visibleCells), "publish only complete coverage")
+            // Translation reuses native images; no full PNG re-encode on each fix.
+            let cell = try XCTUnwrap(initialPreview.viewport.visibleCells.first { $0.column == 0 && $0.row == 0 })
+            XCTAssertTrue(moved.images[cell] === initialPreview.images[cell])
+        }
         let cells = await sender.cellKeys.count
         XCTAssertLessThanOrEqual(cells, 30)
         location.locationManager(manager, didUpdateLocations: [fix(0.0011)])
         await waitUntil { await sender.streamOpens >= 2 }
         XCTAssertEqual(fullFrames, 2, "a large camera change needs one fresh full frame and epoch")
         model.stopNavigation()
+        XCTAssertNil(model.routePreviewTiles)
         let views = await sender.streamViews
         location.locationManager(manager, didUpdateLocations: [fix(0.00003)])
         try await Task.sleep(for: .milliseconds(50))
         let stoppedViews = await sender.streamViews
         XCTAssertEqual(stoppedViews, views)
+        XCTAssertNil(model.routePreviewTiles, "late GPS must not restore a stopped preview")
     }
 
     func testNextMapRendersWhilePreviousMapAwaitsBandDisplay() async throws {
@@ -532,13 +550,20 @@ private actor CellRenderProbe {
     private var waiter: CheckedContinuation<Void, Never>?
     func pause() { paused = true }
     func resume() { paused = false; waiter?.resume(); waiter = nil; blockedCell = nil }
-    func render(_ cell: CorridorCell) async -> Data {
+    func render(_ cell: CorridorCell) async throws -> Data {
         count += 1
         if paused {
             blockedCell = cell
             await withCheckedContinuation { waiter = $0 }
         }
-        return Data(repeating: 42, count: 100)
+        let context = try XCTUnwrap(CGContext(data: nil, width: 128, height: 128, bitsPerComponent: 8,
+            bytesPerRow: 128 * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 128, height: 128))
+        context.setFillColor(CGColor(red: 0, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 24, y: 16, width: 8, height: 48))
+        return try SnapshotPNGEncoder.encode(XCTUnwrap(context.makeImage()), profiles: [.colors16Labels], blockSizes: [1]).data
     }
 }
 

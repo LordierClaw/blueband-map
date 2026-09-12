@@ -64,6 +64,19 @@ this release or claim a measured one-second device result.
   GPS. Verify RED, remove that cross-worker wait, verify GREEN. Keep epoch guards,
   cell admission/ACKs and Band coverage pinning. Actual-page coverage also tests
   stored files arriving before the first view without exposing an incomplete map.
+  CI `34696216381` at `ff3723f` reproduces RED: the cell renderer never starts
+  until the held view ACK is released. The cross-worker wait is now removed;
+  the next CI also introduces a separate phone-preview regression.
+- [ ] User confirms both Band and iPhone are slow. The phone currently displays
+  only the last full-frame PNG, ignoring confirmed corridor translations. Reuse
+  the sent 128px images in a clipped native SwiftUI tile stack at the existing
+  212x520 size, moving by the confirmed viewport offset. Publish complete visible
+  coverage only, retain the last complete map during replacement, bound the image
+  cache to the Band's admitted cells, and clear it on epoch change/stop. Pause
+  phone-only publications while backgrounded and catch up on return. No extra provider
+  request, PNG composition worker, interpolation or layout redesign. Add a RED
+  AppModel regression for initial coverage, cached movement, foreground catch-up,
+  native-image reuse and stop/late-GPS cleanup before wiring the preview.
 - [x] Preserve upstream Mapbox roundabout geometry, directions and the 44x56 HUD
   footprint; rasterize at higher source resolution with a rounded cyan stroke
   matching the existing Material arrows. Inspect the generated native-size PNGs.
