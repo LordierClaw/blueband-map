@@ -15,7 +15,7 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         let request = VietmapSnapshotRequest(route: route, matchedPosition: origin,
             overlayGeometry: .init(subdued: [], traveled: [], active: [], context: []),
             headingDegrees: 0, nextManeuver: ahead, tileMapKey: "fixture-key")
-        let style = try VietmapStyleClient.parseMapStyle(Data(Self.styleJSON.utf8), tileMapKey: "fixture-key")
+        let style = VietmapMapStyle(template: .init(urlTemplate: "", sourceLayers: []), layers: [])
         for side in [128, 512] {
             let config = VietmapSnapshotConfiguration(size: CGSize(width: side, height: side), scale: 2, pitch: 0,
                 heading: 0, userVerticalFraction: 0.72,
