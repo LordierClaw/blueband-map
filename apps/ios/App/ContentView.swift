@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import BlueBandCore
+import BlueBandMapCore
 
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -103,7 +104,9 @@ struct ContentView: View {
                     }
                 }
             }
-            if let data = model.routePreviewPNG, let image = UIImage(data: data) {
+            if let preview = model.routePreviewTiles {
+                CorridorPreviewView(viewport: preview.viewport, images: preview.images)
+            } else if let data = model.routePreviewPNG, let image = UIImage(data: data) {
                 Image(uiImage: image)
                     .resizable().interpolation(.high).scaledToFit()
                     .frame(maxWidth: 212).accessibilityLabel("Bản đồ điều hướng đang hiển thị trên band")
@@ -126,7 +129,7 @@ struct ContentView: View {
                     }
                 }
             }
-            Text("Ảnh preview dùng cùng snapshot đã nén và scene với Smart Band.")
+            Text("Preview dùng cùng ảnh và vị trí map đã xác nhận trên Band.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -168,6 +171,31 @@ struct ContentView: View {
         case .ready: "Đã xác thực"
         case let .failed(message): message
         }
+    }
+}
+
+struct CorridorPreviewView: View {
+    let viewport: CorridorViewport
+    let images: [CorridorCell: UIImage]
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(viewport.visibleCells, id: \.key) { cell in
+                if let image = images[cell] {
+                    Image(uiImage: image).resizable().interpolation(.high)
+                        .frame(width: 128, height: 128)
+                        .offset(x: CGFloat(cell.column * 128 + viewport.x), y: CGFloat(cell.row * 128 + viewport.y))
+                }
+            }
+        }
+        .frame(width: 212, height: 520, alignment: .topLeading).clipped()
+        .overlay {
+            Text("© Vietmap").font(.system(size: 9))
+                .foregroundStyle(Color(red: 244 / 255, green: 243 / 255, blue: 229 / 255))
+                .position(x: 106, y: 490)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Bản đồ điều hướng đang hiển thị trên band")
     }
 }
 

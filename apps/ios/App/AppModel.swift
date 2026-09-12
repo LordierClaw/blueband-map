@@ -130,6 +130,7 @@ final class AppModel: ObservableObject {
     private var corridorUnavailable = false
     private var corridorLastReset = "none"
     private var corridorCellProgress: [CorridorCell: RouteProgress] = [:]
+    private var corridorCellImages: [CorridorCell: UIImage] = [:]
 
     init(
         keyStore: any AuthKeyStoreProtocol,
@@ -383,6 +384,7 @@ final class AppModel: ObservableObject {
 
     func applicationStateChanged(_ state: String) {
         applicationState = state
+        updateCorridorPreview()
         locationClient.applicationActive(state == "active")
         snapshotRenderer.setApplicationActive(state == "active")
         updateNavigationPrewarming()
@@ -730,6 +732,7 @@ final class AppModel: ObservableObject {
         }
         activeSceneID = sceneID
         routePreviewPNG = asset.data
+        routePreviewTiles = nil
         lastMapFixAgeMilliseconds = Int(max(0, Date().timeIntervalSince(location.timestamp) * 1000))
         displayedFixTimestamp = location.timestamp
         if lastMapFixAgeMilliseconds! >= 5_000 { latencyViolations += 1 }
@@ -1071,11 +1074,18 @@ final class AppModel: ObservableObject {
         guard owner == corridorGeneration, !Task.isCancelled else { throw CancellationError() }
         corridorCellProgress[cell] = progress
         corridorCellProgress = corridorCellProgress.filter { corridorLink.cachedCells.contains($0.key.key) }
+        if let image = UIImage(data: bytes), image.size == CGSize(width: 128, height: 128) {
+            corridorCellImages[cell] = image
+        }
+        // The final decode/view callback can precede sendCell's return. Retry
+        // publication here once the last confirmed cell is available locally.
+        updateCorridorPreview()
         logNavigation("map.cell.ready", "cell=\(cell.key) encodedBytes=\(bytes.count) prepareMs=\(Int(prepared.timeIntervalSince(started) * 1000)) linkMs=\(Int(Date().timeIntervalSince(prepared) * 1000)) totalMs=\(Int(Date().timeIntervalSince(started) * 1000)) files=\(corridorLink.cachedCells.count)")
     }
 
     private func corridorDisplayed(_ view: CorridorViewport, sequence: Int) {
         guard let plane = corridorPlane, let timestamp = corridorLink.displayedFixTimestamp else { return }
+        updateCorridorPreview()
         activeSnapshotConfiguration = plane.window(CGRect(x: -view.x, y: -view.y, width: 212, height: 520))
         displayedFixTimestamp = timestamp
         let now = Date(), age = Int(max(0, now.timeIntervalSince(timestamp) * 1000))
@@ -1083,6 +1093,14 @@ final class AppModel: ObservableObject {
         if age >= 5000 { latencyViolations += 1 }
         logNavigation("map.stream.displayed", "seq=\(sequence) offset=\(view.x),\(view.y) fixAgeMs=\(age) frameGapMs=\(lastMapDisplayedAt.map { Int(now.timeIntervalSince($0) * 1000) } ?? 0)")
         lastMapDisplayedAt = now
+    }
+
+    private func updateCorridorPreview() {
+        corridorCellImages = corridorCellImages.filter { corridorLink.cachedCells.contains($0.key.key) }
+        guard applicationState == "active", let view = corridorLink.displayedViewport,
+              view.visibleCells.allSatisfy({ corridorCellImages[$0] != nil }) else { return }
+        let visible = Set(view.visibleCells)
+        routePreviewTiles = (view, corridorCellImages.filter { visible.contains($0.key) })
     }
 
     private func fallbackCorridor(_ request: SnapshotRefreshRequest, code: String) {
@@ -1099,6 +1117,8 @@ final class AppModel: ObservableObject {
         corridorViewTask?.cancel(); corridorViewTask = nil
         corridorPlane = nil; corridorRoute = nil; corridorLatest = nil
         corridorCellProgress.removeAll()
+        corridorCellImages.removeAll()
+        if !keepMap { routePreviewTiles = nil }
         pendingCorridorCells = nil; pendingCorridorView = nil
         let old = corridorLink.epoch
         corridorLink.reset()
@@ -1262,6 +1282,7 @@ final class AppModel: ObservableObject {
         navigationDistanceMeters = 0
         navigationStreet = ""
         routePreviewPNG = nil
+        routePreviewTiles = nil
         errorMessage = nil
     }
 

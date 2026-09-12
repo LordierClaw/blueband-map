@@ -77,6 +77,11 @@ this release or claim a measured one-second device result.
   request, PNG composition worker, interpolation or layout redesign. Add a RED
   AppModel regression for initial coverage, cached movement, foreground catch-up,
   native-image reuse and stop/late-GPS cleanup before wiring the preview.
+  CI `34696976490` at `0a24664` confirms the ACK/prefetch assertions now pass;
+  only the three phone-preview assertions fail (initial publication, initial
+  viewport, foreground catch-up). Native image reuse/publication and the clipped
+  view are now wired; pixel assertions cover offsets `(0,0)`, `(-17,9)` and
+  `(127,-129)` including viewport edges. Full GREEN verification is pending.
 - [x] Preserve upstream Mapbox roundabout geometry, directions and the 44x56 HUD
   footprint; rasterize at higher source resolution with a rounded cyan stroke
   matching the existing Material arrows. Inspect the generated native-size PNGs.

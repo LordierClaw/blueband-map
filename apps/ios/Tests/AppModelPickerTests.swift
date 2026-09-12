@@ -1,6 +1,8 @@
 import Foundation
 import CoreGraphics
 import CoreLocation
+import SwiftUI
+import UIKit
 import XCTest
 import BlueBandCore
 import BlueBandCrypto
@@ -10,6 +12,46 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testPhoneTileViewClipsAndTranslatesNativePixelsWithoutSeams() throws {
+        for (x, y) in [(0, 0), (-17, 9), (127, -129)] {
+            let viewport = try CorridorViewport(x: x, y: y)
+            var images: [CorridorCell: UIImage] = [:]
+            for cell in viewport.visibleCells {
+                let red = UInt8((cell.column + 2) * 40), green = UInt8((cell.row + 2) * 25)
+                let bytes = (0..<128).flatMap { row in
+                    (0..<128).flatMap { _ in [red, green, UInt8(row), UInt8(255)] }
+                }
+                let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
+                let pixels = try XCTUnwrap(CGImage(width: 128, height: 128, bitsPerComponent: 8, bitsPerPixel: 32,
+                    bytesPerRow: 512, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                    provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+                images[cell] = UIImage(cgImage: pixels)
+            }
+            let renderer = ImageRenderer(content: CorridorPreviewView(viewport: viewport, images: images))
+            renderer.scale = 1
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size, CGSize(width: 212, height: 520))
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "phone-tiles-\(x)-\(y)"; attachment.lifetime = .keepAlways
+            add(attachment)
+            for (px, py) in [(0, 0), (17, 9), (128, 128), (106, 374), (211, 519)] {
+                let column = Int(floor(Double(px - x) / 128)), row = Int(floor(Double(py - y) / 128))
+                let expected = [(column + 2) * 40, (row + 2) * 25, py - y - row * 128, 255]
+                let pixel = try XCTUnwrap(image.cgImage?.cropping(to: CGRect(x: px, y: py, width: 1, height: 1)))
+                var rgba = [UInt8](repeating: 0, count: 4)
+                let context = try XCTUnwrap(CGContext(data: &rgba, width: 1, height: 1, bitsPerComponent: 8,
+                    bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                for channel in 0..<4 {
+                    XCTAssertLessThanOrEqual(abs(Int(rgba[channel]) - expected[channel]), 1,
+                        "offset \(x),\(y) pixel \(px),\(py) channel \(channel)")
+                }
+            }
+        }
+    }
+
     func testCorridorConsumesGPSInBackgroundWithoutFullFrameReloads() async throws {
         let manager = TestLocationManager()
         let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })

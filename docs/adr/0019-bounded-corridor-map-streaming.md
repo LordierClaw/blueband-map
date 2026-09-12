@@ -15,6 +15,22 @@ Otherwise a new GPS fix arriving during each recoloring transfer repeatedly
 restarts the latest-only drain before it reaches prefetch. Guidance/translation
 remain independent; route recoloring uses any capacity left after coverage.
 
+The cell worker must not await completion of the latest-only view worker: when
+view ACK latency exceeds GPS cadence, that worker may never drain. Band pins
+coverage as each message is admitted; files may safely arrive before the first
+view without promoting an incomplete viewport. Cell admission and decode ACKs
+remain required.
+
+The iPhone preview uses the same confirmed viewport and sent cell images in a
+native clipped SwiftUI stack. It does not re-encode a full PNG or call Map APIs
+for translation. Its image cache follows the admitted Band cells (at most 30),
+plus the last complete published viewport (at most 18 references, which may
+overlap). Keep that complete preview until replacement coverage is available;
+clear epoch cache on invalidation and the published preview on Stop or a newly
+confirmed full frame. Phone-only publications pause while inactive/backgrounded
+and catch up from current coverage on returning active. No background GPU work
+is added to cell rendering.
+
 ## Bounds and ownership
 
 - Normal file cache: at most 30 PNGs, each at most 8192 bytes. At most one additional file is being written/retired. Cleanup failure blocks further cell admission until resolved.
