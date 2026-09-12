@@ -10,32 +10,41 @@
 
 ## 1. Roundabout boundary repair
 
-- [ ] Add a behavioral regression using translated E5 deltas from the frozen fake-GPS route (no raw capture committed). Cover interval ending before and after the outlet, geometry rotations, and actual parser-to-guidance output.
+- [x] Add a behavioral regression using translated E5 deltas from the frozen fake-GPS route (no raw capture committed). Cover interval ending before and after the outlet, geometry rotations, and actual parser-to-guidance output.
 - [x] Run `make test-swift SWIFT_TEST_ARGS='--filter VietmapRouteTests'`; observe unknown versus straight failure.
 - [x] Find the arc/outlet transition within the instruction as well as immediately after it. Preserve confidence guards and exit-number independence.
 - [x] Re-run the route tests and retain malformed/clockwise/missing-outlet rejection.
 
 ## 2. Map mosaic contract and bounded cache
 
-- [ ] Define exact application vectors and ADR: cell size/count/byte bounds, camera epoch, offsets, coverage, capability negotiation, old-peer fallback. Do not change proprietary wire framing.
-- [ ] Add failing portable and Band runtime checks for viewport coverage, forward prefetch, visible-cell pinning, eviction, stale scene/sequence rejection, decode failures and reconnect.
-- [ ] Implement bounded visible-plus-forward cell selection and Band file/decode lifecycle, reusing existing raster transport where compatible.
-- [ ] Test movement with no full-frame reload, no uncovered pixels, no unbounded file/image retention, and navigation priority over prefetch.
+- [x] Define exact application vectors and ADR: cell size/count/byte bounds, camera epoch, offsets, coverage, capability negotiation, old-peer fallback. Do not change proprietary wire framing.
+- [x] Add failing portable and Band runtime checks for viewport coverage, forward prefetch, visible-cell pinning, eviction, stale scene/sequence rejection, decode failures and reconnect.
+- [x] Implement bounded visible-plus-forward cell selection and Band file/decode lifecycle, reusing existing raster transport where compatible.
+- [x] Test movement with no full-frame reload, no uncovered pixels, no unbounded file/image retention, and navigation priority over prefetch.
 
 ## 3. iOS renderer and realtime integration
 
-- [ ] Add failing iOS integration tests for shared-coordinate cell rendering, cache reuse, latest GPS placement, reroute/camera invalidation, background rendering and cancellation.
-- [ ] Render/cache only requested corridor cells; transmit missing cells serially with bounded lookahead; send small position updates independently of image preparation.
-- [ ] Keep fixed cursor/HUD and correct destination/route registration. Do not extrapolate indefinitely across stale GPS.
+- [x] Add failing iOS integration tests for shared-coordinate cell rendering, cache reuse, latest GPS placement, reroute/camera invalidation, background rendering and cancellation.
+- [x] Render/cache only requested corridor cells; transmit missing cells serially with bounded lookahead; send small position updates independently of image preparation.
+- [x] Keep fixed cursor/HUD and correct destination/route registration. Do not extrapolate indefinitely across stale GPS.
 - [ ] Measure GPS age, cell transfer/decode, coverage misses, resident cells and frame cadence separately.
 
 ## 4. Verification and handoff
 
-- [ ] Run `make test`, `make lint`, `git diff --check`; independently review changed contracts and call sites inline.
+- [x] Run `make test`, `make lint`, `git diff --check`; independently review changed contracts and call sites inline.
 - [ ] Run full iOS CI including renderer/integration tests. Bump each changed component version/build; package current IPA/RPK with hashes and concise manual checks.
 - [ ] Validate Vela transforms, clipping and image resource retirement on real Band, including blur/resume and locked iPhone. Report physical latency separately from automated evidence; do not claim near-realtime hardware behavior without measurements.
 
-## Implementation checkpoint (2026-09-10)
+## Current checkpoint (2026-09-12)
+
+- Roundabout fixture now passes through the real parser into both preview and live guidance as `straight`; the provider interval includes part of the exit road.
+- GPS integration, CPU atlas/cell rendering, content-hash reuse, safe cell replacement, destination registration and capability fallback are implemented. CI `34676221943` at `43dec58` passed 95 iOS tests and built arm64. This is not the final artifact source.
+- Final candidate `6db094b` adds path-local recoloring, transient native-cleanup backpressure, retained-map recovery and component versions 0.5.21 (37) / 0.6.16 (31). Its iOS CI `34677326119` passed 95 tests, arm64 artifact inspection and IPA export. Linux: 193 Swift, 48 Band, 19 lab tests, location/metadata/syntax/provider/handoff checks plus lint pass.
+- Band replay covers 600 curved movement/content-replacement steps with exact viewport coverage, ≤30 retained cell files and ≤24 mounted cell nodes. Native decoder memory reclamation is still a hardware gate, not proven by these tests.
+- `map.stream.displayed` records the confirmed fix timestamp, offset and frame gap; `map.cell.ready` records encoded bytes, total preparation/transfer wait and known file count. Actual hardware write/decode timings, RAM and locked-screen/blur acceptance are still pending. No extrapolated positions or fabricated latency measurements.
+- USB checks on this host show no Apple device and inactive usbmuxd. The current uploaded log is build 0.5.18 (34), dated September 7, not evidence for the new version. Current handoff files must not be replaced until final CI and artifact checks succeed.
+
+## Historical checkpoint (2026-09-10; superseded by the section above)
 
 - Roundabout regression first failed at interval ends 11 and 12, then passed after the shared boundary search. Parser-to-guidance regression still needs the translated fixture through `VietmapRouteClient.parse`.
 - Band now accepts scene-bound stream open/view/close plus hash-checked 128×128 PNG cells with 216-byte chunks/window four, displays only fully decoded coverage, retires cache files, and guards late/duplicate write callbacks. Core cache and actual-page tests pass; compiled-entry regression prohibits custom helper modules. The corridor helper is inline in the actual UX entry and tests load that same block (no duplicate reference implementation).
