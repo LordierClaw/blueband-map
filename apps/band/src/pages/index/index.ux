@@ -65,6 +65,7 @@ function create(epoch) {
   const state = {
     epoch,
     visible: false,
+    destination: null,
     position: { x: 0, y: 0, seq: -1 },
     get count() { return records().length },
     has(key) { return !!files[key] },
@@ -95,11 +96,11 @@ function create(epoch) {
       order = order.filter(candidate => candidate !== key)
       order.push(key)
       if (state.visible && active.indexOf(key) >= 0 && !wanted) {
-        wanted = { seq: state.position.seq, x: state.position.x, y: state.position.y, keys: active.slice() }
+        wanted = { seq: state.position.seq, x: state.position.x, y: state.position.y, keys: active.slice(), destination: state.destination }
       }
       return { ok: true, evicted }
     },
-    request(seq, x, y) {
+    request(seq, x, y, destination) {
       const keys = cells(x, y)
       if (!integer(seq, 2147483647) || seq < 0 || !keys.length ||
           (latest && (seq < latest.seq || (seq === latest.seq && (x !== latest.x || y !== latest.y))))) {
@@ -111,7 +112,7 @@ function create(epoch) {
       const resident = unique(activeRecords.concat(keys.map(key => files[key] || { key, uri: "missing-" + key })))
       if (resident.length > MAX_RESIDENT) return { ok: false, reason: "resetRequired", missing: [] }
       latest = { seq, x, y }
-      wanted = { seq, x, y, keys }
+      wanted = { seq, x, y, keys, destination: destination || state.destination }
       for (const key of keys) {
         if (files[key]) { order = order.filter(candidate => candidate !== key); order.push(key) }
       }
@@ -160,6 +161,7 @@ function create(epoch) {
     active = wanted.keys
     activeRecords = active.map(key => files[key])
     state.position = { seq: wanted.seq, x: wanted.x, y: wanted.y }
+    state.destination = wanted.destination
     state.visible = true
     wanted = null
     for (const key of order) if (active.indexOf(key) < 0) files[key].decoded = false
@@ -420,7 +422,6 @@ function maneuverPath(body) {
 
 function renderProtocolValidPreview(preview) {
   var maneuvers = ["straight", "left", "right", "uTurn", "roundabout", "arrive"]
-  var destinationModes = ["visible", "edge", "hidden"]
   return preview && typeof preview === "object" && !Array.isArray(preview) &&
     maneuvers.indexOf(preview.maneuver) >= 0 &&
     validRoundaboutExit(preview) &&
@@ -429,7 +430,11 @@ function renderProtocolValidPreview(preview) {
     renderProtocolValidInteger(preview.x) && renderProtocolValidInteger(preview.y) &&
     safeMaskContains(preview.x, preview.y, 30, 38) &&
     renderProtocolValidInteger(preview.heading) && preview.heading >= 0 && preview.heading < 8 &&
-    destinationModes.indexOf(preview.destinationMode) >= 0 &&
+    validDestination(preview)
+}
+
+function validDestination(preview) {
+  return preview && ["visible", "edge", "hidden"].indexOf(preview.destinationMode) >= 0 &&
     renderProtocolValidInteger(preview.destinationX) && renderProtocolValidInteger(preview.destinationY) &&
     (preview.destinationMode === "hidden" ? preview.destinationX === 0 && preview.destinationY === 0 :
       safeMaskContains(preview.destinationX, preview.destinationY,
@@ -927,7 +932,6 @@ export default {
     var body = message.body
     var maneuvers = ["straight", "left", "right", "uTurn", "roundabout", "arrive"]
     var statuses = ["navigating", "gpsLow", "limitedMap", "rerouting", "arrived"]
-    var destinationModes = ["visible", "edge", "hidden"]
     var currentScene = this.confirmedMap && this.confirmedMap.scene
     var valid = body && body.scene === currentScene && this.validInteger(body.seq) && body.seq > this.navSequence &&
       this.validInteger(body.x) && body.x >= 0 && body.x < this.MAP_WIDTH &&
@@ -936,15 +940,7 @@ export default {
       this.validInteger(body.distanceM) && body.distanceM >= 0 &&
       typeof body.street === "string" && this.utf8Length(body.street) <= 48 &&
       maneuvers.indexOf(body.maneuver) >= 0 && statuses.indexOf(body.status) >= 0 &&
-      validRoundaboutExit(body) &&
-      destinationModes.indexOf(body.destinationMode) >= 0 &&
-      this.validInteger(body.destinationX) && this.validInteger(body.destinationY) &&
-      ((body.destinationMode === "hidden" && body.destinationX === 0 && body.destinationY === 0) ||
-        (body.destinationMode !== "hidden" && safeMaskContains(
-          body.destinationX, body.destinationY, body.destinationMode === "visible" ? 28 : 24,
-          body.destinationMode === "visible" ? 34 : 24,
-          body.destinationMode === "edge" ? 0 : 6,
-          body.destinationMode === "edge" ? 0 : 12)))
+      validRoundaboutExit(body) && validDestination(body)
     if (valid) {
       var labels = { navigating: "NAVIGATING", gpsLow: "GPS LOW", limitedMap: "LIMITED MAP", rerouting: "REROUTING", arrived: "ARRIVED" }
       this.navScene = body.scene
@@ -967,14 +963,7 @@ export default {
       this.navStatus = navigation.status
       this.navStatusVisible = navigation.statusVisible
       this.navMarkerStyle = "left:91px;top:355px;"
-      this.navDestinationVisible = body.destinationMode !== "hidden"
-      if (this.navDestinationVisible) {
-        var destination = this.destinationOverlay(
-          body.destinationMode, body.destinationX, body.destinationY
-        )
-        this.navDestinationPath = destination.path
-        this.navDestinationStyle = destination.style
-      }
+      if (!this.streamVisible || body.status === "arrived") this.applyDestination(body)
     }
     this.rememberSuccess(message.id)
     this.sendACK(message.id)
@@ -987,6 +976,7 @@ export default {
     this.streamTransfer = null
     this.streamImages = []
     this.streamVisible = false
+    if (previous && this.confirmedMap) this.applyPreviewOverlay(this.confirmedMap.preview)
     if (previous) {
       var page = this
       previous.records().forEach(function (record) { page.retireCellFile(record.uri) })
@@ -1154,7 +1144,9 @@ export default {
       })
     } else if (this.streamState && body.epoch === this.streamState.epoch) {
       if (message.topic === "map.stream.view") {
-        var result = this.streamState.request(body.seq, body.x, body.y)
+        var destination = body.destinationMode === undefined ? null : body
+        var result = destination && !validDestination(destination) ? { ok: false, reason: "invalidView", missing: [] } :
+          this.streamState.request(body.seq, body.x, body.y, destination)
         this.syncStreamImages()
         this.sendStreamEnvelope("map.stream.state", {
           epoch: body.epoch, seq: body.seq, displayedSeq: this.streamState.position.seq,
@@ -1173,6 +1165,7 @@ export default {
         style: "left:" + item.x + "px;top:" + item.y + "px;opacity:" + item.opacity + ";" }
     })
     this.streamVisible = this.streamState.visible
+    if (this.streamVisible && this.streamState.destination) this.applyDestination(this.streamState.destination)
     var page = this
     this.streamState.takeRetired().forEach(function (record) { page.retireCellFile(record.uri) })
   },
@@ -1180,8 +1173,12 @@ export default {
   streamImageComplete(key, uri) {
     if (!this.streamState) return
     var previous = this.streamState.position.seq
+    var record = this.streamState.records().find(function (file) { return file.key === key && file.uri === uri })
     if (!this.streamState.decoded(key, uri)) return
     this.syncStreamImages()
+    if (record && record.hash) this.sendStreamEnvelope("map.cell.decoded", {
+      epoch: this.streamState.epoch, cell: key, sha256: record.hash
+    })
     if (this.streamState.position.seq !== previous) {
       this.sendStreamEnvelope("map.stream.state", {
         epoch: this.streamState.epoch, seq: this.streamState.position.seq,
@@ -1865,6 +1862,10 @@ export default {
     this.navMarkerVisible = true
     this.navMarkerPath = "/common/marker-cursor-v4.png"
     this.navMarkerStyle = "left:91px;top:355px;"
+    this.applyDestination(preview)
+  },
+
+  applyDestination(preview) {
     this.navDestinationVisible = preview.destinationMode !== "hidden"
     if (this.navDestinationVisible) {
       var destination = this.destinationOverlay(
@@ -1889,7 +1890,8 @@ export default {
       sha256Prefix: publication.sha256Prefix,
       token: publication.token,
       renderer: publication.renderer || "raster",
-      scene: publication.scene || ""
+      scene: publication.scene || "",
+      preview: publication.preview
     }
     this.mapPath = publication.uri
     this.mapHashPrefix = publication.sha256Prefix

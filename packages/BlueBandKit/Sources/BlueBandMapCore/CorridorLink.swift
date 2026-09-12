@@ -11,16 +11,20 @@ public final class CorridorLink {
     public private(set) var cachedCells = Set<String>()
     public private(set) var displayedViewport: CorridorViewport?
     public private(set) var displayedSequence = -1
+    public private(set) var displayedFixTimestamp: Date?
+    public var latestSequence: Int { sequence }
     public private(set) var failure: String?
     public var onDisplay: ((CorridorViewport, Int) -> Void)?
     private let send: Send
     private let timeout: Duration
     private var scene = ""
     private var sequence = 0
-    private var views: [Int: CorridorViewport] = [:]
+    private var views: [Int: (viewport: CorridorViewport, timestamp: Date)] = [:]
     private var cellInFlight: String?
     private var cellReply: (request: String, status: String)?
     private var hashes: [String: String] = [:]
+    private var decodedHash: String?
+    private var expectedHash: String?
 
     public init(timeout: Duration = .seconds(3), send: @escaping Send) {
         self.timeout = timeout
@@ -30,8 +34,8 @@ public final class CorridorLink {
     public func reset() {
         epoch = nil; ready = false; scene = ""; failure = nil
         cachedCells.removeAll(); hashes.removeAll(); views.removeAll()
-        displayedViewport = nil; displayedSequence = -1; sequence = 0
-        cellInFlight = nil; cellReply = nil
+        displayedViewport = nil; displayedFixTimestamp = nil; displayedSequence = -1; sequence = 0
+        cellInFlight = nil; cellReply = nil; decodedHash = nil; expectedHash = nil
     }
 
     public func close() async {
@@ -47,7 +51,7 @@ public final class CorridorLink {
         epoch = owned; self.scene = scene
         do {
             _ = try await send("map.stream.open", ["epoch": .string(owned), "scene": .string(scene), "version": .number(1)])
-            let confirmed = await wait(epoch: owned) { self.ready }
+            let confirmed = await wait(epoch: owned, duration: min(timeout, .milliseconds(750))) { self.ready }
             if !confirmed, epoch == owned { fail("unsupportedOrTimeout") }
             return confirmed
         } catch { if epoch == owned { fail("openFailed") }; return false }
@@ -58,8 +62,9 @@ public final class CorridorLink {
               Self.validCell(cell.key), (33...8192).contains(data.count) else { return false }
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         if hashes[cell.key] == hash { return true }
-        cellInFlight = cell.key; cellReply = nil
-        defer { if epoch == owned { cellInFlight = nil; cellReply = nil } }
+        let replacingVisible = cachedCells.contains(cell.key) && (displayedViewport?.visibleCells.contains(cell) ?? false)
+        cellInFlight = cell.key; cellReply = nil; decodedHash = nil; expectedHash = hash
+        defer { if epoch == owned { cellInFlight = nil; cellReply = nil; decodedHash = nil; expectedHash = nil } }
         let identity: [String: JSONValue] = ["epoch": .string(owned), "cell": .string(cell.key)]
         do {
             var begin = identity
@@ -91,6 +96,10 @@ public final class CorridorLink {
             let request = try await send("map.cell.end", identity)
             let stored = await wait(epoch: owned) { self.cellReply?.request == request && self.cellReply?.status == "stored" }
             guard stored, ready else { if epoch == owned { fail("cellTimeout") }; return false }
+            if replacingVisible {
+                let decoded = await wait(epoch: owned) { self.decodedHash == hash }
+                guard decoded else { if epoch == owned { fail("decodeTimeout") }; return false }
+            }
             cachedCells.insert(cell.key)
             hashes[cell.key] = hash
             return checkCacheBound()
@@ -98,17 +107,28 @@ public final class CorridorLink {
     }
 
     @discardableResult
-    public func sendView(_ viewport: CorridorViewport) async -> Bool {
+    public func sendView(_ viewport: CorridorViewport, destinationMode: DestinationPresentationMode = .hidden,
+                         destination: ScreenPoint = ScreenPoint(x: 0, y: 0), fixTimestamp: Date = Date()) async -> Bool {
         guard ready, let owned = epoch, sequence < 2147483647 else { return false }
         sequence += 1
         let seq = sequence
-        views[seq] = viewport
+        views[seq] = (viewport, fixTimestamp)
         views = views.filter { $0.key >= seq - 8 }
         do {
             _ = try await send("map.stream.view", ["epoch": .string(owned), "seq": .number(Double(seq)),
-                "x": .number(Double(viewport.x)), "y": .number(Double(viewport.y))])
+                "x": .number(Double(viewport.x)), "y": .number(Double(viewport.y)),
+                "destinationMode": .string(destinationMode.rawValue),
+                "destinationX": .number(Double(destination.x)), "destinationY": .number(Double(destination.y))])
             return epoch == owned && ready
         } catch { if epoch == owned { fail("viewSendFailed") }; return false }
+    }
+
+    public func waitForDisplay() async -> Bool {
+        guard ready, let owned = epoch else { return false }
+        let seq = sequence
+        let displayed = await wait(epoch: owned) { self.displayedSequence >= seq }
+        if !displayed, epoch == owned { fail("displayTimeout") }
+        return displayed
     }
 
     public func consume(_ envelope: ApplicationEnvelope) {
@@ -129,6 +149,10 @@ public final class CorridorLink {
             for key in evicted { hashes.removeValue(forKey: key) }
             cellReply = (request, status)
             if status == "error" { fail("cellRejected") }
+        case "map.cell.decoded":
+            guard ready, body["cell"] == cellInFlight.map(JSONValue.string),
+                  case let .string(hash)? = body["sha256"], hash == expectedHash else { return }
+            decodedHash = hash
         case "map.stream.state":
             guard ready, case let .string(code)? = body["code"],
                   let missing = Self.cellList(body["missing"], maximum: 18) else { return }
@@ -138,9 +162,9 @@ public final class CorridorLink {
             guard case let .number(value)? = body["displayedSeq"], value.isFinite,
                   value.rounded() == value, value >= 0, value <= Double(sequence),
                   Int(value) > displayedSequence, let view = views[Int(value)] else { return }
-            displayedViewport = view; displayedSequence = Int(value)
+            displayedViewport = view.viewport; displayedFixTimestamp = view.timestamp; displayedSequence = Int(value)
             views = views.filter { $0.key >= Int(value) }
-            onDisplay?(view, Int(value))
+            onDisplay?(view.viewport, Int(value))
         default: break
         }
     }
@@ -152,8 +176,8 @@ public final class CorridorLink {
         return ready
     }
 
-    private func wait(epoch owned: String, until predicate: () -> Bool) async -> Bool {
-        let clock = ContinuousClock(), deadline = ContinuousClock.now.advanced(by: timeout)
+    private func wait(epoch owned: String, duration: Duration? = nil, until predicate: () -> Bool) async -> Bool {
+        let clock = ContinuousClock(), deadline = ContinuousClock.now.advanced(by: duration ?? timeout)
         while epoch == owned, failure == nil, !Task.isCancelled {
             if predicate() { return true }
             if clock.now >= deadline { return false }

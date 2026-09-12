@@ -54,12 +54,14 @@ final class CorridorLinkTests: XCTestCase {
         _ = await link.open(scene: "scene-1")
         let oldEpoch = try XCTUnwrap(link.epoch)
         let view = try CorridorViewport(x: 0, y: 8)
-        let accepted = await link.sendView(view)
+        let timestamp = Date(timeIntervalSince1970: 1234)
+        let accepted = await link.sendView(view, fixTimestamp: timestamp)
         XCTAssertTrue(accepted)
         XCTAssertNil(link.displayedViewport, "ACK is not visual completion")
         peer.reply(topic: "map.stream.state", body: ["epoch": .string(oldEpoch), "seq": .number(1),
             "displayedSeq": .number(1), "code": .string("ok"), "missing": .array([])])
         XCTAssertEqual(link.displayedViewport, view)
+        XCTAssertEqual(link.displayedFixTimestamp, timestamp, "latency must use the displayed fix, not the newest pending GPS")
         _ = await link.open(scene: "scene-2")
         XCTAssertNotEqual(link.epoch, oldEpoch)
         peer.reply(topic: "map.stream.state", body: ["epoch": .string(oldEpoch), "seq": .number(1),
@@ -83,6 +85,20 @@ final class CorridorLinkTests: XCTestCase {
         XCTAssertFalse(stored)
         XCTAssertFalse(peer.messages.contains { $0.topic == "map.cell.end" }, "cancelled epoch never sends an end")
         XCTAssertTrue(link.cachedCells.isEmpty)
+    }
+
+    func testVisibleReplacementWaitsForMatchingNativeDecode() async throws {
+        let peer = CorridorPeer()
+        let link = CorridorLink(timeout: .milliseconds(20)) { try await peer.send($0, $1) }
+        peer.receive = link.consume
+        _ = await link.open(scene: "scene-1")
+        let view = try CorridorViewport(x: 0, y: 0), cell = view.visibleCells[0]
+        _ = await link.sendCell(cell, data: Data(repeating: 42, count: 100))
+        _ = await link.sendView(view)
+        peer.reply(topic: "map.stream.state", body: ["epoch": .string(link.epoch!), "displayedSeq": .number(1),
+            "code": .string("ok"), "missing": .array([])])
+        let unconfirmed = await link.sendCell(cell, data: Data(repeating: 43, count: 100))
+        XCTAssertFalse(unconfirmed, "stored bytes alone cannot release a visible replacement decode slot")
     }
 
     private func number(_ body: [String: JSONValue], _ key: String) -> Double {

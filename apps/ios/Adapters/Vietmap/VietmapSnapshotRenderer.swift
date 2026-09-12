@@ -55,6 +55,13 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
                        y: centerWorld.y + x * sin(angle) + y * cos(angle))
     }
 
+    /// A crop in the epoch's screen plane: same zoom/heading, never a refitted camera.
+    func window(_ rect: CGRect) -> Self {
+        Self(size: rect.size, scale: scale, pitch: pitch, heading: heading,
+            userVerticalFraction: userVerticalFraction, overlayInsets: overlayInsets, zoom: zoom,
+            center: Self.coordinate(worldPoint(for: CGPoint(x: rect.midX, y: rect.midY)), zoom: zoom))
+    }
+
     static func make(_ request: VietmapSnapshotRequest) throws -> Self {
         guard request.route.points.count >= 2,
               request.headingDegrees.isFinite,
@@ -324,7 +331,7 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
     private var applicationActive = true
     private var deadlineTask: Task<Void, Never>?
     private var renderGeneration = 0
-    private let backgroundRenderer: VietmapCPURenderer
+    let backgroundRenderer: VietmapCPURenderer
 
     init(backgroundRenderer: VietmapCPURenderer = VietmapCPURenderer()) {
         self.backgroundRenderer = backgroundRenderer

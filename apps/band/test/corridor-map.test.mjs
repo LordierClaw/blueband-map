@@ -79,3 +79,25 @@ test("route-progress cell replacement keeps the decoded old pixels until new pix
   assert.equal(state.count, 10)
   assert.equal(state.decoded("0:0", "old-0:0"), false)
 })
+
+test("long curved corridor replay keeps full coverage and bounded files across content changes", async () => {
+  const { default: corridor } = await import("./helpers/corridor.mjs")
+  const state = corridor.create("replay")
+  for (let seq = 1; seq <= 600; seq++) {
+    const x = Math.round(36 * Math.sin(seq / 40)), y = seq * 4
+    const requested = state.request(seq, x, y)
+    assert.equal(requested.ok, true)
+    for (const key of requested.missing) {
+      assert.equal(state.store(key, `file-${seq}-${key}`, 100, `hash-${key}`).ok, true)
+    }
+    for (const item of state.images()) state.decoded(item.key, item.uri)
+    assert.equal(state.position.seq, seq)
+    const underCursor = `${Math.floor((106 - x) / 128)}:${Math.floor((374 - y) / 128)}`
+    assert.equal(state.store(underCursor, `progress-${seq}`, 100, `route-${seq}`).ok, true)
+    assert.ok(state.images().length <= 24)
+    for (const item of state.images()) state.decoded(item.key, item.uri)
+    state.takeRetired()
+    assert.ok(state.count <= 30)
+    assert.deepEqual(state.images().filter(image => image.opacity === 1).map(image => image.key).sort(), corridor.cells(x, y).sort())
+  }
+})

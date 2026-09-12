@@ -23,7 +23,11 @@ doctor:
 bootstrap:
 	docker compose pull swift node-rpk node-lab
 
-test: test-swift test-rpk test-lab test-ios-metadata test-location-runtime test-vietmap-smoke test-handoff
+test: test-swift test-rpk test-lab test-ios-metadata test-ios-syntax test-location-runtime test-vietmap-smoke test-handoff
+
+.PHONY: test-ios-syntax
+test-ios-syntax:
+	docker compose run --rm swift bash -lc 'find /workspace/apps/ios/App /workspace/apps/ios/Adapters /workspace/apps/ios/Tests -name "*.swift" -print0 | xargs -0 swiftc -frontend -parse'
 
 .PHONY: test-location-runtime
 test-location-runtime:

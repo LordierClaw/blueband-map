@@ -9,6 +9,29 @@ import BlueBandMapCore
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
 
+    func testCellKeepsBasePixelsAndUsesTheSharedRotatedPlane() throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106), forward = GeoPoint(latitude: 10.001, longitude: 106.001)
+        let route = RoutePlan(points: [origin, forward], instructions: [], distanceMeters: 150)
+        let context = CGContext(data: nil, width: 256, height: 256, bitsPerComponent: 8, bytesPerRow: 1024,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1))
+        context.fill(CGRect(x: 11, y: 29, width: 67, height: 103))
+        let base = try XCTUnwrap(context.makeImage())
+        for heading in [0.0, 37, 90, 180, 327] {
+            let request = VietmapSnapshotRequest(route: route, matchedPosition: origin,
+                overlayGeometry: .init(subdued: [], traveled: [], active: [], context: []),
+                headingDegrees: heading, nextManeuver: forward, tileMapKey: "fixture-key")
+            let plane = try VietmapSnapshotConfiguration.make(request)
+            let bounds = CGRect(x: -128, y: 256, width: 128, height: 128), cell = plane.window(bounds)
+            for point in route.points {
+                XCTAssertEqual(cell.point(for: point).x, plane.point(for: point).x - bounds.minX, accuracy: 0.0001)
+                XCTAssertEqual(cell.point(for: point).y, plane.point(for: point).y - bounds.minY, accuracy: 0.0001)
+            }
+            let output = try VietmapCPURenderer.cellImage(base: base, request: request, configuration: cell)
+            XCTAssertEqual(base.dataProvider?.data as Data?, output.dataProvider?.data as Data?, "base must not flip under the route")
+        }
+    }
+
     func testCPUCellsReuseBaseAtlasButUpdateRoutePixels() async throws {
         let origin = GeoPoint(latitude: 10, longitude: 106)
         let forward = GeoPoint(latitude: 10.001, longitude: 106)

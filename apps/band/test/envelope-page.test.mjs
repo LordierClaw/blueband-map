@@ -146,11 +146,16 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
     assert.equal(page.streamVisible, true)
     const writes = file.writes.length
-    page.receiveMessage({ data: envelope("view2", "map.stream.view", { epoch: "e1", seq: 2, x: 0, y: 4 }) })
+    const priorDestination = page.navDestinationStyle
+    const view2 = { epoch: "e1", seq: 2, x: 0, y: 4,
+      destinationMode: "visible", destinationX: 106, destinationY: 290 }
+    page.receiveMessage({ data: envelope("view2", "map.stream.view", view2) })
+    assert.equal(page.navDestinationStyle, priorDestination, "destination must wait for matching coverage")
     for (const key of corridorMap.cells(0, 4).filter(key => !page.streamState.has(key))) streamCell(page, key)
-    page.receiveMessage({ data: envelope("view2-retry", "map.stream.view", { epoch: "e1", seq: 2, x: 0, y: 4 }) })
+    page.receiveMessage({ data: envelope("view2-retry", "map.stream.view", view2) })
     for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
     assert.equal(page.streamState.position.y, 4)
+    assert.equal(page.navDestinationStyle, "left:92px;top:273px;")
     assert.equal(file.writes.length - writes, 2, "only the entering row is transferred")
     page.receiveMessage({ data: envelope("view3", "map.stream.view", { epoch: "e1", seq: 3, x: 0, y: 8 }) })
     assert.equal(page.streamState.position.y, 8)

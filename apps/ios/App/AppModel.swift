@@ -84,6 +84,8 @@ final class AppModel: ObservableObject {
     private let cellRender: @Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data
     private let locationClient: ForegroundLocationClient
     private let renderCoordinator: RouteCardRenderCoordinator
+    private let routeCardSender: any RouteCardSessionSending
+    private let corridorLink: CorridorLink
     private let updateClock: any BlueBandClock
     private let defaults: UserDefaults
     private let scanDuration: Duration
@@ -114,6 +116,16 @@ final class AppModel: ObservableObject {
     private var snapshotIsTransmitting = false
     private var lastMapDisplayedAt: Date?
     private var guidanceBearingPolicy = GuidanceBearingPolicy()
+    private var corridorPlane: VietmapSnapshotConfiguration?
+    private var corridorRoute: RoutePlan?
+    private var corridorLatest: SnapshotRefreshRequest?
+    private var pendingCorridorCells: SnapshotRefreshRequest?
+    private var pendingCorridorView: SnapshotRefreshRequest?
+    private var corridorTask: Task<Void, Never>?
+    private var corridorViewTask: Task<Void, Never>?
+    private var corridorCloseTask: Task<Void, Never>?
+    private var corridorGeneration = 0
+    private var corridorUnavailable = false
 
     init(
         keyStore: any AuthKeyStoreProtocol,
@@ -127,9 +139,7 @@ final class AppModel: ObservableObject {
         locationClient: ForegroundLocationClient,
         routeCardSession: (any RouteCardSessionSending)? = nil,
         snapshotRender: (@MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput)? = nil,
-        cellRender: @escaping @Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data = { _, _, _ in
-            throw VietmapSnapshotRenderer.Error.invalidRequest
-        },
+        cellRender: (@Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data)? = nil,
         updateClock: any BlueBandClock = ContinuousBlueBandClock(),
         defaults: UserDefaults = .standard,
         scanDuration: Duration = .seconds(15)
@@ -143,13 +153,16 @@ final class AppModel: ObservableObject {
         self.routeClient = routeClient
         self.snapshotRenderer = snapshotRenderer
         self.snapshotRender = snapshotRender ?? { try await snapshotRenderer.render($0) }
-        self.cellRender = cellRender
+        let cpuRenderer = snapshotRenderer.backgroundRenderer
+        self.cellRender = cellRender ?? { try await cpuRenderer.renderCell($0, plane: $1, cell: $2) }
         self.locationClient = locationClient
         self.updateClock = updateClock
         self.defaults = defaults
         self.scanDuration = scanDuration
-        self.renderCoordinator = RouteCardRenderCoordinator(
-            session: routeCardSession ?? BandSessionRouteCardSender(session: session), transferWindow: 4)
+        let sender = routeCardSession ?? BandSessionRouteCardSender(session: session)
+        self.routeCardSender = sender
+        self.corridorLink = CorridorLink { try await sender.sendAwaitingAcknowledgement(topic: $0, body: $1) }
+        self.renderCoordinator = RouteCardRenderCoordinator(session: sender, transferWindow: 4)
         destinationLatitudeInput = defaults.string(forKey: "destinationLatitude") ?? ""
         destinationLongitudeInput = defaults.string(forKey: "destinationLongitude") ?? ""
         rememberedBand = bandStore.load()
@@ -162,6 +175,7 @@ final class AppModel: ObservableObject {
             locationNeedsSettings = locationClient.needsSettings
             logNavigation("gps.health", locationClient.diagnostic)
         }
+        corridorLink.onDisplay = { [weak self] view, seq in self?.corridorDisplayed(view, sequence: seq) }
     }
 
     var pickerCandidates: [BandCandidate] { BandCandidateOrdering.order(candidates, remembered: rememberedBand) }
@@ -329,6 +343,8 @@ final class AppModel: ObservableObject {
 
     func stopNavigation() {
         navigationGeneration += 1
+        invalidateCorridor()
+        corridorUnavailable = false
         rerouteTask?.cancel()
         rerouteTask = nil
         pendingReroute = nil
@@ -383,6 +399,7 @@ final class AppModel: ObservableObject {
     private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String, generation: Int) async {
         defer {
             if generation == navigationGeneration {
+                invalidateCorridor()
                 locationClient.stop()
                 rerouteTask?.cancel()
                 rerouteTask = nil
@@ -624,7 +641,6 @@ final class AppModel: ObservableObject {
         generation: Int
     ) async throws -> PreparedSnapshot {
         let route = request.route, progress = request.progress, location = request.location
-        let tileMapKey = request.tileMapKey, bearingDegrees = request.bearingDegrees
         try checkNavigationOwner(generation)
         guard !renderCoordinator.requiresReconnect else {
             throw NavigationRuntimeError.bandDisplayFailed("TRANSFER_RECONNECT_REQUIRED")
@@ -638,28 +654,7 @@ final class AppModel: ObservableObject {
             horizontalAccuracyMeters: location.horizontalAccuracy
         )
         let instruction = selection?.instruction ?? route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
-        let maneuverIndex = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
-        let forwardPoint = GuidancePresentationPolicy.forwardPoint(
-            route: route,
-            progress: progress,
-            selection: selection
-        ) ?? route.points[maneuverIndex]
-        let snapshot = try await snapshotRender(VietmapSnapshotRequest(
-            route: route,
-            matchedPosition: progress.matchedLocation ?? location.geoPoint,
-            overlayGeometry: selection.map {
-                RouteOverlayGeometry.make(route: route, progress: progress, selection: $0)
-            } ?? RouteOverlayGeometry(
-                subdued: route.points,
-                traveled: Array(route.points.prefix(progress.pointIndex + 1)),
-                active: Array(route.points.dropFirst(progress.pointIndex)),
-                context: []
-            ),
-            headingDegrees: bearingDegrees,
-            nextManeuver: forwardPoint,
-            tileMapKey: tileMapKey,
-            profile: .colors16Labels
-        ))
+        let snapshot = try await snapshotRender(mapRequest(request))
         try checkNavigationOwner(generation)
         let encoded = try SnapshotImageEncoder.encode(snapshot.image)
         let asset = try RenderAsset(
@@ -763,14 +758,22 @@ final class AppModel: ObservableObject {
         bearingDegrees: Double,
         reason: String
     ) {
-        let queued = snapshotRefreshTask != nil
-        pendingSnapshotRefresh = SnapshotRefreshRequest(
+        let request = SnapshotRefreshRequest(
             route: route,
             progress: progress,
             location: location,
             tileMapKey: tileMapKey,
             bearingDegrees: bearingDegrees
         )
+        if corridorPlane != nil {
+            if acceptsCorridor(request) {
+                queueCorridor(request)
+                return
+            }
+            invalidateCorridor()
+        }
+        let queued = snapshotRefreshTask != nil
+        pendingSnapshotRefresh = request
         logNavigation(
             "map.refresh.scheduled",
             "reason=\(reason) bearing=\(Int(bearingDegrees.rounded())) " +
@@ -831,6 +834,10 @@ final class AppModel: ObservableObject {
             guard generation == navigationGeneration, !Task.isCancelled,
                   var request = pendingSnapshotRefresh else { return }
             do {
+                let closing = corridorCloseTask
+                corridorCloseTask = nil
+                await closing?.value
+                try checkNavigationOwner(generation)
                 var prepared: PreparedSnapshot?
                 if let task = nextSnapshotPreparation {
                     let candidate = try await task.value
@@ -867,6 +874,7 @@ final class AppModel: ObservableObject {
                     horizontalAccuracyMeters: guidance.location.horizontalAccuracy,
                     status: .navigating
                 )
+                if await startCorridor(frame, generation: generation) { return }
             } catch is CancellationError {
                 guard generation == navigationGeneration else { return }
                 snapshotIsTransmitting = false
@@ -896,6 +904,175 @@ final class AppModel: ObservableObject {
                     status: .limitedMap
                 )
                 logNavigation("map.refresh.failed", "code=\(Self.navigationErrorCode(for: error)) \(Self.navigationErrorDetail(for: error))")
+            }
+        }
+    }
+
+    private func mapRequest(_ request: SnapshotRefreshRequest) -> VietmapSnapshotRequest {
+        let route = request.route, progress = request.progress
+        let selection = GuidancePresentationPolicy.select(route: route, progress: progress,
+            horizontalAccuracyMeters: request.location.horizontalAccuracy)
+        let instruction = selection?.instruction ?? route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
+        let end = min(instruction?.interval.upperBound ?? route.points.count - 1, route.points.count - 1)
+        return VietmapSnapshotRequest(route: route, matchedPosition: progress.matchedLocation ?? request.location.geoPoint,
+            overlayGeometry: selection.map { RouteOverlayGeometry.make(route: route, progress: progress, selection: $0) } ??
+                RouteOverlayGeometry(subdued: route.points, traveled: Array(route.points.prefix(progress.pointIndex + 1)),
+                    active: Array(route.points.dropFirst(progress.pointIndex)), context: []),
+            headingDegrees: request.bearingDegrees,
+            nextManeuver: GuidancePresentationPolicy.forwardPoint(route: route, progress: progress, selection: selection) ?? route.points[end],
+            tileMapKey: request.tileMapKey, profile: .colors16Labels)
+    }
+
+    private func corridorViewport(_ request: SnapshotRefreshRequest, plane: VietmapSnapshotConfiguration) throws -> CorridorViewport {
+        let point = plane.point(for: request.progress.matchedLocation ?? request.location.geoPoint)
+        let x = (106 - point.x).rounded(), y = (374 - point.y).rounded()
+        guard x.isFinite, y.isFinite, abs(x) <= 32768, abs(y) <= 32768 else { throw CorridorViewport.Error.invalidOffset }
+        return try CorridorViewport(x: Int(x), y: Int(y))
+    }
+
+    private func acceptsCorridor(_ request: SnapshotRefreshRequest) -> Bool {
+        guard let plane = corridorPlane, corridorRoute == request.route, corridorLink.failure == nil,
+              let desired = try? VietmapSnapshotConfiguration.make(mapRequest(request)),
+              desired.zoom == plane.zoom, let view = try? corridorViewport(request, plane: plane) else { return false }
+        let angle = abs(desired.heading - plane.heading)
+        guard min(angle, 360 - angle) <= 15 else { return false }
+        if let displayed = corridorLink.displayedViewport,
+           max(abs(view.x - displayed.x), abs(view.y - displayed.y)) > 128 { return false }
+        return true
+    }
+
+    private func startCorridor(_ frame: PreparedSnapshot, generation: Int) async -> Bool {
+        guard !corridorUnavailable, let scene = activeSceneID else { return false }
+        corridorPlane = frame.snapshot.configuration
+        corridorRoute = frame.request.route
+        corridorLatest = pendingSnapshotRefresh ?? frame.request
+        let owner = corridorGeneration
+        let enabled = await corridorLink.open(scene: scene)
+        guard generation == navigationGeneration, owner == corridorGeneration, !Task.isCancelled else { return false }
+        let latest = corridorLatest ?? frame.request
+        guard enabled else {
+            corridorUnavailable = true
+            invalidateCorridor()
+            if latest.location.timestamp != frame.request.location.timestamp { pendingSnapshotRefresh = latest }
+            logNavigation("map.stream.fallback", "peer did not confirm corridor capability; keep full-frame refresh")
+            return false
+        }
+        nextSnapshotPreparation?.cancel(); nextSnapshotPreparation = nil
+        pendingSnapshotRefresh = nil
+        guard acceptsCorridor(latest) else {
+            invalidateCorridor(); pendingSnapshotRefresh = latest
+            return false
+        }
+        logNavigation("map.stream.open", "scene=\(scene) cell=128 files=30 resident=24")
+        queueCorridor(latest)
+        return true
+    }
+
+    private func queueCorridor(_ request: SnapshotRefreshRequest) {
+        corridorLatest = request
+        pendingCorridorCells = request; pendingCorridorView = request
+        guard corridorLink.ready else { return }
+        let owner = corridorGeneration
+        if corridorViewTask == nil {
+            corridorViewTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { if owner == corridorGeneration { corridorViewTask = nil } }
+                while let fix = pendingCorridorView, let plane = corridorPlane,
+                      owner == corridorGeneration, !Task.isCancelled {
+                    pendingCorridorView = nil
+                    guard let view = try? corridorViewport(fix, plane: plane) else { fallbackCorridor(fix, code: "offset"); return }
+                    let config = plane.window(CGRect(x: -view.x, y: -view.y, width: 212, height: 520))
+                    let destination = destinationPresentation(status: .navigating, marker: Self.fixedNavigationMarker,
+                        mask: .smartBand10PhotoEstimate, configuration: config)
+                    let sent = await corridorLink.sendView(view, destinationMode: destination.mode,
+                        destination: destination.point, fixTimestamp: fix.location.timestamp)
+                    guard owner == corridorGeneration, !Task.isCancelled else { return }
+                    if !sent { fallbackCorridor(fix, code: corridorLink.failure ?? "view"); return }
+                }
+            }
+        }
+        if corridorTask == nil {
+            corridorTask = Task { @MainActor [weak self] in await self?.drainCorridor(owner: owner) }
+        }
+    }
+
+    private func drainCorridor(owner: Int) async {
+        defer { if owner == corridorGeneration { corridorTask = nil } }
+        updates: while let fix = pendingCorridorCells, let plane = corridorPlane,
+                       owner == corridorGeneration, !Task.isCancelled {
+            pendingCorridorCells = nil
+            do {
+                let view = try corridorViewport(fix, plane: plane), request = mapRequest(fix)
+                // Let the small position message pin coverage before transferring any files.
+                await corridorViewTask?.value
+                guard owner == corridorGeneration, !Task.isCancelled else { return }
+                let missing = view.visibleCells.filter { !corridorLink.cachedCells.contains($0.key) }
+                for cell in missing {
+                    if pendingCorridorCells != nil { continue updates }
+                    try await sendCorridorCell(cell, request: request, plane: plane, owner: owner)
+                }
+                if pendingCorridorCells != nil { continue updates }
+                guard await corridorLink.waitForDisplay() else { throw NavigationRuntimeError.bandDisplayFailed("CORRIDOR_DECODE") }
+                // Missing coverage first; only then replace changed route pixels in resident cells.
+                for cell in view.visibleCells where !missing.contains(cell) {
+                    if pendingCorridorCells != nil { continue updates }
+                    try await sendCorridorCell(cell, request: request, plane: plane, owner: owner)
+                }
+                let forward = plane.point(for: request.nextManeuver)
+                let target = ScreenPoint(x: Int(max(-100000, min(100000, forward.x))), y: Int(max(-100000, min(100000, forward.y))))
+                for cell in view.prioritizedCells(toward: target) where !corridorLink.cachedCells.contains(cell.key) {
+                    if pendingCorridorCells != nil { continue updates }
+                    try await sendCorridorCell(cell, request: request, plane: plane, owner: owner)
+                }
+            } catch {
+                guard owner == corridorGeneration, !Task.isCancelled else { return }
+                fallbackCorridor(corridorLatest ?? fix, code: corridorLink.failure ?? Self.navigationErrorCode(for: error))
+                return
+            }
+        }
+    }
+
+    private func sendCorridorCell(_ cell: CorridorCell, request: VietmapSnapshotRequest,
+                                  plane: VietmapSnapshotConfiguration, owner: Int) async throws {
+        let started = Date()
+        let bytes = try await cellRender(request, plane, cell)
+        guard owner == corridorGeneration, !Task.isCancelled else { throw CancellationError() }
+        guard await corridorLink.sendCell(cell, data: bytes) else { throw NavigationRuntimeError.bandDisplayFailed("CORRIDOR_CELL") }
+        guard owner == corridorGeneration, !Task.isCancelled else { throw CancellationError() }
+        logNavigation("map.cell.ready", "cell=\(cell.key) encodedBytes=\(bytes.count) totalMs=\(Int(Date().timeIntervalSince(started) * 1000)) files=\(corridorLink.cachedCells.count)")
+    }
+
+    private func corridorDisplayed(_ view: CorridorViewport, sequence: Int) {
+        guard let plane = corridorPlane, let timestamp = corridorLink.displayedFixTimestamp else { return }
+        activeSnapshotConfiguration = plane.window(CGRect(x: -view.x, y: -view.y, width: 212, height: 520))
+        displayedFixTimestamp = timestamp
+        let now = Date(), age = Int(max(0, now.timeIntervalSince(timestamp) * 1000))
+        lastMapFixAgeMilliseconds = age
+        if age >= 5000 { latencyViolations += 1 }
+        logNavigation("map.stream.displayed", "seq=\(sequence) offset=\(view.x),\(view.y) fixAgeMs=\(age) frameGapMs=\(lastMapDisplayedAt.map { Int(now.timeIntervalSince($0) * 1000) } ?? 0)")
+        lastMapDisplayedAt = now
+    }
+
+    private func fallbackCorridor(_ request: SnapshotRefreshRequest, code: String) {
+        invalidateCorridor()
+        logNavigation("map.stream.fallback", "code=\(code)")
+        scheduleRefresh(route: request.route, progress: request.progress, location: request.location,
+            tileMapKey: request.tileMapKey, bearingDegrees: request.bearingDegrees, reason: "corridor-recovery")
+    }
+
+    private func invalidateCorridor() {
+        corridorGeneration += 1
+        corridorTask?.cancel(); corridorTask = nil
+        corridorViewTask?.cancel(); corridorViewTask = nil
+        corridorPlane = nil; corridorRoute = nil; corridorLatest = nil
+        pendingCorridorCells = nil; pendingCorridorView = nil
+        let old = corridorLink.epoch
+        corridorLink.reset()
+        if let old {
+            let sender = routeCardSender, preceding = corridorCloseTask
+            corridorCloseTask = Task {
+                await preceding?.value
+                _ = try? await sender.sendAwaitingAcknowledgement(topic: "map.stream.close", body: ["epoch": .string(old)])
             }
         }
     }
@@ -1123,6 +1300,7 @@ final class AppModel: ObservableObject {
         case let .sent(envelope): append(envelope, delivery: .sent)
         case let .received(envelope):
             renderCoordinator.consume(envelope)
+            corridorLink.consume(envelope)
             append(envelope, delivery: .received)
         case let .acknowledged(id):
             if let index = events.lastIndex(where: { $0.id == id }) { events[index].delivery = .acknowledged }
