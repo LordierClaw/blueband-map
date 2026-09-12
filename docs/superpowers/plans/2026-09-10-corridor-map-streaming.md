@@ -32,7 +32,7 @@
 ## 4. Verification and handoff
 
 - [x] Run `make test`, `make lint`, `git diff --check`; independently review changed contracts and call sites inline.
-- [ ] Run full iOS CI including renderer/integration tests. Bump each changed component version/build; package current IPA/RPK with hashes and concise manual checks.
+- [x] Run full iOS CI including renderer/integration tests. Bump each changed component version/build; package current IPA/RPK with hashes and concise manual checks.
 - [ ] Validate Vela transforms, clipping and image resource retirement on real Band, including blur/resume and locked iPhone. Report physical latency separately from automated evidence; do not claim near-realtime hardware behavior without measurements.
 
 ## Current checkpoint (2026-09-12)
@@ -42,7 +42,7 @@
 - Final candidate `6db094b` adds path-local recoloring, transient native-cleanup backpressure, retained-map recovery and component versions 0.5.21 (37) / 0.6.16 (31). Its iOS CI `34677326119` passed 95 tests, arm64 artifact inspection and IPA export. Linux: 193 Swift, 48 Band, 19 lab tests, location/metadata/syntax/provider/handoff checks plus lint pass.
 - Band replay covers 600 curved movement/content-replacement steps with exact viewport coverage, ≤30 retained cell files and ≤24 mounted cell nodes. Native decoder memory reclamation is still a hardware gate, not proven by these tests.
 - `map.stream.displayed` records the confirmed fix timestamp, offset and frame gap; `map.cell.ready` records encoded bytes, total preparation/transfer wait and known file count. Actual hardware write/decode timings, RAM and locked-screen/blur acceptance are still pending. No extrapolated positions or fabricated latency measurements.
-- USB checks on this host show no Apple device and inactive usbmuxd. The current uploaded log is build 0.5.18 (34), dated September 7, not evidence for the new version. Current handoff files must not be replaced until final CI and artifact checks succeed.
+- USB checks on this host show no Apple device and inactive usbmuxd. The current uploaded log is build 0.5.18 (34), dated September 7, not evidence for the new version. After all four CI runs passed, the downloaded IPA/RPK were inspected and packaged in `artifacts/handoff` with matching hashes. The previous handoff was copied to `/tmp/blueband-corridor-release.ayWrbG/previous-handoff` before replacement. Hardware acceptance remains open.
 
 ## Historical checkpoint (2026-09-10; superseded by the section above)
 
