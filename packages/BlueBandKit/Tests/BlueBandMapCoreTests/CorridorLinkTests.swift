@@ -10,6 +10,8 @@ final class CorridorLinkTests: XCTestCase {
         let enabled = await link.open(scene: "scene-1")
         XCTAssertFalse(enabled)
         XCTAssertFalse(link.ready)
+        XCTAssertTrue(link.diagnostic.contains("mode=full"))
+        XCTAssertTrue(link.diagnostic.contains("failure=unsupportedOrTimeout"))
     }
 
     func testNativeCleanupBackpressureRetriesAdmissionWithoutResettingTheMap() async throws {
@@ -31,6 +33,7 @@ final class CorridorLinkTests: XCTestCase {
         peer.receive = link.consume
         let enabled = await link.open(scene: "scene-1")
         XCTAssertTrue(enabled)
+        XCTAssertTrue(link.diagnostic.contains("mode=loading"))
         let cell = try XCTUnwrap(CorridorViewport(x: 0, y: 0).visibleCells.first)
         let data = Data(repeating: 0xA5, count: 1024)
         let stored = await link.sendCell(cell, data: data)
@@ -75,6 +78,7 @@ final class CorridorLinkTests: XCTestCase {
             "displayedSeq": .number(1), "code": .string("ok"), "missing": .array([])])
         XCTAssertEqual(link.displayedViewport, view)
         XCTAssertEqual(link.displayedFixTimestamp, timestamp, "latency must use the displayed fix, not the newest pending GPS")
+        XCTAssertTrue(link.diagnostic.contains("mode=tiles sent=1 displayed=1"))
         _ = await link.open(scene: "scene-2")
         XCTAssertNotEqual(link.epoch, oldEpoch)
         peer.reply(topic: "map.stream.state", body: ["epoch": .string(oldEpoch), "seq": .number(1),

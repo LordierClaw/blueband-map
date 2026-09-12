@@ -42,21 +42,27 @@ still appears only every few seconds and the directional artwork is too thin.
 There is no new device log. Do not treat the older 0.5.18 export as evidence for
 this release or claim a measured one-second device result.
 
-- [ ] Reproduce replacement/decode circular wait in the actual page runtime:
+- [x] Reproduce replacement/decode circular wait in the actual page runtime:
   show view `(0,0)`, request `(0,4)` with its entering row missing, replace `0:0`,
   require `map.cell.decoded` before sending that row. Run `make test-rpk-runtime`;
   expected RED: the replacement node is absent.
-- [ ] Mount available pending files incrementally in `corridorMap.images()` using
+- [x] Mount available pending files incrementally in `corridorMap.images()` using
   `wanted ? wanted.keys.map(key => files[key]).filter(Boolean) : []`;
   retain the existing all-decoded promotion and 24-node bound. Run the same test
   and `make test-corridor`; verify old pixels remain until complete coverage and
   28 subsequent cached views move without file writes.
-- [ ] Inspect sender prefetch scheduling with a slow cell transfer and advancing
+- [x] Inspect sender prefetch scheduling with a slow cell transfer and advancing
   GPS. Only change priority after a failing behavioral test reproduces starvation.
-- [ ] Preserve upstream Mapbox roundabout geometry, directions and the 44x56 HUD
+  CI `34694659756` at `80bedda` fails exactly the first-forward-cell priority
+  assertion; its other 94 iOS tests pass. Move the existing forward-file loop
+  before visible-cell recoloring. The next iOS CI must verify GREEN.
+- [x] Preserve upstream Mapbox roundabout geometry, directions and the 44x56 HUD
   footprint; rasterize at higher source resolution with a rounded cyan stroke
   matching the existing Material arrows. Inspect the generated native-size PNGs.
   Keep icon mapping, unrelated artwork and Xiaomi wire bytes unchanged.
+- [x] Add persistent export mode/last reset plus separate cell prepare/link timing.
+  Portable diagnostic tests fail behaviorally with an empty report, then pass
+  with `full/loading/tiles`, sent/displayed sequence and failure reporting.
 - [ ] Run `make test`, `make lint`, `git diff --check`, then component-specific
   version/build bumps, CI/package checks and an updated handoff. Report code/test
   evidence separately from the remaining device cadence measurement.

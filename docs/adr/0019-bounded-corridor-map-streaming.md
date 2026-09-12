@@ -1,6 +1,6 @@
 # 0019 — Bounded corridor map streaming
 
-Status: implementation in progress; not released or hardware-accepted.
+Status: released in iOS 0.5.21 / Band 0.6.16; device feedback reports insufficient cadence. Follow-up repair in progress; near-realtime hardware acceptance is not met.
 
 ## Decision
 
@@ -9,6 +9,11 @@ Keep the current 212×520 full-frame bootstrap/recovery path and unchanged Xiaom
 Each camera epoch uses the confirmed full map's projection, zoom, heading and top-left origin. Cells are 128×128 PNGs at integer `(column,row)` coordinates in that plane. The fixed cursor remains at (106,374). Small absolute translation updates move the mosaic beneath it. A change of route, zoom or significant heading uses a new confirmed full frame and epoch; files from different epochs cannot compose together. Route/HUD/destination registration must use that same camera and translation.
 
 Demand priority: current viewport, then one viewport shifted along the forthcoming route by at most one cell, then nothing. Do not fetch all neighboring directions. iOS keeps a latest-only request and one cell transfer, using the verified transport window of four; navigation messages remain independent. Band computes coverage itself and pins the current and requested viewport. No blank viewport is promoted; missing/decode-failed cells retain the last complete frame.
+
+Missing forward-margin files precede recoloring already-visible route pixels.
+Otherwise a new GPS fix arriving during each recoloring transfer repeatedly
+restarts the latest-only drain before it reaches prefetch. Guidance/translation
+remain independent; route recoloring uses any capacity left after coverage.
 
 ## Bounds and ownership
 
@@ -19,6 +24,13 @@ Demand priority: current viewport, then one viewport shifted along the forthcomi
 - Stop, disconnect, new confirmed full frame and close retire the epoch. A recovery close with `retain:true` freezes only the last decoded viewport, discards staging/prefetch, and rejects further updates to that epoch. The next confirmed full frame retires those frozen images; this avoids flashing the initial snapshot while the new camera loads. Late write/decode/delete callbacks must not mutate another epoch. Delete only owned `cell-` files, never directories or provider caches.
 - On startup, list the app's files and remove only canonical `cell-*.png` files before accepting a stream. A failed list or deletion keeps streaming disabled; the existing full-frame path remains available.
 - A cell key identifies a region, not immutable pixels. The SHA-256 identifies its content. Route-progress changes may replace a cell: retain the old decoded URI until the new URI completes, then retire the old file. Both versions count toward the file/resident bounds. Vela list identity is the URI, not the shared cell key.
+
+Available pending files must mount for decoding even if another file in the target
+viewport is missing. Promotion still requires every target file to be decoded.
+Waiting to mount until all files arrive creates a circular wait: iOS awaits a
+visible replacement's decode reply before sending the missing entering row, while
+Band awaits that row before decoding the replacement. The actual-page regression
+reproduces this ordering and preserves the old map until full coverage is ready.
 
 ## Independent application vectors
 

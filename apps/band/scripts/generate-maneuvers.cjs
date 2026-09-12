@@ -29,7 +29,12 @@ async function main() {
   }
   for (const direction of ['straight', 'left', 'right']) {
     const svg = await readFile(resolve(__dirname, `../vendor/mapbox-directions/roundabout_${direction}.svg`), 'utf8')
-    const image = await loadImage(Buffer.from(svg.replaceAll('#000000', '#00e5ff')))
+    // Keep the upstream path; match the Material arrows' ~4px stem and avoid
+    // enlarging an already-rasterized 20px bitmap into the 44px HUD footprint.
+    const artwork = svg.replace('width="20" height="20"', 'width="88" height="88"')
+      .replaceAll('#000000', '#00e5ff')
+      .replace('<path ', '<path stroke="#00e5ff" stroke-width="0.7" stroke-linejoin="round" ')
+    const image = await loadImage(Buffer.from(artwork))
     const canvas = createCanvas(44, 56)
     canvas.getContext('2d').drawImage(image, 0, 6, 44, 44)
     await writeFile(resolve(__dirname, `../src/common/maneuver-roundabout-${direction}.png`), canvas.toBuffer('image/png'))

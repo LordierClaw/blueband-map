@@ -25,6 +25,12 @@ public final class CorridorLink {
     private var decodedHash: String?
     private var expectedHash: String?
 
+    public var diagnostic: String {
+        let mode = !ready ? "full" : displayedSequence < 0 ? "loading" : "tiles"
+        return "mode=\(mode) sent=\(sequence) displayed=\(displayedSequence) files=\(cachedCells.count) " +
+            "cell=\(cellInFlight ?? "none") failure=\(failure ?? "none")"
+    }
+
     public init(timeout: Duration = .seconds(3), send: @escaping Send) {
         self.timeout = timeout
         self.send = send
