@@ -86,6 +86,15 @@ final class InterconnectSessionTests: XCTestCase {
         var events = await session.events().makeAsyncIterator()
         try await session.receive(.statusRequest(identity))
         _ = await events.next()
+        let observed = expectation(description: "correlated send and ACK telemetry")
+        observed.expectedFulfillmentCount = 2
+        await session.setPerformanceObserver { event, values in
+            if event == "ble.command" || event == "ble.ack" {
+                XCTAssertNotNil(values["requestId"])
+                XCTAssertNil(values["body"])
+                observed.fulfill()
+            }
+        }
         let id = try await session.send(topic: "system.echo", body: ["text": .string("PING")])
         let sent = await events.next()
         guard case .sent = sent else { return XCTFail("Expected sent event") }
@@ -93,6 +102,26 @@ final class InterconnectSessionTests: XCTestCase {
         try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
         let ackEvent = await events.next()
         XCTAssertEqual(ackEvent, .acknowledged(id))
+        await fulfillment(of: [observed], timeout: 1)
+    }
+
+    func testLateAcknowledgementRetainsTheObserverOwnedWhenCommandStarted() async throws {
+        let session = makeSession(recorder: CommandRecorder(), trust: MemoryTrustStore())
+        try await session.receive(.statusRequest(identity))
+        let original = expectation(description: "original operation command and ACK")
+        original.expectedFulfillmentCount = 2
+        await session.setPerformanceObserver { event, metrics in
+            guard event == "ble.command" || event == "ble.ack" else { return }
+            XCTAssertNotNil(metrics["operationStartedUptime"])
+            original.fulfill()
+        }
+        let id = try await session.send(topic: "system.echo", body: [:])
+        let replacement = expectation(description: "replacement observer must not receive old ACK")
+        replacement.isInverted = true
+        await session.setPerformanceObserver { _, _ in replacement.fulfill() }
+        let ack = ApplicationEnvelope.acknowledgement(id: id, source: .band)
+        try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
+        await fulfillment(of: [original, replacement], timeout: 0.2)
     }
 
     func testDeliveryFailsAfterClockReceivesFiveSecondsWithoutRetry() async throws {
@@ -244,6 +273,10 @@ final class InterconnectSessionTests: XCTestCase {
             }
         }
         let retry = await sender.waitForRetryCommand()
+        let operationStarts = await sender.operationStarts()
+        XCTAssertEqual(operationStarts.count, 2)
+        XCTAssertNotNil(operationStarts.first ?? nil)
+        XCTAssertEqual(operationStarts.first, operationStarts.last, "retry retains the original operation's session boundary")
         let envelope = try decodePhoneEnvelope(retry)
         let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
         try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
@@ -1045,10 +1078,12 @@ private actor FirstTimeoutClock: BlueBandClock {
 
 private actor BlockingRetryCommandSender {
     private var commands: [BandCommand] = []
+    private var starts: [TimeInterval?] = []
     private var retryWaiters: [CheckedContinuation<BandCommand, Never>] = []
 
     func send(_ command: BandCommand) async throws {
         guard command.subtype == 8 else { return }
+        starts.append(BandPerformanceContext.operationStartedUptime)
         commands.append(command)
         if commands.count == 1 { return }
         retryWaiters.forEach { $0.resume(returning: command) }
@@ -1062,6 +1097,7 @@ private actor BlockingRetryCommandSender {
     }
 
     func phoneSendCount() -> Int { commands.count }
+    func operationStarts() -> [TimeInterval?] { starts }
 }
 
 private enum TestSendError: Swift.Error, Equatable {

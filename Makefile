@@ -23,7 +23,7 @@ doctor:
 bootstrap:
 	docker compose pull swift node-rpk node-lab
 
-test: test-swift test-rpk test-lab test-ios-metadata test-ios-syntax test-location-runtime test-vietmap-smoke test-handoff
+test: test-perf test-swift test-rpk test-lab test-ios-metadata test-ios-syntax test-location-runtime test-vietmap-smoke test-handoff
 
 .PHONY: test-ios-syntax
 test-ios-syntax:
@@ -78,3 +78,13 @@ lint:
 clean:
 	docker compose run --rm node-rpk npm run clean
 	rm -rf -- packages/BlueBandKit/.build apps/ios/BlueBandMap.xcodeproj tools/protocol-lab/.coverage
+
+.PHONY: test-perf perf-report test-gps-replay
+test-perf:
+	python3 -m unittest discover -s tools/perf -p 'test_*.py'
+
+perf-report:
+	python3 tools/perf/report.py "$(RUN)" $(if $(SESSION),--session "$(SESSION)")
+
+test-gps-replay:
+	$(MAKE) -C ../blueband-map-route-test test

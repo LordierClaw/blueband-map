@@ -2,10 +2,13 @@ import CoreGraphics
 import CoreText
 import Foundation
 import BlueBandMapCore
+import BlueBandCore
 
 /// A bitmap-only renderer for an active navigation session while iOS prohibits GPU work.
 /// Uses the same camera, provider style selection, route strokes, and final encoder as the SDK.
 actor VietmapCPURenderer {
+    private var performanceObserver: (@Sendable () -> BandPerformanceObserver?)?
+    func setPerformanceObserver(_ observer: @escaping @Sendable () -> BandPerformanceObserver?) { performanceObserver = observer }
     private let transport: any MapHTTPTransport
     private var style: VietmapMapStyle?
     private var styleKey: String?
@@ -36,6 +39,7 @@ actor VietmapCPURenderer {
         // Two 768² @2x base atlases: 18 MiB RGBA. The 128 px gutter preserves edge labels.
         let bounds = CGRect(x: column * 512 - 128, y: row * 512 - 128, width: 768, height: 768)
         let base: CGImage
+        performanceObserver?()?("map.atlas", ["hit": .bool(atlases[key] != nil), "retained": .number(Double(atlases.count))])
         if let cached = atlases[key] { base = cached }
         else {
             let output = try await render(request, configuration: plane.window(bounds), baseOnly: true)
@@ -70,6 +74,7 @@ actor VietmapCPURenderer {
 
     func render(_ request: VietmapSnapshotRequest, configuration supplied: VietmapSnapshotConfiguration? = nil,
                 baseOnly: Bool = false) async throws -> VietmapSnapshotOutput {
+        let observer = performanceObserver?()
         try Task.checkCancellation()
         let started = Date()
         let configuration = try supplied ?? VietmapSnapshotConfiguration.make(request)
@@ -79,10 +84,12 @@ actor VietmapCPURenderer {
             styleKey = request.tileMapKey
         }
         if style == nil {
+            let styleStarted = ProcessInfo.processInfo.systemUptime
             let loadedStyle = try await VietmapStyleClient(transport: transport).loadMapStyle(tileMapKey: request.tileMapKey)
             try Task.checkCancellation()
             guard styleKey == request.tileMapKey else { throw CancellationError() }
             style = loadedStyle
+            observer?("provider.style", ["durationMs": .number((ProcessInfo.processInfo.systemUptime - styleStarted) * 1000)])
         }
         guard let style else { throw VietmapSnapshotRenderer.Error.styleLoadFailed }
         let loaded = Date()
@@ -95,13 +102,19 @@ actor VietmapCPURenderer {
             return tiles[url] == nil ? (url, coordinate.x, coordinate.y) : nil
         }
         let transport = transport
+        observer?("map.tileCache", ["misses": .number(Double(missing.count)),
+            "hits": .number(Double(coordinates.count - missing.count)), "retained": .number(Double(tiles.count))])
         try await withThrowingTaskGroup(of: (URL, VietmapSceneTile, Int).self) { group in
             func enqueue(_ item: (URL, Int, Int)) {
                 let (url, x, y) = item
                 group.addTask {
+                    let fetchStarted = ProcessInfo.processInfo.systemUptime
                     let response = try await transport.execute(MapHTTPRequest(method: "GET", url: url,
                         headers: ["Accept": "application/vnd.mapbox-vector-tile, application/x-protobuf"],
                         body: Data(), maximumResponseBytes: MapboxVectorTile.maximumBodyBytes))
+                    let fetched = ProcessInfo.processInfo.systemUptime
+                    observer?("provider.tile", ["fetchMs": .number((fetched - fetchStarted) * 1000),
+                        "bytes": .number(Double(response.body.count)), "status": .number(Double(response.statusCode))])
                     guard response.statusCode == 200 else { throw RouteCardAssetFactory.Error.tileHTTPStatus(response.statusCode) }
                     let type = response.header(named: "Content-Type")?.split(separator: ";").first?.lowercased()
                     guard type == nil || ["application/vnd.mapbox-vector-tile", "application/x-protobuf", "application/octet-stream", "text/plain"].contains(type!) else {
@@ -110,6 +123,7 @@ actor VietmapCPURenderer {
                     guard !response.body.isEmpty else { throw RouteCardAssetFactory.Error.tileEmpty }
                     try Task.checkCancellation()
                     let tile = try VietmapVectorTileDecoder.decode(response.body)
+                    observer?("provider.decode", ["decodeMs": .number((ProcessInfo.processInfo.systemUptime - fetched) * 1000)])
                     // Account for decoded geometry and strings, not only compressed HTTP bytes.
                     let cost = tile.layers.reduce(0) { total, layer in
                         total + layer.features.reduce(0) { cost, feature in

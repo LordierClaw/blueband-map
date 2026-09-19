@@ -19,6 +19,9 @@ public enum InterconnectDeliveryError: Swift.Error, Equatable, Sendable {
 }
 
 public actor InterconnectSession {
+    private var performanceObserver: BandPerformanceObserver?
+    public func setPerformanceObserver(_ observer: BandPerformanceObserver?) { performanceObserver = observer }
+
     private static let maximumCompletedOutgoingIDs = 64
 
     public enum Error: Swift.Error, Equatable {
@@ -34,6 +37,8 @@ public actor InterconnectSession {
     private struct PendingDelivery {
         let token: UUID
         let generation: UInt64
+        let operationStartedUptime: TimeInterval
+        let performanceObserver: BandPerformanceObserver?
         let retryCommand: BandCommand?
         let retryEnvelope: ApplicationEnvelope?
         var waiter: CheckedContinuation<String, Swift.Error>?
@@ -64,6 +69,7 @@ public actor InterconnectSession {
         trustedRPKStore: any TrustedRPKStore,
         clock: any BlueBandClock = ContinuousBlueBandClock(),
         idGenerator: @escaping IDGenerator = { "i-\(UUID().uuidString.prefix(12).lowercased())" },
+        performanceObserver: BandPerformanceObserver? = nil,
         sendCommand: @escaping CommandSender
     ) {
         self.expectedPackage = expectedPackage
@@ -71,6 +77,7 @@ public actor InterconnectSession {
         self.clock = clock
         self.idGenerator = idGenerator
         self.sendCommand = sendCommand
+        self.performanceObserver = performanceObserver
         var continuation: AsyncStream<InterconnectEvent>.Continuation!
         eventStream = AsyncStream(bufferingPolicy: .bufferingNewest(160)) { continuation = $0 }
         eventContinuation = continuation
@@ -95,6 +102,8 @@ public actor InterconnectSession {
                 if remember(envelope.id) { eventContinuation.yield(.received(envelope)) }
             case .ack:
                 guard var pending = pendingDeliveries[envelope.id] else { return }
+                observeDelivery("ble.ack", id: envelope.id, pending: pending,
+                    metrics: ["retryCount": .number(Double(pending.retryCount))])
                 if pending.timeoutTask != nil || pending.retryCount > 0 {
                     _ = removeDelivery(id: envelope.id, token: pending.token)
                     pending.timeoutTask?.cancel()
@@ -112,14 +121,20 @@ public actor InterconnectSession {
     @discardableResult
     public func send(topic: String, body: [String: JSONValue]) async throws -> String {
         guard !isTerminal, let identity else { throw Error.notReady }
+        let operationStarted = ProcessInfo.processInfo.systemUptime
         let currentGeneration = generation
         let envelope = ApplicationEnvelope.message(id: idGenerator(), source: .ios, topic: topic, body: body)
         let command = ThirdPartyAppCodec.phoneMessage(identity: identity, content: try envelope.encoded())
         let id = envelope.id
+        performanceObserver?("ble.command", ["requestId": .string(id), "topic": .string(topic),
+            "operationStartedUptime": .number(operationStarted),
+            "bytes": .number(Double((try? envelope.encoded().count) ?? 0))])
         let token = UUID()
-        try reserve(id: id, token: token, generation: currentGeneration)
+        try reserve(id: id, token: token, generation: currentGeneration, operationStartedUptime: operationStarted)
         do {
-            try await sendCommand(command)
+            try await BandPerformanceContext.$operationStartedUptime.withValue(operationStarted) {
+                try await sendCommand(command)
+            }
         } catch {
             guard isCurrent(id: id, token: token, generation: currentGeneration) else {
                 throw InterconnectDeliveryError.disconnected
@@ -137,10 +152,14 @@ public actor InterconnectSession {
     @discardableResult
     public func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
         guard !isTerminal, let identity else { throw Error.notReady }
+        let operationStarted = ProcessInfo.processInfo.systemUptime
         let currentGeneration = generation
         let envelope = ApplicationEnvelope.message(id: idGenerator(), source: .ios, topic: topic, body: body)
         let command = ThirdPartyAppCodec.phoneMessage(identity: identity, content: try envelope.encoded())
         let id = envelope.id
+        performanceObserver?("ble.command", ["requestId": .string(id), "topic": .string(topic),
+            "operationStartedUptime": .number(operationStarted),
+            "bytes": .number(Double((try? envelope.encoded().count) ?? 0))])
         let token = UUID()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
@@ -154,6 +173,7 @@ public actor InterconnectSession {
                         id: id,
                         token: token,
                         generation: currentGeneration,
+                        operationStartedUptime: operationStarted,
                         retryCommand: command,
                         retryEnvelope: envelope,
                         waiter: continuation
@@ -164,6 +184,7 @@ public actor InterconnectSession {
                         envelope: envelope,
                         token: token,
                         generation: currentGeneration,
+                        operationStartedUptime: operationStarted,
                         session: self
                     )
                     guard var pending = pendingDeliveries[id], pending.token == token else {
@@ -228,11 +249,14 @@ public actor InterconnectSession {
         envelope: ApplicationEnvelope,
         token: UUID,
         generation: UInt64,
+        operationStartedUptime: TimeInterval,
         session: InterconnectSession
     ) -> Task<Void, Never> {
         Task { [weak session, sender, command, envelope, token, generation] in
             do {
-                try await sender(command)
+                try await BandPerformanceContext.$operationStartedUptime.withValue(operationStartedUptime) {
+                    try await sender(command)
+                }
                 await session?.transmitAwaitedCompleted(
                     .success(()),
                     envelope: envelope,
@@ -258,6 +282,12 @@ public actor InterconnectSession {
     ) {
         let id = envelope.id
         guard isCurrent(id: id, token: token, generation: currentGeneration) else { return }
+        let succeeded: Bool
+        switch result { case .success: succeeded = true; case .failure: succeeded = false }
+        if let pending = pendingDeliveries[id] {
+            observeDelivery(succeeded ? "ble.transmitted" : "ble.transmit.failed", id: id, pending: pending,
+                metrics: ["topic": .string(envelope.topic ?? "unknown"), "retryCount": .number(Double(pending.retryCount))])
+        }
         switch result {
         case let .failure(error):
             guard isCurrent(id: id, token: token, generation: currentGeneration),
@@ -301,6 +331,7 @@ public actor InterconnectSession {
         if pending.retryCount == 0,
            let command = pending.retryCommand,
            let envelope = pending.retryEnvelope {
+            observeDelivery("ble.retry", id: id, pending: pending, metrics: ["topic": .string(envelope.topic ?? "unknown")])
             pending.retryCount = 1
             pending.timeoutTask = nil
             let transmitTask = Self.makeTransmitTask(
@@ -309,6 +340,7 @@ public actor InterconnectSession {
                 envelope: envelope,
                 token: token,
                 generation: generation,
+                operationStartedUptime: pending.operationStartedUptime,
                 session: self
             )
             pending.transmitTask = transmitTask
@@ -316,6 +348,7 @@ public actor InterconnectSession {
             return
         }
         guard let pending = removeDelivery(id: id, token: token) else { return }
+        observeDelivery("ble.timeout", id: id, pending: pending)
         pending.waiter?.resume(throwing: InterconnectDeliveryError.timeout(id))
         eventContinuation.yield(.failed(id))
     }
@@ -324,6 +357,7 @@ public actor InterconnectSession {
         id: String,
         token: UUID,
         generation: UInt64,
+        operationStartedUptime: TimeInterval,
         retryCommand: BandCommand? = nil,
         retryEnvelope: ApplicationEnvelope? = nil,
         waiter: CheckedContinuation<String, Swift.Error>? = nil
@@ -337,10 +371,19 @@ public actor InterconnectSession {
         pendingDeliveries[id] = PendingDelivery(
             token: token,
             generation: generation,
+            operationStartedUptime: operationStartedUptime,
+            performanceObserver: performanceObserver,
             retryCommand: retryCommand,
             retryEnvelope: retryEnvelope,
             waiter: waiter
         )
+    }
+
+    private func observeDelivery(_ event: String, id: String, pending: PendingDelivery, metrics: [String: JSONValue] = [:]) {
+        var values = metrics
+        values["requestId"] = .string(id)
+        values["operationStartedUptime"] = .number(pending.operationStartedUptime)
+        pending.performanceObserver?(event, values)
     }
 
     private func finishSuccessfulTransmission(id: String, token: UUID, envelope: ApplicationEnvelope) {

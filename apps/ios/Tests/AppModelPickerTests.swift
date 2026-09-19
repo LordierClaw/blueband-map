@@ -132,6 +132,18 @@ final class AppModelPickerTests: XCTestCase {
         let stoppedViews = await sender.streamViews
         XCTAssertEqual(stoppedViews, views)
         XCTAssertNil(model.routePreviewTiles, "late GPS must not restore a stopped preview")
+        let exported = try await model.performanceTrace.export()
+        let records = try exported.split(separator: 10).map { try JSONSerialization.jsonObject(with: Data($0)) as! [String: Any] }
+        let currentSession = records.last?["sessionId"] as? String
+        let current = records.filter { $0["sessionId"] as? String == currentSession }
+        XCTAssertTrue(current.contains { $0["event"] as? String == "session.end" })
+        let received = current.filter { $0["event"] as? String == "gps.fix" }
+        XCTAssertFalse(received.isEmpty)
+        XCTAssertTrue(received.allSatisfy { $0["fixId"] != nil && ($0["metrics"] as? [String: Any])?["gpsInputAgeMs"] != nil })
+        let confirmed = current.filter { $0["event"] as? String == "map.confirmed" }
+        XCTAssertFalse(confirmed.isEmpty)
+        XCTAssertTrue(confirmed.allSatisfy { $0["fixId"] != nil })
+
     }
 
     func testNextMapRendersWhilePreviousMapAwaitsBandDisplay() async throws {
@@ -558,7 +570,9 @@ final class AppModelPickerTests: XCTestCase {
             routeCardSession: sender,
             snapshotRender: render,
             cellRender: cellRender,
-            scanDuration: .seconds(3_600)
+            scanDuration: .seconds(3_600),
+            performanceTrace: PerformanceTraceRecorder(directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("trace-tests-" + UUID().uuidString))
         )
     }
 

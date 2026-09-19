@@ -4,6 +4,42 @@ import XCTest
 import BlueBandProtocol
 
 final class BandTransportTests: XCTestCase {
+    func testPerformanceObserverReportsTimingWithoutChangingBytes() async throws {
+        let (transport, link) = try await configuredTransport()
+        let reported = expectation(description: "wire timing")
+        await transport.setPerformanceObserver { name, metrics in
+            XCTAssertEqual(name, "ble.write")
+            XCTAssertNotNil(metrics["queueMs"])
+            XCTAssertNotNil(metrics["writeMs"])
+            XCTAssertEqual(metrics["attempted"], .bool(true))
+            XCTAssertEqual(metrics["outcome"], .string("succeeded"))
+            XCTAssertNotNil(metrics["operationStartedUptime"])
+            XCTAssertNil(metrics["payload"])
+            reported.fulfill()
+        }
+        try await transport.send(channel: 1, opcode: 2, body: Data([0xAA]))
+        let bytes = await link.nextWrite()
+        XCTAssertEqual(try SPPFrame.decode(bytes).payload, Data([1, 2, 0xAA]))
+        await fulfillment(of: [reported], timeout: 1)
+    }
+
+    func testCancelledBeforeNativeWriteDoesNotReportSuccessfulWriteTime() async throws {
+        let (transport, _) = try await configuredTransport()
+        let reported = expectation(description: "cancelled queue admission")
+        await transport.setPerformanceObserver { _, metrics in
+            XCTAssertEqual(metrics["attempted"], .bool(false))
+            XCTAssertEqual(metrics["outcome"], .string("cancelled"))
+            XCTAssertEqual(metrics["writeMs"], .null)
+            reported.fulfill()
+        }
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await transport.send(channel: 1, opcode: 2, body: Data([0xAA]))
+        }
+        do { try await task.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        await fulfillment(of: [reported], timeout: 1)
+    }
     func testConfigureSendsLiteralSessionRequestWithoutConsumingDataSequence() async throws {
         let link = FakeBandLink(maximumWriteLength: 512)
         let transport = BandTransport(link: link)

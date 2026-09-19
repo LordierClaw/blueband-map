@@ -119,6 +119,15 @@ Task { @MainActor in
               disabled.diagnostic.contains("error=servicesDisabled"),
               "background service probe reports disabled GPS and releases its owner")
     }
+    let measured = ForegroundLocationClient()
+    let measuredManager = CLLocationManager.latest!
+    var observedFixes = 0
+    measured.onFixObserved = { _, _, _ in observedFixes += 1 }
+    let measuredStream = measured.locations()
+    measured.locationManager(measuredManager, didUpdateLocations: [CLLocation()])
+    check(observedFixes == 1, "diagnostic ingress observes the real callback before stream coalescing")
+    measured.stop()
+    withExtendedLifetime(measuredStream) {}
     exit(failures == 0 ? 0 : 1)
 }
 dispatchMain()

@@ -1,6 +1,12 @@
 import Foundation
 import BlueBandProtocol
 
+public typealias BandPerformanceObserver = @Sendable (String, [String: JSONValue]) -> Void
+
+enum BandPerformanceContext {
+    @TaskLocal static var operationStartedUptime: TimeInterval?
+}
+
 public protocol BandLink: AnyObject, Sendable {
     var maximumWriteLength: Int { get }
     func write(_ data: Data) async throws
@@ -42,6 +48,9 @@ public actor BandTransport: BandTransportProtocol {
         0x03, 0x02, 0x00, 0x20, 0x00,
         0x04, 0x02, 0x00, 0x10, 0x27
     ])
+
+    private var performanceObserver: BandPerformanceObserver?
+    public func setPerformanceObserver(_ observer: BandPerformanceObserver?) { performanceObserver = observer }
 
     private let link: any BandLink
     private let messageStream: AsyncThrowingStream<BandTransportMessage, Swift.Error>
@@ -153,26 +162,39 @@ public actor BandTransport: BandTransportProtocol {
     }
 
     private func write(_ frame: SPPFrame) async throws {
+        let queued = ProcessInfo.processInfo.systemUptime
+        let operationStarted = BandPerformanceContext.operationStartedUptime ?? queued
+        let observer = performanceObserver
         await acquireWrite()
+        let acquired = ProcessInfo.processInfo.systemUptime
+        var attempted = false, outcome = "failed"
+        defer {
+            observer?("ble.write", ["queueMs": .number((acquired - queued) * 1000),
+                "writeMs": attempted ? .number((ProcessInfo.processInfo.systemUptime - acquired) * 1000) : .null,
+                "attempted": .bool(attempted), "outcome": .string(outcome),
+                "operationStartedUptime": .number(operationStarted),
+                "wireSequence": .number(Double(frame.sequence)), "payloadBytes": .number(Double(frame.payload.count)),
+                "maximumWriteLength": .number(Double(link.maximumWriteLength))])
+        }
         do {
             try Task.checkCancellation()
             guard !isClosed else { throw Error.closed }
-            try await writeUnlocked(frame)
+            let bytes = try frame.encode()
+            let chunkSize = max(1, link.maximumWriteLength)
+            var offset = 0
+            while offset < bytes.count {
+                let end = min(offset + chunkSize, bytes.count)
+                attempted = true
+                try await link.write(Data(bytes[offset..<end]))
+                offset = end
+            }
+            outcome = "succeeded"
             releaseWrite()
         } catch {
+            if error is CancellationError { outcome = "cancelled" }
+            else if error as? Error == .closed { outcome = "closed" }
             releaseWrite()
             throw error
-        }
-    }
-
-    private func writeUnlocked(_ frame: SPPFrame) async throws {
-        let bytes = try frame.encode()
-        let chunkSize = max(1, link.maximumWriteLength)
-        var offset = 0
-        while offset < bytes.count {
-            let end = min(offset + chunkSize, bytes.count)
-            try await link.write(Data(bytes[offset..<end]))
-            offset = end
         }
     }
 

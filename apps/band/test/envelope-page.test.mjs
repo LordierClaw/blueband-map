@@ -12,14 +12,14 @@ const ASSET = `nav-${DIGEST.slice(0, 16)}`
 // Generated 128x128 grayscale gradient, independent of the app renderer/encoder.
 const CELL_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAAAAADmVT4XAAACI0lEQVR4nMXNA5IYAAAAsa1t27Zt27Zt82rbtm3btm3bnj5j84FAoMBBggYLHiJkqNBhwoYLHyFipMhRokaLHiNmrNhx4saLnyBhosRJkiZLniJlqtRp0qZLnyFjpsxZsmbLniNnrtx58ubLX6BgocJFihYrXqJkqdJlypYrX6FipcpVqlarXqNmrdp16tar36Bho8ZNmjZr3qJlq9Zt2rZr36Fjp85dunbr3qNnr959+vbrH2D/A5D/gcj/IOR/MPI/BPkfivwPQ/6HI/8jkP+RyP8o5H808j8G+R+L/I9D/scj/xOQ/4nI/yTkfzLyPwX5n4r8T0P+pyP/M5D/mcj/LOR/NvI/B/mfi/zPQ/7nI/8LkP+FyP8i5H8x8r8E+V+K/C9D/pcj/yuQ/5XI/yrkfzXyvwb5X4v8r0P+1yP/G5D/jcj/JuR/M/K/BfnfivxvQ/63I/87kP+dyP8u5H838r8H+d+L/O9D/vcj/weQ/4PI/yHk/zDyfwT5P4r8H0P+jyP/J5D/k8j/KeT/NPJ/Bvk/i/yfQ/7PI/8XkP+LyP8l5P8y8n8F+b+K/F9D/q8j/zeQ/5vI/y3k/zbyfwf5v4v830P+7yP/D5D/h8j/I+T/MfL/BPl/ivw/Q/6fI/8vkP+XyP8r5P818v8G+X+L/L9D/t8j/x+Q/4/I/yfk/zPy/wX5/4r8f0P+vyP/P5D/n8j/L+T/N/L/B/n/i/z/+w96ocHS/e4O/QAAAABJRU5ErkJggg==", "base64")
 
-async function loadPage(connection, file = memoryFile()) {
+async function loadPage(connection, file = memoryFile(), clock = Date) {
   const ux = await readFile(new URL("../src/pages/index/index.ux", import.meta.url), "utf8")
   const script = ux.match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace(/import interconnect from ["']@system\.interconnect["']/, "")
     .replace(/import file from ["']@system\.file["']/, "")
     .replace("export default", "return")
-  const component = new Function("interconnect", "file", script)(
-    { instance() { return connection } }, file
+  const component = new Function("interconnect", "file", "Date", script)(
+    { instance() { return connection } }, file, clock
   )
   const page = structuredClone(component.private)
   for (const [name, value] of Object.entries(component)) if (name !== "private") page[name] = value
@@ -145,8 +145,15 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     assert.equal(page.streamVisible, false, "write completion alone must not hide the full map")
     page.receiveMessage({ data: envelope("view1-retry", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
     assert.equal(page.streamImages.length, 10)
+    const state = sent.filter(m => m.topic === "map.stream.state").at(-1)
+    assert.equal(state.body.perf.nodes, 10)
+    assert.equal(state.body.perf.files, 10)
+    assert.equal(state.body.perf.nativeMemory, null)
+    assert.equal(page.perfFrame, "f456789", "staging must not advance the visible sequence label")
+    assert.equal(page.perfVisual, false, "the filming overlay stays off in production")
     for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
     assert.equal(page.streamVisible, true)
+    assert.equal(page.perfFrame, "v1")
     const writes = file.writes.length
     const priorDestination = page.navDestinationStyle
     const view2 = { epoch: "e1", seq: 2, x: 0, y: 4,
@@ -191,6 +198,9 @@ test("changed cell content retires old pixels only after native decode", async (
     assert.equal(file.storage.has(old), true)
     const replacement = page.streamImages.find(item => item.key === "0:0" && item.uri !== old)
     assert.ok(replacement)
+    page.receiveMessage({ data: envelope("diag-staged", "diagnostics.get", { request: "staged" }) })
+    assert.equal(sent.filter(m => m.topic === "diagnostics.report").at(-1).body.perf.files, 11,
+      "old and staging versions of the same cell both count")
     page.streamImageComplete(replacement.key, replacement.uri)
     assert.equal(file.storage.has(old), false)
     assert.equal(page.streamVisible, true)
@@ -392,8 +402,157 @@ test("publishes only a prepared 212x520 raster snapshot and one aggregate result
     prepareMs: sent.find(message => message.topic === "render.result").body.prepareMs,
     validateMs: sent.find(message => message.topic === "render.result").body.validateMs,
     renderMs: sent.find(message => message.topic === "render.result").body.renderMs,
-    sha256Prefix: DIGEST.slice(0, 8)
+    sha256Prefix: DIGEST.slice(0, 8),
+    perf: sent.find(message => message.topic === "render.result").body.perf
   })
+})
+
+test("full-frame telemetry separates native write, image callback, JS apply and retirement", async () => {
+  let now = 1000, finishWrite, finishDelete
+  const sent = [], file = memoryFile()
+  const page = await loadPage({
+    getReadyState({ success }) { success({ status: 1 }) }, send({ data }) { sent.push(data) }
+  }, file, { now: () => now })
+  try {
+    publish(page)
+    const write = file.writeArrayBuffer.bind(file), remove = file.delete.bind(file)
+    file.writeArrayBuffer = options => { finishWrite = () => write(options) }
+    file.delete = options => { finishDelete = () => remove(options) }
+    const apply = page.applyPreviewOverlay.bind(page)
+    page.applyPreviewOverlay = value => { apply(value); now += 5 }
+    page.receiveMessage({ data: envelope("prepare2", "render.prepare", prepare({ sceneId: "scene2" })) })
+    page.receiveMessage({ data: envelope("begin2", "map.asset.begin", begin({ scene: "scene2" })) })
+    page.receiveMessage({ data: envelope("chunk2", "map.asset.chunk", {
+      asset: ASSET, run: RUN, scene: "scene2", offset: 0, data: Buffer.from(BYTES).toString("base64")
+    }) })
+    now = 1100
+    page.receiveMessage({ data: envelope("end2", "map.asset.end", { asset: ASSET, run: RUN, scene: "scene2" }) })
+    now = 1117
+    finishWrite()
+    now = 1140
+    page.mapComplete(page.pendingPublication.token)
+    assert.equal(sent.filter(m => m.topic === "render.result").length, 1, "result still awaits retirement")
+    now = 1190
+    finishDelete()
+    assert.deepEqual(sent.filter(m => m.topic === "render.result").at(-1).body.perf,
+      { v: 1, clockValid: true, writeMs: 17, decodeMs: 23, applyMs: 5, cleanupMs: 45 })
+    assert.ok(sent.every(m => Buffer.byteLength(JSON.stringify(m)) <= 512))
+  } finally { page.onDestroy() }
+})
+
+test("cell telemetry counts staged files and measures each mounted image only once", async () => {
+  let now = 1000, finishWrite
+  const sent = [], file = memoryFile()
+  const page = await loadPage({
+    getReadyState({ success }) { success({ status: 1 }) }, send({ data }) { sent.push(data) }
+  }, file, { now: () => now })
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    const write = file.writeArrayBuffer.bind(file)
+    file.writeArrayBuffer = options => { finishWrite = () => write(options) }
+    streamCell(page, "0:0")
+    page.receiveMessage({ data: envelope("diag1", "diagnostics.get", { request: "perf-1", visual: true }) })
+    const during = sent.filter(m => m.topic === "diagnostics.report").at(-1).body
+    assert.equal(during.perfVersion, 1)
+    assert.deepEqual(during.perf, { v: 1, clockValid: true, files: 1, nodes: 0, pendingDeletes: 0, inFlight: 1, nativeMemory: null })
+    now += 17
+    finishWrite()
+    const stored = sent.filter(m => m.topic === "map.cell.result" && m.body.status === "stored").at(-1)
+    assert.deepEqual(stored.body.perf, { v: 1, clockValid: true, writeMs: 17 })
+    const item = page.streamImages[0]
+    now += 23
+    page.streamImageComplete(item.key, item.uri)
+    assert.deepEqual(sent.filter(m => m.topic === "map.cell.decoded").at(-1).body.perf,
+      { v: 1, clockValid: true, decodeMs: 23 })
+    now += 99
+    page.streamImageComplete(item.key, item.uri)
+    assert.equal(sent.filter(m => m.topic === "map.cell.decoded").at(-1).body.perf, undefined,
+      "duplicate callback must not invent a second decode sample")
+    const manifest = JSON.parse(await readFile(new URL("../src/manifest.json", import.meta.url)))
+    assert.equal(during.rpk, manifest.versionCode)
+    assert.equal(during.versionName, manifest.versionName)
+    assert.equal(page.perfVisual, true)
+    page.connection.onclose()
+    assert.equal(page.perfVisual, false, "filming is opt-in per connection lifecycle")
+    page.probeConnection()
+    page.receiveMessage({ data: envelope("diag2", "diagnostics.get", { request: "perf-2", visual: false }) })
+    assert.equal(page.perfVisual, false)
+    assert.ok(sent.every(m => Buffer.byteLength(JSON.stringify(m)) <= 512))
+  } finally { page.onDestroy() }
+})
+
+test("a regressing Band clock yields unavailable durations rather than false zero latency", async () => {
+  let now = 1000, finishWrite
+  const sent = [], file = memoryFile()
+  const page = await loadPage({
+    getReadyState({ success }) { success({ status: 1 }) }, send({ data }) { sent.push(data) }
+  }, file, { now: () => now })
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    const write = file.writeArrayBuffer.bind(file)
+    file.writeArrayBuffer = options => { finishWrite = () => write(options) }
+    streamCell(page, "0:0")
+    now = 900
+    finishWrite()
+    assert.deepEqual(sent.filter(m => m.topic === "map.cell.result" && m.body.status === "stored").at(-1).body.perf,
+      { v: 1, clockValid: false, writeMs: null })
+    page.receiveMessage({ data: envelope("diag", "diagnostics.get", { request: "clock" }) })
+    assert.equal(sent.filter(m => m.topic === "diagnostics.report").at(-1).body.perf.clockValid, false)
+    page.receiveMessage({ data: envelope("diag-render", "diagnostics.get", { request: "clock-render", render: true }) })
+    assert.deepEqual(sent.filter(m => m.topic === "diagnostics.report").at(-1).body.perf,
+      { v: 1, clockValid: false, writeMs: null, decodeMs: null, applyMs: null, cleanupMs: null },
+      "stored aggregates must carry current clock invalidity too")
+  } finally { page.onDestroy() }
+})
+
+test("telemetry keeps independent application vectors and maximal missing-cell replies within 512 bytes", async () => {
+  const adr = await readFile(new URL("../../../docs/adr/0020-performance-trace.md", import.meta.url), "utf8")
+  const vectors = [...adr.matchAll(/```json\n([^`]+)```/g)].flatMap(match => match[1].trim().split("\n").map(JSON.parse))
+  assert.ok(vectors.length >= 5)
+  const { page, sent } = await harness()
+  try {
+    for (const vector of vectors) {
+      assert.ok(Buffer.byteLength(JSON.stringify(vector)) <= 512, vector.topic)
+      if (vector.src === "band") {
+        page.sendEnvelope(structuredClone(vector))
+        assert.deepEqual(sent.at(-1), vector, "the literal vector must be sent without truncation")
+      }
+    }
+    publish(page)
+    const epoch = "e".repeat(24)
+    page.receiveMessage({ data: envelope("open-max", "map.stream.open", { scene: SCENE, epoch, version: 1 }) })
+    page.receiveMessage({ data: envelope("view-max", "map.stream.view", { epoch, seq: 2147483647, x: -32705, y: -32761 }) })
+    const reply = sent.filter(m => m.topic === "map.stream.state").at(-1)
+    assert.equal(reply.body.missing.length, 18)
+    assert.equal(reply.body.perf.v, 1)
+    assert.equal(reply.body.perf.applyMs >= 0, true)
+    assert.ok(Buffer.byteLength(JSON.stringify(reply)) <= 512)
+  } finally { page.onDestroy() }
+})
+
+test("decode failure telemetry retains pending cleanup without accepting stale callbacks", async () => {
+  const { page, sent, file } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    streamCell(page, "0:0")
+    const item = page.streamImages[0]
+    file.delete = () => {}
+    page.streamImageError(item.key, item.uri)
+    const failure = sent.filter(m => m.topic === "map.stream.state").at(-1)
+    assert.equal(failure.body.code, "decodeFailed")
+    assert.deepEqual(failure.body.perf, { v: 1, clockValid: true, files: 1, nodes: 0,
+      pendingDeletes: 1, inFlight: 0, nativeMemory: null, applyMs: failure.body.perf?.applyMs })
+    assert.equal(typeof failure.body.perf.applyMs, "number")
+    const count = sent.length
+    page.streamImageComplete(item.key, item.uri)
+    page.streamImageError(item.key, item.uri)
+    assert.equal(sent.length, count)
+  } finally { page.onDestroy() }
 })
 
 test("re-acknowledges an exact duplicate chunk without writing it twice", async () => {
@@ -548,7 +707,9 @@ test("failure diagnostics retain the last chunk boundary without returning paylo
     const report = sent.find(message => message.topic === "diagnostics.report")
     assert.ok(report, "automatically queryable peer diagnostics are required")
     assert.deepEqual(report.body, {
-      request: "probe-1", rpk: 32, phase: "chunk", offset: 0, received: 4, sendCode: 0
+      request: "probe-1", rpk: page.rpkBuild, versionName: page.rpkVersion, perfVersion: 1,
+      phase: "chunk", offset: 0, received: 4, sendCode: 0,
+      perf: { v: 1, clockValid: true, files: 0, nodes: 0, pendingDeletes: 0, inFlight: 1, nativeMemory: null }
     })
     assert.ok(Buffer.byteLength(JSON.stringify(report)) < 512)
     sends.find(send => send.data.id === "chunk").fail({ code: 204 })

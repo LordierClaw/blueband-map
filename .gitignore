@@ -22,3 +22,4 @@ artifacts/
 .DS_Store
 .superpowers/
 .worktrees/
+__pycache__/

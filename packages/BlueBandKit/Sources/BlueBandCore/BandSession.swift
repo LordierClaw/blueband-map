@@ -17,6 +17,13 @@ public actor BandSession {
     private var interconnect: InterconnectSession?
     private var receiverTask: Task<Void, Never>?
     private var currentState: SessionState = .idle
+    private var performanceObserver: BandPerformanceObserver?
+
+    public func setPerformanceObserver(_ observer: BandPerformanceObserver?) async {
+        performanceObserver = observer
+        await interconnect?.setPerformanceObserver(observer)
+        if let measured = transport as? BandTransport { await measured.setPerformanceObserver(observer) }
+    }
 
     public init(
         central: any BandCentralProtocol,
@@ -46,6 +53,7 @@ public actor BandSession {
                 let link = try await central.connect(id: candidate.id)
                 currentState = .configuringSpp
                 let candidateTransport = transportFactory(link)
+                if let measured = candidateTransport as? BandTransport { await measured.setPerformanceObserver(performanceObserver) }
                 do {
                     currentState = .authenticating
                     let result = try await authenticator.authenticate(authKey: authKey, transport: candidateTransport)
@@ -123,7 +131,8 @@ public actor BandSession {
         let cipher = cipher
         let session = InterconnectSession(
             expectedPackage: expectedPackage,
-            trustedRPKStore: trustedRPKStore
+            trustedRPKStore: trustedRPKStore,
+            performanceObserver: performanceObserver
         ) { command in
             let encrypted = try SessionCrypto.cryptCTR(command.encode(), key: keys.encryptKey, cipher: cipher)
             try await transport.send(channel: 1, opcode: 2, body: encrypted)

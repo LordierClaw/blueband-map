@@ -25,6 +25,7 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
     private(set) var lastEvent = "idle"
     private var lastError = "none"
     var onHealthChange: (() -> Void)?
+    var onFixObserved: ((CLLocation, Bool, String) -> Void)?
 
     override convenience init() {
         self.init(manager: CLLocationManager())
@@ -171,9 +172,11 @@ final class ForegroundLocationClient: NSObject, CLLocationManagerDelegate {
             guard location.horizontalAccuracy.isFinite, location.horizontalAccuracy >= 0,
                   (-1...5).contains(age),
                   cachedLocation == nil || location.timestamp >= cachedLocation!.timestamp else {
+                onFixObserved?(location, false, "invalidOrOld")
                 record("fixRejected")
                 continue
             }
+            onFixObserved?(location, location.horizontalAccuracy <= 25, location.horizontalAccuracy <= 25 ? "callback" : "poorAccuracy")
             cachedLocation = location
             if location.horizontalAccuracy <= 25 { acceptedFixCount += 1 }
             continuation?.yield(location)

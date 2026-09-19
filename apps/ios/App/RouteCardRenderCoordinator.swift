@@ -117,6 +117,11 @@ final class RouteCardRenderCoordinator {
     private(set) var lastRunRecord: RenderRunRecord?
     private(set) var lastDisplayedSceneID: String?
 
+    func ownsPerformanceResult(run: String?, scene: String?) -> Bool {
+        guard let pending else { return false }
+        return pending.runID == run && pending.sceneID == scene
+    }
+
     var failureCode: String? {
         guard case let .failed(_, code) = state else { return nil }
         return code

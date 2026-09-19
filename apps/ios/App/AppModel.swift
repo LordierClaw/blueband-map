@@ -74,6 +74,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastMapFixAgeMilliseconds: Int?
     @Published private(set) var latencyViolations = 0
 
+    let performanceTrace: PerformanceTraceRecorder
+    private let performanceFixes: PerformanceFixTracker
+    @Published var performanceEnabled = true
+    @Published var performanceVisualMarker = false
+    private var performanceProbeRequest: String?
+
     private let keyStore: any AuthKeyStoreProtocol
     private let vietmapKeyStore: any VietmapKeyStoreProtocol
     private let bandStore: any RememberedBandStoreProtocol
@@ -147,8 +153,18 @@ final class AppModel: ObservableObject {
         cellRender: (@Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data)? = nil,
         updateClock: any BlueBandClock = ContinuousBlueBandClock(),
         defaults: UserDefaults = .standard,
-        scanDuration: Duration = .seconds(15)
+        scanDuration: Duration = .seconds(15),
+        performanceTrace: PerformanceTraceRecorder? = nil
     ) {
+        let trace = performanceTrace ?? PerformanceTraceRecorder(directory:
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("PerformanceTraces", isDirectory: true))
+        self.performanceTrace = trace
+        self.performanceFixes = PerformanceFixTracker(trace: trace)
+        Task { await session.setPerformanceObserver { event, metrics in
+            let request: String? = { if case let .string(value)? = metrics["requestId"] { return value }; return nil }()
+            trace.record(event, requestID: request, metrics: metrics)
+        } }
         self.keyStore = keyStore
         self.vietmapKeyStore = vietmapKeyStore
         self.bandStore = bandStore
@@ -159,6 +175,12 @@ final class AppModel: ObservableObject {
         self.snapshotRenderer = snapshotRenderer
         self.snapshotRender = snapshotRender ?? { try await snapshotRenderer.render($0) }
         let cpuRenderer = snapshotRenderer.backgroundRenderer
+        Task { await cpuRenderer.setPerformanceObserver {
+            guard let ownedTrace = trace.activeSessionID else { return nil }
+            return { event, metrics in
+                trace.record(event, expectedSessionID: ownedTrace, metrics: metrics)
+            }
+        } }
         self.cellRender = cellRender ?? { try await cpuRenderer.renderCell($0, plane: $1, cell: $2) }
         self.locationClient = locationClient
         self.updateClock = updateClock
@@ -179,6 +201,11 @@ final class AppModel: ObservableObject {
             locationHealth = locationClient.healthText
             locationNeedsSettings = locationClient.needsSettings
             logNavigation("gps.health", locationClient.diagnostic)
+        }
+        locationClient.onFixObserved = { [weak self] location, accepted, reason in
+            guard let self else { return }
+            performanceFixes.received(timestamp: location.timestamp, accuracy: location.horizontalAccuracy,
+                speed: location.speed, accepted: accepted, reason: reason)
         }
         corridorLink.onDisplay = { [weak self] view, seq in self?.corridorDisplayed(view, sequence: seq) }
     }
@@ -326,6 +353,13 @@ final class AppModel: ObservableObject {
         }
         saveDestination()
         resetNavigationDebug()
+        performanceFixes.reset()
+        if performanceEnabled {
+            performanceTrace.start(metadata: ["build": .string("\(BlueBandProduct.version) (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))"),
+                "firmware": .string(snapshot.firmware ?? "unknown"), "transferWindow": .number(4),
+                "visualMarker": .bool(performanceVisualMarker), "nativeMemory": .null])
+            requestPerformanceDiagnostics()
+        }
         navigationDestination = destination
         let tileMapAvailability = loadVietmapKey(.tileMap)?.isEmpty == false ? "present" : "absent"
         logNavigation(
@@ -347,6 +381,7 @@ final class AppModel: ObservableObject {
     }
 
     func stopNavigation() {
+        performanceTrace.end(reason: "stopped")
         navigationGeneration += 1
         invalidateCorridor(keepMap: false)
         corridorUnavailable = false
@@ -405,6 +440,7 @@ final class AppModel: ObservableObject {
     private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String, generation: Int) async {
         defer {
             if generation == navigationGeneration {
+                performanceTrace.end(reason: navigationStateCode)
                 invalidateCorridor()
                 locationClient.stop()
                 rerouteTask?.cancel()
@@ -419,6 +455,7 @@ final class AppModel: ObservableObject {
                 navigationTask = nil
             }
         }
+        guard generation == navigationGeneration, !Task.isCancelled else { return }
         let gpsStarted = Self.nowMilliseconds()
         navigationState = .waitingForGPS
         sendStartupStatus("locating")
@@ -438,6 +475,10 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled else { return }
             guard var first else { throw ForegroundLocationClient.Error.unavailable }
             gpsWaitMilliseconds = max(0, Self.nowMilliseconds() - gpsStarted)
+            if performanceFixes.identifier(first.timestamp) == nil {
+                performanceFixes.received(timestamp: first.timestamp, accuracy: first.horizontalAccuracy,
+                    speed: first.speed, accepted: true, reason: "cached")
+            }
             navigationStart = first.geoPoint
             logNavigation(
                 "gps.fix",
@@ -639,6 +680,8 @@ final class AppModel: ObservableObject {
             "distanceM=\(navigationRouteDistanceMeters ?? 0) points=\(route.points.count) " +
             "instructions=\(route.instructions.count) paths=\(route.alternativePathCount)"
         )
+        performanceTrace.record("route.identity", metrics: ["routeHash": .string(PerformanceFixTracker.routeFingerprint(route.points)),
+            "points": .number(Double(route.points.count)), "distanceM": .number(route.distanceMeters)])
         return route
     }
 
@@ -651,6 +694,8 @@ final class AppModel: ObservableObject {
         guard !renderCoordinator.requiresReconnect else {
             throw NavigationRuntimeError.bandDisplayFailed("TRANSFER_RECONNECT_REQUIRED")
         }
+        let prepareUptime = ProcessInfo.processInfo.systemUptime
+        performanceTrace.record("map.prepare.start", fixID: performanceFixes.identifier(location.timestamp))
         let snapshotStartedAt = Date()
         lastSnapshotRefreshStartedAt = snapshotStartedAt
         logNavigation("map.render.start", "session=\(generation) fixAgeMs=\(Int(max(0, Date().timeIntervalSince(location.timestamp) * 1000))) app=\(applicationState)")
@@ -662,7 +707,13 @@ final class AppModel: ObservableObject {
         let instruction = selection?.instruction ?? route.instructions.first { $0.interval.upperBound >= progress.pointIndex }
         let snapshot = try await snapshotRender(mapRequest(request))
         try checkNavigationOwner(generation)
+        let renderDone = ProcessInfo.processInfo.systemUptime
         let encoded = try SnapshotImageEncoder.encode(snapshot.image)
+        performanceTrace.record("map.prepare.end", fixID: performanceFixes.identifier(location.timestamp), metrics: [
+            "renderMs": .number((renderDone - prepareUptime) * 1000),
+            "encodeMs": .number((ProcessInfo.processInfo.systemUptime - renderDone) * 1000),
+            "styleMs": .number(Double(snapshot.styleLoadMilliseconds)), "cache": .string(snapshot.cacheState),
+            "bytes": .number(Double(encoded.data.count))])
         let asset = try RenderAsset(
             kind: .raster,
             format: encoded.format,
@@ -730,12 +781,13 @@ final class AppModel: ObservableObject {
               let sceneID = renderCoordinator.lastDisplayedSceneID else {
             throw NavigationRuntimeError.bandDisplayFailed(renderCoordinator.failureCode ?? "BAND_RESULT_MISSING")
         }
+        performanceFixes.confirmed(timestamp: location.timestamp, mode: "full", appState: applicationState, scene: sceneID)
         activeSceneID = sceneID
         routePreviewPNG = asset.data
         routePreviewTiles = nil
         lastMapFixAgeMilliseconds = Int(max(0, Date().timeIntervalSince(location.timestamp) * 1000))
         displayedFixTimestamp = location.timestamp
-        if lastMapFixAgeMilliseconds! >= 5_000 { latencyViolations += 1 }
+        if lastMapFixAgeMilliseconds! >= 1_000 { latencyViolations += 1 }
         activeSnapshotConfiguration = snapshot.configuration
         activeSnapshotAnchor = progress.matchedLocation ?? location.geoPoint
         navigationState = .navigating
@@ -752,7 +804,7 @@ final class AppModel: ObservableObject {
             "prepareMs=\(milliseconds(prepared.readyAt.timeIntervalSince(prepared.startedAt))) " +
             "encodeMs=\(encoded.durationMilliseconds) readyWaitMs=\(milliseconds(transferStartedAt.timeIntervalSince(prepared.readyAt))) " +
             "transferMs=\(metrics?.transferMilliseconds ?? 0) txToDisplayMs=\(milliseconds(displayedAt.timeIntervalSince(transferStartedAt))) " +
-            "bandWriteMs=\(metrics?.bandWriteMilliseconds ?? 0) bandDecodeMs=\(metrics?.bandDecodeMilliseconds ?? 0) " +
+            "legacyPrepareMs=\(metrics?.bandWriteMilliseconds ?? 0) legacyValidateMs=\(metrics?.bandDecodeMilliseconds ?? 0) " +
             "frameGapMs=\(lastMapDisplayedAt.map { milliseconds(displayedAt.timeIntervalSince($0)) } ?? 0)")
         lastMapDisplayedAt = displayedAt
     }
@@ -1024,7 +1076,7 @@ final class AppModel: ObservableObject {
                 let missing = view.visibleCells.filter { !corridorLink.cachedCells.contains($0.key) }
                 for cell in missing {
                     if pendingCorridorCells != nil { continue updates }
-                    try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner)
+                    try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner, fixID: performanceFixes.identifier(fix.location.timestamp))
                 }
                 if pendingCorridorCells != nil { continue updates }
                 guard await corridorLink.waitForDisplay() else { throw NavigationRuntimeError.bandDisplayFailed("CORRIDOR_DECODE") }
@@ -1034,12 +1086,12 @@ final class AppModel: ObservableObject {
                 let target = ScreenPoint(x: Int(max(-100000, min(100000, forward.x))), y: Int(max(-100000, min(100000, forward.y))))
                 for cell in view.prioritizedCells(toward: target) where !corridorLink.cachedCells.contains(cell.key) {
                     if pendingCorridorCells != nil { continue updates }
-                    try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner)
+                    try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner, fixID: performanceFixes.identifier(fix.location.timestamp))
                 }
                 for cell in view.visibleCells where !missing.contains(cell) {
                     if pendingCorridorCells != nil { continue updates }
                     if routePixelsChanged(in: cell, progress: fix.progress, request: request, plane: plane) {
-                        try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner)
+                        try await sendCorridorCell(cell, request: request, progress: fix.progress, plane: plane, owner: owner, fixID: performanceFixes.identifier(fix.location.timestamp))
                     }
                 }
             } catch {
@@ -1065,13 +1117,21 @@ final class AppModel: ObservableObject {
     }
 
     private func sendCorridorCell(_ cell: CorridorCell, request: VietmapSnapshotRequest, progress: RouteProgress,
-                                  plane: VietmapSnapshotConfiguration, owner: Int) async throws {
+                                  plane: VietmapSnapshotConfiguration, owner: Int, fixID: Int?) async throws {
+        let cellStarted = ProcessInfo.processInfo.systemUptime
         let started = Date()
         let bytes = try await cellRender(request, plane, cell)
+        let cellPrepared = ProcessInfo.processInfo.systemUptime
         let prepared = Date()
+        guard owner == corridorGeneration, !Task.isCancelled else { throw CancellationError() }
+        performanceTrace.record("map.cell.prepare", fixID: fixID, epoch: corridorLink.epoch,
+            metrics: ["cell": .string(cell.key), "cellBytes": .number(Double(bytes.count)),
+                "prepareMs": .number((cellPrepared - cellStarted) * 1000)])
         guard owner == corridorGeneration, !Task.isCancelled else { throw CancellationError() }
         guard await corridorLink.sendCell(cell, data: bytes) else { throw NavigationRuntimeError.bandDisplayFailed("CORRIDOR_CELL") }
         guard owner == corridorGeneration, !Task.isCancelled else { throw CancellationError() }
+        performanceTrace.record("map.cell.sent", fixID: fixID, epoch: corridorLink.epoch,
+            metrics: ["cell": .string(cell.key), "linkMs": .number((ProcessInfo.processInfo.systemUptime - cellPrepared) * 1000)])
         corridorCellProgress[cell] = progress
         corridorCellProgress = corridorCellProgress.filter { corridorLink.cachedCells.contains($0.key.key) }
         if let image = UIImage(data: bytes), image.size == CGSize(width: 128, height: 128) {
@@ -1088,9 +1148,11 @@ final class AppModel: ObservableObject {
         updateCorridorPreview()
         activeSnapshotConfiguration = plane.window(CGRect(x: -view.x, y: -view.y, width: 212, height: 520))
         displayedFixTimestamp = timestamp
+        performanceFixes.confirmed(timestamp: timestamp, mode: "corridor", appState: applicationState,
+            scene: activeSceneID, epoch: corridorLink.epoch, viewSequence: sequence)
         let now = Date(), age = Int(max(0, now.timeIntervalSince(timestamp) * 1000))
         lastMapFixAgeMilliseconds = age
-        if age >= 5000 { latencyViolations += 1 }
+        if age >= 1000 { latencyViolations += 1 }
         logNavigation("map.stream.displayed", "seq=\(sequence) offset=\(view.x),\(view.y) fixAgeMs=\(age) frameGapMs=\(lastMapDisplayedAt.map { Int(now.timeIntervalSince($0) * 1000) } ?? 0)")
         lastMapDisplayedAt = now
     }
@@ -1129,6 +1191,48 @@ final class AppModel: ObservableObject {
                 _ = try? await sender.sendAwaitingAcknowledgement(topic: "map.stream.close", body: ["epoch": .string(old), "retain": .bool(keepMap)])
             }
         }
+    }
+
+    private func requestPerformanceDiagnostics() {
+        let request = "perf-" + UUID().uuidString.prefix(12).lowercased()
+        performanceProbeRequest = request
+        let sender = routeCardSender, visual = performanceVisualMarker
+        Task { _ = try? await sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
+            body: ["request": .string(request), "visual": .bool(visual)]) }
+    }
+
+    private func recordPerformanceReply(_ envelope: ApplicationEnvelope) {
+        guard envelope.src == .band, let body = envelope.body else { return }
+        if envelope.topic == "diagnostics.report", body["request"] == performanceProbeRequest.map(JSONValue.string) {
+            let keys = Set(["rpk", "versionName", "perfVersion", "phase", "offset", "received", "sendCode"])
+            let metrics = body.filter { keys.contains($0.key) }
+            performanceTrace.record("band.identity", source: "band", metrics: metrics)
+        }
+        guard let topic = envelope.topic, ["diagnostics.report", "map.stream.state", "map.cell.result", "map.cell.decoded", "render.result"].contains(topic),
+              case let .object(perf)? = body["perf"], perf["v"] == .number(1) else { return }
+        if topic == "diagnostics.report", body["request"] != performanceProbeRequest.map(JSONValue.string) { return }
+        func text(_ key: String) -> String? { if case let .string(value)? = body[key] { return value }; return nil }
+        guard case .bool? = perf["clockValid"], perf.allSatisfy({ key, value in
+            switch key {
+            case "v": return value == .number(1)
+            case "clockValid": if case .bool = value { return true }; return false
+            case "nativeMemory": return value == .null
+            case "writeMs", "decodeMs", "applyMs", "cleanupMs":
+                if value == .null { return true }
+                if case let .number(n) = value { return n.isFinite && (0...60_000).contains(n) }; return false
+            case "files", "nodes", "pendingDeletes", "inFlight":
+                if case let .number(n) = value { return n.isFinite && (0...65_535).contains(n) && n.rounded() == n }; return false
+            default: return false
+            }
+        }) else { performanceTrace.record("band.telemetry.invalid"); return }
+        if topic.hasPrefix("map."), text("epoch") == nil || text("epoch") != corridorLink.epoch { return }
+        if topic == "render.result", !renderCoordinator.ownsPerformanceResult(run: text("runId"), scene: text("sceneId")) { return }
+        var metrics = perf; metrics["topic"] = .string(topic)
+        if let cell = text("cell") { metrics["cell"] = .string(cell) }
+        let seq: Int? = { if case let .number(value)? = body["displayedSeq"], value.isFinite,
+            value >= 0, value <= 2147483647, value.rounded() == value { return Int(value) }; return nil }()
+        performanceTrace.record("band.telemetry", source: "band", scene: text("sceneId"), epoch: text("epoch"),
+            viewSequence: seq, requestID: text("request"), metrics: metrics)
     }
 
     private func checkNavigationOwner(_ generation: Int) throws {
@@ -1287,6 +1391,15 @@ final class AppModel: ObservableObject {
     }
 
     private func logNavigation(_ stage: String, _ detail: String) {
+        var metrics: [String: JSONValue] = ["detail": .string(detail)]
+        for token in detail.split(separator: " ") {
+            let pair = token.split(separator: "=", maxSplits: 1)
+            if pair.count == 2 {
+                if let value = Double(pair[1]), value.isFinite { metrics[String(pair[0])] = .number(value) }
+                else { metrics[String(pair[0])] = .string(String(pair[1])) }
+            }
+        }
+        performanceTrace.record(stage == "gps.fix" ? "gps.first" : stage, scene: activeSceneID, epoch: corridorLink.epoch, metrics: metrics)
         navigationDebugSequence += 1
         let entry = NavigationDebugEntry(
             sequence: navigationDebugSequence,
@@ -1357,6 +1470,7 @@ final class AppModel: ObservableObject {
             updateNavigationPrewarming()
         case let .sent(envelope): append(envelope, delivery: .sent)
         case let .received(envelope):
+            recordPerformanceReply(envelope)
             renderCoordinator.consume(envelope)
             corridorLink.consume(envelope)
             append(envelope, delivery: .received)

@@ -10,6 +10,10 @@ struct ContentView: View {
     @State private var isConfigPresented = false
     @State private var isBandPickerPresented = false
     @State private var isDebugExportPresented = false
+    @State private var isTraceExportPresented = false
+    @State private var traceData = Data()
+    @State private var traceExportError: String?
+    @State private var isPreparingTrace = false
 
     var body: some View {
         NavigationStack {
@@ -55,6 +59,12 @@ struct ContentView: View {
                 contentType: .plainText,
                 defaultFilename: "BlueBandMap-navigation-debug.txt"
             ) { _ in }
+            .fileExporter(isPresented: $isTraceExportPresented,
+                document: PerformanceTraceDocument(data: traceData),
+                contentType: .performanceTrace, defaultFilename: "navigation.jsonl") { result in
+                    if case .failure = result { traceExportError = "Không lưu được trace. Hãy thử export lại." }
+                    traceData = Data()
+                }
             .onAppear { model.navigationScreenActive(true) }
             .onDisappear { model.navigationScreenActive(false) }
             .onChange(of: scenePhase, initial: true) { _, phase in
@@ -76,7 +86,7 @@ struct ContentView: View {
                 }
             }
             if let age = model.lastMapFixAgeMilliseconds {
-                LabeledContent("GPS → Band", value: "\(age) ms • \(model.latencyViolations) lần ≥5s")
+                LabeledContent("GPS → Band", value: "\(age) ms • \(model.latencyViolations) lần ≥1s")
             }
             LabeledContent("Điểm bắt đầu", value: model.navigationStartText)
             LabeledContent("Điểm đến", value: model.navigationDestinationText)
@@ -117,10 +127,27 @@ struct ContentView: View {
                 Button("Bắt đầu điều hướng") { model.startNavigation() }
                     .disabled(model.rpkState != .ready)
             }
-            if !model.navigationDebugEntries.isEmpty {
-                Button { isDebugExportPresented = true } label: {
-                    Label("Export debug log", systemImage: "square.and.arrow.up")
+            Toggle("Đo hiệu năng", isOn: $model.performanceEnabled).disabled(navigationIsActive)
+            Toggle("Hiện số khung khi quay video", isOn: $model.performanceVisualMarker).disabled(navigationIsActive)
+            Menu {
+                Button("Log tóm tắt (.txt)") { isDebugExportPresented = true }
+                    .disabled(model.navigationDebugEntries.isEmpty)
+                Button("Performance trace (.jsonl)") {
+                    isPreparingTrace = true
+                    Task {
+                        do {
+                            traceData = try await model.performanceTrace.export()
+                            if traceData.isEmpty { traceExportError = "Chưa có phiên đo được lưu." }
+                            else { traceExportError = nil; isTraceExportPresented = true }
+                        } catch { traceExportError = "Không đọc được trace đầy đủ. Không dùng log này để kết luận đạt." }
+                        isPreparingTrace = false
+                    }
                 }
+            } label: { Label("Export debug log", systemImage: "square.and.arrow.up") }
+                .disabled(isPreparingTrace)
+            if isPreparingTrace { ProgressView("Đang chuẩn bị trace…") }
+            if let traceExportError { Text(traceExportError).foregroundStyle(.red) }
+            if !model.navigationDebugEntries.isEmpty {
                 DisclosureGroup("Debug log (\(model.navigationDebugEntries.count))") {
                     ForEach(model.navigationDebugEntries, id: \.sequence) { entry in
                         Text("[\(entry.elapsedMilliseconds)ms] #\(entry.sequence) \(entry.stage) \(entry.detail)")
@@ -211,4 +238,16 @@ private struct NavigationDebugDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         FileWrapper(regularFileWithContents: Data(text.utf8))
     }
+}
+
+private extension UTType {
+    static let performanceTrace = UTType(filenameExtension: "jsonl", conformingTo: .plainText) ?? .plainText
+}
+
+private struct PerformanceTraceDocument: FileDocument {
+    static let readableContentTypes: [UTType] = [.performanceTrace]
+    let data: Data
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }

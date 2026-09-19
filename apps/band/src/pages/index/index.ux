@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.17</text>
+      <text class="version">RPK 0.6.18</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -24,6 +24,7 @@
         <text class="nav-status" if="{{ navStatusVisible }}">{{ navStatus }}</text>
       </div>
       <text class="online" if="{{ !mapReady && !pendingPublication && !preparedRender }}">{{ startupStatus }}</text>
+      <text class="perf-frame" if="{{ perfVisual && mapReady }}">{{ perfFrame }}</text>
     </div>
   </div>
 </template>
@@ -576,6 +577,13 @@ export default {
     retiredMapURI: "",
     nextRenderToken: 1,
     showDiagnostics: true,
+    rpkVersion: "0.6.18",
+    rpkBuild: 33,
+    perfVisual: false,
+    perfFrame: "",
+    perfLastNow: 0,
+    perfClockValid: true,
+    lastRenderPerf: null,
     nextID: 1
   },
 
@@ -707,6 +715,7 @@ export default {
   },
 
   resetMapLifecycle() {
+    this.perfVisual = false
     this.resetStream()
     this.restorePreparedNavigation()
     this.lifecycleEpoch = this.lifecycleEpoch + 1
@@ -822,11 +831,22 @@ export default {
     if (message.topic === "diagnostics.get") {
       var request = message.body.request
       if (typeof request !== "string" || !/^[a-z0-9-]{1,32}$/.test(request)) return
+      if (typeof message.body.visual === "boolean") this.perfVisual = message.body.visual
+      var perf = this.resourcePerf()
+      if (message.body.render === true && this.lastRenderPerf) {
+        perf = Object.assign({}, this.lastRenderPerf)
+        perf.clockValid = this.perfClockValid
+        if (!perf.clockValid) {
+          perf.writeMs = null; perf.decodeMs = null; perf.applyMs = null; perf.cleanupMs = null
+        }
+      }
       this.sendEnvelope({
         v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "diagnostics.report",
         body: {
-          request: request, rpk: 32, phase: this.lastReceivePhase,
-          offset: this.lastReceiveOffset, received: this.lastReceivedBytes, sendCode: this.lastSendCode
+          request: request, rpk: this.rpkBuild, versionName: this.rpkVersion, perfVersion: 1,
+          phase: this.lastReceivePhase, offset: this.lastReceiveOffset,
+          received: this.lastReceivedBytes, sendCode: this.lastSendCode,
+          perf: perf
         }
       })
       this.sendACK(message.id)
@@ -986,6 +1006,7 @@ export default {
     this.streamTransfer = null
     this.streamImages = []
     this.streamVisible = false
+    this.perfFrame = this.confirmedMap ? "f" + (this.confirmedMap.scene || "").slice(-6) : ""
     if (previous && this.confirmedMap) this.applyPreviewOverlay(this.confirmedMap.preview)
     if (previous) {
       var page = this
@@ -1023,11 +1044,38 @@ export default {
     catch (error) { finish(null) }
   },
 
-  cellResult(epoch, cell, status, code, evicted, request) {
-    this.sendStreamEnvelope("map.cell.result", {
+  perfNow() {
+    var now = Date.now()
+    if (!isFinite(now) || now < this.perfLastNow) this.perfClockValid = false
+    this.perfLastNow = now
+    return now
+  },
+
+  perfElapsed(start, end) {
+    var elapsed = (end === undefined ? this.perfNow() : end) - start
+    return this.perfClockValid && isFinite(start) && elapsed >= 0 && elapsed <= 60000 ? Math.floor(elapsed) : null
+  },
+
+  resourcePerf() {
+    this.perfNow()
+    // Count owned cell URIs, including both versions and a pending native write.
+    var uris = this.streamState ? this.streamState.records().map(function (record) { return record.uri }) : []
+    uris = uris.concat(this.streamGarbage || [])
+    if (this.streamTransfer && this.streamTransfer.uri) uris.push(this.streamTransfer.uri)
+    return { v: 1, clockValid: this.perfClockValid,
+      files: uris.filter(function (uri, index) { return uris.indexOf(uri) === index }).length,
+      nodes: this.streamImages.length, pendingDeletes: this.pendingDeleteURIs.length,
+      inFlight: (this.streamTransfer || this.streamWritePending ? 1 : 0) +
+        (this.activeTransfer || this.pendingPublication || this.activeMapOperationID ? 1 : 0), nativeMemory: null }
+  },
+
+  cellResult(epoch, cell, status, code, evicted, request, perf) {
+    var body = {
       epoch: this.validRun(epoch) ? epoch : "", cell: corridorMap.validKey(cell) ? cell : "",
       status: status, code: code, evicted: evicted || [], request: request
-    })
+    }
+    if (perf) body.perf = perf
+    this.sendStreamEnvelope("map.cell.result", body)
   },
 
   handleCellMessage(message) {
@@ -1099,6 +1147,8 @@ export default {
     var complete = function (success) {
       if (settled) return
       settled = true
+      var writeMs = page.perfElapsed(transfer.writeStartedAt)
+      var perf = { v: 1, clockValid: page.perfClockValid, writeMs: writeMs }
       page.streamWritePending = false
       transfer.buffer = null
       if (page.streamState !== state || page.streamTransfer !== transfer) {
@@ -1108,18 +1158,19 @@ export default {
       page.streamTransfer = null
       if (!success) {
         page.retireCellFile(transfer.uri)
-        page.cellResult(transfer.epoch, transfer.cell, "error", "writeFailed", [], message.id)
+        page.cellResult(transfer.epoch, transfer.cell, "error", "writeFailed", [], message.id, perf)
         return
       }
       var stored = state.store(transfer.cell, transfer.uri, transfer.bytes, transfer.sha256)
       if (!stored.ok) page.retireCellFile(transfer.uri)
       stored.evicted.forEach(function (record) { page.retireCellFile(record.uri) })
       page.cellResult(transfer.epoch, transfer.cell, stored.ok ? "stored" : "error", stored.ok ? "ok" : "cacheFull",
-        stored.evicted.filter(function (record) { return record.key !== transfer.cell }).map(function (record) { return record.key }), message.id)
+        stored.evicted.filter(function (record) { return record.key !== transfer.cell }).map(function (record) { return record.key }), message.id, perf)
       page.syncStreamImages()
     }
     // End ACK releases the sender; the separate result proves the native write completed.
     finish()
+    transfer.writeStartedAt = this.perfNow()
     try {
       file.writeArrayBuffer({ uri: transfer.uri, buffer: transfer.buffer, position: 0,
         success: function () { complete(true) }, fail: function () { complete(false) } })
@@ -1156,13 +1207,16 @@ export default {
       })
     } else if (this.streamState && body.epoch === this.streamState.epoch) {
       if (message.topic === "map.stream.view") {
+        var applyStartedAt = this.perfNow()
         var destination = body.destinationMode === undefined ? null : body
         var result = destination && !validDestination(destination) ? { ok: false, reason: "invalidView", missing: [] } :
           this.streamState.request(body.seq, body.x, body.y, destination)
         this.syncStreamImages()
+        var applyMs = this.perfElapsed(applyStartedAt), perf = this.resourcePerf()
+        perf.applyMs = applyMs
         this.sendStreamEnvelope("map.stream.state", {
           epoch: body.epoch, seq: body.seq, displayedSeq: this.streamState.position.seq,
-          missing: result.missing, code: result.ok ? "ok" : result.reason
+          missing: result.missing, code: result.ok ? "ok" : result.reason, perf: perf
         })
       } else if (message.topic === "map.stream.close") {
         if (body.retain === true && this.streamState.visible) {
@@ -1180,40 +1234,60 @@ export default {
 
   syncStreamImages() {
     if (!this.streamState) return
+    var previousImages = this.streamImages, mountedAt = this.perfNow()
     this.streamImages = this.streamState.images().map(function (item) {
+      var previous = previousImages.find(function (image) { return image.uri === item.uri })
       return { key: item.key, uri: item.uri,
+        perf: previous ? previous.perf : { mountedAt: mountedAt, completed: false },
         style: "left:" + item.x + "px;top:" + item.y + "px;opacity:" + item.opacity + ";" }
     })
     this.streamVisible = this.streamState.visible
     if (this.streamVisible && this.streamState.destination) this.applyDestination(this.streamState.destination)
+    if (this.streamVisible) this.perfFrame = "v" + this.streamState.position.seq
     var page = this
     this.streamState.takeRetired().forEach(function (record) { page.retireCellFile(record.uri) })
   },
 
   streamImageComplete(key, uri) {
     if (!this.streamState) return
+    var applyStartedAt = this.perfNow()
+    var image = this.streamImages.find(function (item) { return item.uri === uri && item.key === key })
     var previous = this.streamState.position.seq
     var record = this.streamState.records().find(function (file) { return file.key === key && file.uri === uri })
     if (!this.streamState.decoded(key, uri)) return
+    var perf
+    if (image && !image.perf.completed) {
+      image.perf.completed = true
+      var decodeMs = this.perfElapsed(image.perf.mountedAt, applyStartedAt)
+      perf = { v: 1, clockValid: this.perfClockValid, decodeMs: decodeMs }
+    }
     this.syncStreamImages()
-    if (record && record.hash) this.sendStreamEnvelope("map.cell.decoded", {
-      epoch: this.streamState.epoch, cell: key, sha256: record.hash
-    })
+    var applyMs = this.perfElapsed(applyStartedAt)
+    if (record && record.hash) {
+      var decoded = { epoch: this.streamState.epoch, cell: key, sha256: record.hash }
+      if (perf) decoded.perf = perf
+      this.sendStreamEnvelope("map.cell.decoded", decoded)
+    }
     if (this.streamState.position.seq !== previous) {
+      var resource = this.resourcePerf()
+      resource.applyMs = applyMs
       this.sendStreamEnvelope("map.stream.state", {
         epoch: this.streamState.epoch, seq: this.streamState.position.seq,
-        displayedSeq: this.streamState.position.seq, missing: [], code: "ok"
+        displayedSeq: this.streamState.position.seq, missing: [], code: "ok", perf: resource
       })
     }
   },
 
   streamImageError(key, uri) {
+    var applyStartedAt = this.perfNow()
     if (!this.streamState || !this.streamState.failed(key, uri)) return
     this.syncStreamImages()
     this.retireCellFile(uri)
+    var applyMs = this.perfElapsed(applyStartedAt), perf = this.resourcePerf()
+    perf.applyMs = applyMs
     this.sendStreamEnvelope("map.stream.state", {
       epoch: this.streamState.epoch, displayedSeq: this.streamState.position.seq,
-      missing: [key], code: "decodeFailed"
+      missing: [key], code: "decodeFailed", perf: perf
     })
   },
 
@@ -1522,21 +1596,29 @@ export default {
     try {
       this.unconfirmedURI = transfer.uri
       this.unconfirmedTouched = true
+      transfer.writeStartedAt = this.perfNow()
       file.writeArrayBuffer({
         uri: transfer.uri,
         buffer: transfer.buffer,
         position: 0,
         success: function () {
           if (!page.ownsMapOperation(message.id, epoch) || page.activeTransfer !== transfer) return
+          transfer.writeMs = page.perfElapsed(transfer.writeStartedAt)
           transfer.buffer = null
           page.publishWrittenAsset(message, transfer)
         },
         fail: function () {
-          if (page.ownsMapOperation(message.id, epoch)) page.failAsset(message, "ASSET_WRITE_FAILED")
+          if (page.ownsMapOperation(message.id, epoch)) {
+            transfer.writeMs = page.perfElapsed(transfer.writeStartedAt)
+            page.failAsset(message, "ASSET_WRITE_FAILED")
+          }
         }
       })
     } catch (error) {
-      if (this.ownsMapOperation(message.id, epoch)) this.failAsset(message, "ASSET_WRITE_FAILED")
+      if (this.ownsMapOperation(message.id, epoch)) {
+        transfer.writeMs = this.perfElapsed(transfer.writeStartedAt)
+        this.failAsset(message, "ASSET_WRITE_FAILED")
+      }
     }
   },
 
@@ -1567,6 +1649,8 @@ export default {
       transferStartedAt: transfer.startedAt,
       validatedAt: transfer.validatedAt,
       renderStartedAt: Date.now(),
+      mountedAt: this.perfNow(),
+      writeMs: transfer.writeMs,
       preview: this.preparedRender ? this.preparedRender.preview : null
     }
     this.activeTransfer = null
@@ -1773,6 +1857,14 @@ export default {
     if (!success && typeof errorCode === "string" && /^ASSET_[A-Z0-9_]{1,40}$/.test(errorCode)) {
       body.errorCode = errorCode
     }
+    this.perfNow()
+    var perf = { v: 1, clockValid: this.perfClockValid }
+    var page = this
+    ;["writeMs", "decodeMs", "applyMs", "cleanupMs"].forEach(function (field) {
+      perf[field] = page.perfClockValid && publication[field] !== undefined ? publication[field] : null
+    })
+    this.lastRenderPerf = perf
+    body.perf = Object.assign({}, perf)
     this.sendEnvelope({
       v: 1,
       id: this.nextBandMessageID(),
@@ -1790,6 +1882,14 @@ export default {
   },
 
   sendEnvelope(message) {
+    if (message.body && message.body.perf) {
+      // Optional measurements must never enlarge the existing 512-byte replies.
+      var fields = ["nativeMemory", "pendingDeletes", "inFlight", "files", "nodes", "cleanupMs", "writeMs", "decodeMs", "applyMs"]
+      for (var index = 0; index < fields.length && this.utf8Length(JSON.stringify(message)) > 512; index += 1) {
+        delete message.body.perf[fields[index]]
+      }
+      if (this.utf8Length(JSON.stringify(message)) > 512) delete message.body.perf
+    }
     if (!this.connected || !this.connection || !this.validEnvelope(message, "band")) return
     var page = this
     var ownedConnection = this.connection
@@ -1900,6 +2000,8 @@ export default {
     var publication = this.pendingPublication
     if (!publication || token !== publication.token || this.lifecycleEpoch !== publication.epoch ||
       this.activeMapOperationID !== publication.operationID || publication.cleanupStarted) return
+    var applyStartedAt = this.perfNow()
+    publication.decodeMs = this.perfElapsed(publication.mountedAt, applyStartedAt)
     publication.cleanupStarted = true
     this.resetStream()
     var priorMap = this.confirmedMap
@@ -1922,16 +2024,20 @@ export default {
     this.pendingMapToken = ""
     this.showDiagnostics = false
     this.navScene = publication.scene || ""
+    this.perfFrame = "f" + (publication.scene || "").slice(-6)
     this.navSequence = -1
     if (!priorMap) {
       this.navStatus = "WAITING"
       this.navStatusVisible = false
     }
     this.applyPreviewOverlay(publication.preview)
+    publication.applyMs = this.perfElapsed(applyStartedAt)
+    var cleanupStartedAt = this.perfNow()
     var page = this
     var publish = function () {
       if (page.pendingPublication !== publication || page.lifecycleEpoch !== publication.epoch ||
         page.activeMapOperationID !== publication.operationID) return
+      publication.cleanupMs = page.perfElapsed(cleanupStartedAt)
       page.pendingPublication = null
       if (!page.releaseMapOperation(publication.operationID)) return
       page.sendRenderResult(publication, true, Date.now() - publication.renderStartedAt, "")
@@ -1956,6 +2062,8 @@ export default {
     var publication = this.pendingPublication
     if (!publication || token !== publication.token || this.lifecycleEpoch !== publication.epoch ||
       this.activeMapOperationID !== publication.operationID || publication.cleanupStarted) return
+    var applyStartedAt = this.perfNow()
+    publication.decodeMs = this.perfElapsed(publication.mountedAt, applyStartedAt)
     publication.cleanupStarted = true
     this.pendingMapPath = ""
     this.pendingMapToken = ""
@@ -1974,10 +2082,13 @@ export default {
     }
     this.showDiagnostics = true
     this.logText = "Map image display failed."
+    publication.applyMs = this.perfElapsed(applyStartedAt)
+    var cleanupStartedAt = this.perfNow()
     var page = this
     var publish = function () {
       if (page.pendingPublication !== publication || page.lifecycleEpoch !== publication.epoch ||
         page.activeMapOperationID !== publication.operationID) return
+      publication.cleanupMs = page.perfElapsed(cleanupStartedAt)
       page.pendingPublication = null
       page.unconfirmedURI = ""
       page.unconfirmedTouched = false
@@ -2012,4 +2123,5 @@ export default {
 .stream-attribution { position: absolute; left: 75px; top: 481px; width: 62px; height: 18px; font-size: 9px; text-align: center; color: #f4f3e5; }
 .nav-destination { position: absolute; width: 28px; }
 .nav-marker { position: absolute; width: 30px; height: 38px; object-fit: contain; }
+.perf-frame { position: absolute; left: 72px; top: 454px; width: 90px; height: 18px; font-size: 11px; color: #ffffff; background-color: #07162b; text-align: center; }
 </style>
