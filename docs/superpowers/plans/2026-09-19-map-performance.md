@@ -10,8 +10,8 @@ Goal: establish reproducible GPS-to-Band confirmation latency and bounded-resour
 - [x] Add a standard-library analyzer and `make perf-report RUN=...`; refuse optimistic pass with missing or invalid evidence.
 - [x] Extend the existing external GPS playback tool with PREPARE/RUN/FINISHED test sessions, metadata and guaranteed cleanup attempts.
 - [x] Supply the step-by-step Vietnamese T01–T07 guide in `docs/manual-tests/2026-09-19-map-performance.md`.
-- [ ] Run all Linux checks, iOS simulator/device-build CI and independent review; package the exact test builds.
-- [ ] User performs baseline T01–T06, exports traces and selected video; analyze actual bottlenecks.
+- [x] Run all Linux checks, iOS simulator/device-build CI and independent review; package the exact test builds.
+- [ ] User performs baseline T01–T06, exports traces and optional video; analyze actual bottlenecks.
 - [ ] Only after baseline, test bounded cached-image translation/rotation on the real Band; select architecture using latency, coverage, readability and resource evidence.
 - [ ] Repeat T01–T07 for the candidate and retain separate automated, release and hardware results.
 
@@ -34,3 +34,12 @@ The analyzer writes report.md, summary.json and timeline.csv beside the input. I
 Do not increase the 30-cell-file/24-cell-node bounds, transmit window or payload size merely to improve benchmark numbers. Start with measured baseline and preserve old error-204, ACK, stale-callback, decode-cycle and starvation regressions. A rendering rewrite and a subsecond hardware claim remain gated by device evidence.
 
 BLE records retain operationStartedUptime (phone monotonic seconds) across retries; an operation begun before the current navigation session cannot write into that session. ble.write reports attempted and outcome; a cancelled/closed operation without a native write has writeMs:null. CPU telemetry registration does not block GPS startup. Mixed-session exports require an explicit SESSION selection for a single-case result.
+
+
+## Verified software handoff (2026-09-19)
+
+`make test` passed: 204 Swift, 54 Band, 19 protocol-lab and 35 analyzer tests, plus metadata/syntax/location-runtime/script checks. `make test-gps-replay` passed 16 tests. Lint, secret checks and diff whitespace checks passed. Independent review corrections cover stale operation ownership, BLE attempt/outcome semantics, recorder lifecycle order, duplicate GPS correlation and the 1 Hz cadence/startup gates.
+
+[iOS CI 35421081631](https://github.com/LordierClaw/blueband-map/actions/runs/35421081631) passed simulator tests and the unsigned arm64 build at `20d4020`. [Band CI 35420769141](https://github.com/LordierClaw/blueband-map/actions/runs/35420769141) and [Swift CI 35420769126](https://github.com/LordierClaw/blueband-map/actions/runs/35420769126) passed at `e1657a4`; later changes only split iOS export views to resolve SwiftUI type-checker limits. IPA/RPK contents and SHA-256 were verified before replacing `artifacts/handoff`.
+
+The handoff includes IPA, RPK, GPS source/fixture ZIP, a Vietnamese test guide and checksums. No live GPS replay or iPhone/Band hardware acceptance was performed during implementation. Baseline/device-dependent architecture work remains pending above.
