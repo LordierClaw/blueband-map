@@ -17,38 +17,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Xiaomi Smart Band 10") {
-                    Button("Kết nối") { isBandPickerPresented = true }.disabled(model.sessionState != .idle)
-                    LabeledContent("Phiên", value: model.sessionState.rawValue)
-                    if model.sessionState != .idle && model.sessionState != .scanning {
-                        Button("Ngắt kết nối", role: .destructive) { Task { await model.disconnect() } }
-                    }
-                }
-                Section("Device proof") {
-                    LabeledContent("Battery", value: model.snapshot.batteryLevel.map { "\($0)%" } ?? "—")
-                    LabeledContent("Model", value: model.snapshot.model ?? "—")
-                    LabeledContent("Firmware", value: model.snapshot.firmware ?? "—")
-                }
-                Section("RPK trust") {
-                    LabeledContent("Handshake", value: rpkLabel)
-                    Button("Reset trusted fingerprint", role: .destructive) { Task { await model.resetTrustedRPK() } }
-                }
-                navigationSection
-                Section("system.echo") {
-                    TextField("Payload", text: $model.echoInput)
-                    Button("Gửi echo") { Task { await model.sendEcho() } }.disabled(model.rpkState != .ready)
-                    ForEach(model.events) { item in
-                        HStack { Text(item.source.rawValue.uppercased()).font(.caption.bold()); Text(item.text); Spacer(); Text(item.delivery.rawValue).font(.caption2) }
-                    }
-                }
-                if let error = model.errorMessage { Section("Lỗi an toàn") { Text(error).foregroundStyle(.red) } }
-                Section("Build") {
-                    LabeledContent("iOS", value: BlueBandProduct.version)
-                    Text("Active background navigation • motorcycle • raster route-card")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
+            mainForm
             .navigationTitle(BlueBandProduct.displayName)
             .toolbar { Button("Cấu hình") { isConfigPresented = true } }
             .sheet(isPresented: $isConfigPresented) { ConfigView(model: model) }
@@ -69,6 +38,41 @@ struct ContentView: View {
             .onDisappear { model.navigationScreenActive(false) }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 model.applicationStateChanged(phase == .active ? "active" : phase == .background ? "background" : "inactive")
+            }
+        }
+    }
+
+    private var mainForm: some View {
+        Form {
+            Section("Xiaomi Smart Band 10") {
+                Button("Kết nối") { isBandPickerPresented = true }.disabled(model.sessionState != .idle)
+                LabeledContent("Phiên", value: model.sessionState.rawValue)
+                if model.sessionState != .idle && model.sessionState != .scanning {
+                    Button("Ngắt kết nối", role: .destructive) { Task { await model.disconnect() } }
+                }
+            }
+            Section("Device proof") {
+                LabeledContent("Battery", value: model.snapshot.batteryLevel.map { "\($0)%" } ?? "—")
+                LabeledContent("Model", value: model.snapshot.model ?? "—")
+                LabeledContent("Firmware", value: model.snapshot.firmware ?? "—")
+            }
+            Section("RPK trust") {
+                LabeledContent("Handshake", value: rpkLabel)
+                Button("Reset trusted fingerprint", role: .destructive) { Task { await model.resetTrustedRPK() } }
+            }
+            navigationSection
+            Section("system.echo") {
+                TextField("Payload", text: $model.echoInput)
+                Button("Gửi echo") { Task { await model.sendEcho() } }.disabled(model.rpkState != .ready)
+                ForEach(model.events) { item in
+                    HStack { Text(item.source.rawValue.uppercased()).font(.caption.bold()); Text(item.text); Spacer(); Text(item.delivery.rawValue).font(.caption2) }
+                }
+            }
+            if let error = model.errorMessage { Section("Lỗi an toàn") { Text(error).foregroundStyle(.red) } }
+            Section("Build") {
+                LabeledContent("iOS", value: BlueBandProduct.version)
+                Text("Active background navigation • motorcycle • raster route-card")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -127,26 +131,7 @@ struct ContentView: View {
                 Button("Bắt đầu điều hướng") { model.startNavigation() }
                     .disabled(model.rpkState != .ready)
             }
-            Toggle("Đo hiệu năng", isOn: $model.performanceEnabled).disabled(navigationIsActive)
-            Toggle("Hiện số khung khi quay video", isOn: $model.performanceVisualMarker).disabled(navigationIsActive)
-            Menu {
-                Button("Log tóm tắt (.txt)") { isDebugExportPresented = true }
-                    .disabled(model.navigationDebugEntries.isEmpty)
-                Button("Performance trace (.jsonl)") {
-                    isPreparingTrace = true
-                    Task {
-                        do {
-                            traceData = try await model.performanceTrace.export()
-                            if traceData.isEmpty { traceExportError = "Chưa có phiên đo được lưu." }
-                            else { traceExportError = nil; isTraceExportPresented = true }
-                        } catch { traceExportError = "Không đọc được trace đầy đủ. Không dùng log này để kết luận đạt." }
-                        isPreparingTrace = false
-                    }
-                }
-            } label: { Label("Export debug log", systemImage: "square.and.arrow.up") }
-                .disabled(isPreparingTrace)
-            if isPreparingTrace { ProgressView("Đang chuẩn bị trace…") }
-            if let traceExportError { Text(traceExportError).foregroundStyle(.red) }
+            performanceControls
             if !model.navigationDebugEntries.isEmpty {
                 DisclosureGroup("Debug log (\(model.navigationDebugEntries.count))") {
                     ForEach(model.navigationDebugEntries, id: \.sequence) { entry in
@@ -159,6 +144,30 @@ struct ContentView: View {
             Text("Preview dùng cùng ảnh và vị trí map đã xác nhận trên Band.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder
+    private var performanceControls: some View {
+        Toggle("Đo hiệu năng", isOn: $model.performanceEnabled).disabled(navigationIsActive)
+        Toggle("Hiện số khung khi quay video", isOn: $model.performanceVisualMarker).disabled(navigationIsActive)
+        Menu {
+            Button("Log tóm tắt (.txt)") { isDebugExportPresented = true }
+                .disabled(model.navigationDebugEntries.isEmpty)
+            Button("Performance trace (.jsonl)") {
+                isPreparingTrace = true
+                Task {
+                    do {
+                        traceData = try await model.performanceTrace.export()
+                        if traceData.isEmpty { traceExportError = "Chưa có phiên đo được lưu." }
+                        else { traceExportError = nil; isTraceExportPresented = true }
+                    } catch { traceExportError = "Không đọc được trace đầy đủ. Không dùng log này để kết luận đạt." }
+                    isPreparingTrace = false
+                }
+            }
+        } label: { Label("Export debug log", systemImage: "square.and.arrow.up") }
+            .disabled(isPreparingTrace)
+        if isPreparingTrace { ProgressView("Đang chuẩn bị trace…") }
+        if let traceExportError { Text(traceExportError).foregroundStyle(.red) }
     }
 
     private var instructionLabel: String {
