@@ -17,28 +17,37 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            mainForm
+            traceExportForm
             .navigationTitle(BlueBandProduct.displayName)
             .toolbar { Button("Cấu hình") { isConfigPresented = true } }
             .sheet(isPresented: $isConfigPresented) { ConfigView(model: model) }
             .sheet(isPresented: $isBandPickerPresented) { BandPickerView(model: model) }
-            .fileExporter(
-                isPresented: $isDebugExportPresented,
-                document: NavigationDebugDocument(text: model.navigationDebugExport),
-                contentType: .plainText,
-                defaultFilename: "BlueBandMap-navigation-debug.txt"
-            ) { _ in }
-            .fileExporter(isPresented: $isTraceExportPresented,
-                document: PerformanceTraceDocument(data: traceData),
-                contentType: .performanceTrace, defaultFilename: "navigation.jsonl") { result in
-                    if case .failure = result { traceExportError = "Không lưu được trace. Hãy thử export lại." }
-                    traceData = Data()
-                }
             .onAppear { model.navigationScreenActive(true) }
             .onDisappear { model.navigationScreenActive(false) }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 model.applicationStateChanged(phase == .active ? "active" : phase == .background ? "background" : "inactive")
             }
+        }
+    }
+
+    private var debugExportForm: some View {
+        mainForm.fileExporter(
+            isPresented: $isDebugExportPresented,
+            document: NavigationDebugDocument(text: model.navigationDebugExport),
+            contentType: UTType.plainText,
+            defaultFilename: "BlueBandMap-navigation-debug.txt"
+        ) { (_: Result<URL, Swift.Error>) in }
+    }
+
+    private var traceExportForm: some View {
+        debugExportForm.fileExporter(
+            isPresented: $isTraceExportPresented,
+            document: PerformanceTraceDocument(data: traceData),
+            contentType: UTType.performanceTrace,
+            defaultFilename: "navigation.jsonl"
+        ) { (result: Result<URL, Swift.Error>) in
+            if case .failure(_) = result { traceExportError = "Không lưu được trace. Hãy thử export lại." }
+            traceData = Data()
         }
     }
 
