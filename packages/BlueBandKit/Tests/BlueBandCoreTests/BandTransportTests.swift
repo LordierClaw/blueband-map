@@ -14,6 +14,10 @@ final class BandTransportTests: XCTestCase {
             XCTAssertEqual(metrics["attempted"], .bool(true))
             XCTAssertEqual(metrics["outcome"], .string("succeeded"))
             XCTAssertNotNil(metrics["operationStartedUptime"])
+            XCTAssertEqual(metrics["nativeWriteCount"], .number(1))
+            XCTAssertEqual(metrics["attemptedBytes"], .number(11))
+            XCTAssertEqual(metrics["queueDepth"], .number(0))
+            XCTAssertEqual(metrics["frameKind"], .string("data"))
             XCTAssertNil(metrics["payload"])
             reported.fulfill()
         }

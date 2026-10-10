@@ -43,6 +43,7 @@ The repository intentionally does not support macOS virtualization on non-Apple 
 
 - [Product overview and POC roadmap](docs/product/overview.md)
 - [Map/navigation feasibility review](docs/research/map-navigation-feasibility.md)
+- [Subsecond streaming research: startup, movement and turns](docs/research/2026-10-10-subsecond-map-streaming.md)
 - [Architecture overview](docs/architecture/overview.md)
 - [Module boundaries](docs/architecture/module-boundaries.md)
 - [Runtime state machine](docs/architecture/runtime-state-machine.md)

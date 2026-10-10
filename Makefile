@@ -1,4 +1,5 @@
 .DEFAULT_GOAL := help
+PYTHON ?= python3
 
 .PHONY: help doctor bootstrap test test-swift test-rpk test-lab test-ios-metadata test-vietmap-smoke vietmap-smoke-route vietmap-smoke-style test-handoff lint clean
 
@@ -81,10 +82,10 @@ clean:
 
 .PHONY: test-perf perf-report test-gps-replay
 test-perf:
-	python3 -m unittest discover -s tools/perf -p 'test_*.py'
+	$(PYTHON) -m unittest discover -s tools/perf -p 'test_*.py'
 
 perf-report:
-	python3 tools/perf/report.py "$(RUN)" $(if $(SESSION),--session "$(SESSION)")
+	$(PYTHON) tools/perf/report.py "$(RUN)" $(if $(SESSION),--session "$(SESSION)")
 
 test-gps-replay:
 	$(MAKE) -C ../blueband-map-route-test test

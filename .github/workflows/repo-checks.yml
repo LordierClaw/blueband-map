@@ -21,6 +21,8 @@ jobs:
           persist-credentials: false
       - name: Run fast repository checks
         run: make lint
+      - name: Run canonical Linux test suites
+        run: make test
       - name: Download and verify pinned Gitleaks
         env:
           GITLEAKS_VERSION: 8.30.0

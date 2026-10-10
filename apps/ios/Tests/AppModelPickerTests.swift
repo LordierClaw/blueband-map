@@ -12,6 +12,20 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testRejectedStartStillRecordsIntentAndTerminalReason() async throws {
+        let model = makeModel(central: PickerCentral(), authMode: .missing)
+        model.startNavigation()
+        let data = try await model.performanceTrace.export()
+        let rows = try data.split(separator: 10).map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any]) }
+        XCTAssertEqual(rows.prefix(2).compactMap { $0["event"] as? String }, ["session.start", "navigation.intent"])
+        let metadata = try XCTUnwrap(rows.first?["metrics"] as? [String: Any])
+        XCTAssertEqual(metadata["measurementVersion"] as? Int, 2)
+        XCTAssertNotNil(metadata["osVersion"])
+        XCTAssertNotNil(metadata["deviceModel"])
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "navigation.rejected" })
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "session.end" })
+    }
+
     func testPhoneTileViewClipsAndTranslatesNativePixelsWithoutSeams() throws {
         for (x, y) in [(0, 0), (-17, 9), (127, -129)] {
             let viewport = try CorridorViewport(x: x, y: y)

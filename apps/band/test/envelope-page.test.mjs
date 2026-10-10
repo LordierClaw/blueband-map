@@ -96,6 +96,57 @@ async function harness() {
   return { page: await loadPage(connection, file), sent, file, connection }
 }
 
+test("native callback diagnostics count first owned completion without throttling sends", async () => {
+  const pending = [], sent = []
+  let now = 1000
+  const connection = {
+    getReadyState({ success }) { success({ status: 1 }) },
+    send(options) { sent.push(options.data); pending.push(options) }
+  }
+  const page = await loadPage(connection, memoryFile(), { now: () => now })
+  try {
+    page.sendACK("one"); page.sendACK("two")
+    assert.equal(pending.length, 2, "passive measurement cannot serialize native sends")
+    now += 20
+    pending[0].success?.(); pending[0].success?.(); pending[0].fail({}, 204)
+    now += 10
+    pending[1].fail({}, 204); pending[1].success?.()
+    assert.equal(page.connected, true)
+    page.receiveMessage({ data: envelope("probe", "diagnostics.get", { request: "native-1", transport: true }) })
+    const report = sent.find(m => m.topic === "diagnostics.report")
+    assert.deepEqual(report.body.transport, { v: 1, clockValid: true, attempted: 2, succeeded: 1,
+      failed: 1, pending: 0, peakPending: 2, timeouts204: 1, abandoned: 0, lastCallbackMs: 30, maxCallbackMs: 30 })
+    assert.ok(Buffer.byteLength(JSON.stringify(report)) <= 512)
+    assert.equal(report.body.perf, undefined, "transport has its own bounded reply")
+  } finally { page.onDestroy() }
+})
+
+test("uncompleted sends and stale lifecycle callbacks stay distinguishable", async () => {
+  const pending = [], sent = []
+  let now = 1000
+  const connection = { getReadyState({ success }) { success({ status: 1 }) },
+    send(options) { sent.push(options.data); pending.push(options) } }
+  const page = await loadPage(connection, memoryFile(), { now: () => now })
+  try {
+    page.sendACK("old")
+    page.resetMapLifecycle()
+    pending[0].success?.(); pending[0].fail({}, 1006)
+    assert.equal(page.connected, true)
+    page.sendACK("new")
+    now = 900
+    pending[1].success?.()
+    page.sendACK("no-callback")
+    page.receiveMessage({ data: envelope("probe", "diagnostics.get", { request: "native-2", transport: true }) })
+    const metrics = sent.find(m => m.topic === "diagnostics.report").body.transport
+    assert.equal(metrics.abandoned, 1)
+    assert.equal(metrics.pending, 1)
+    assert.equal(metrics.succeeded, 1)
+    assert.equal(metrics.clockValid, false)
+    assert.equal(metrics.lastCallbackMs, null)
+    assert.equal(metrics.maxCallbackMs, null)
+  } finally { page.onDestroy() }
+})
+
 test("corridor streaming requires a confirmed scene and resets on full-map replacement", async () => {
   const { page, sent } = await harness()
   try {

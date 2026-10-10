@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
+from measurement import analyze_measurement
 
 
 THRESHOLD_MS = 1000
@@ -364,7 +365,16 @@ def analyze(path, selected_session=None):
         row["diagnostics"] = "; ".join(by_line[row["line"]])
         row["failureIds"] = ";".join(str(value) for value in sorted(failures_by_line[row["line"]] | failures_by_fix[identity]))
         row["fixStatus"] = fixes_by_id.get(identity, {}).get("status", "")
-    return {"schemaVersion": 1, "thresholdMs": THRESHOLD_MS,
+    measurement = analyze_measurement([item for events in sessions.values() for item in events], not diagnostics)
+    goal = measurement["subsecondGoal"]
+    if any(g["status"] == "FAIL" for g in (latency, gap, resource)):
+        goal["status"] = "FAIL"
+        goal["reasons"].append("A navigation/resource evidence gate failed")
+    elif any(g["status"] == "INCONCLUSIVE" for g in (latency, gap, resource)):
+        if goal["status"] == "PASS":
+            goal["status"] = "INCONCLUSIVE"
+        goal["reasons"].append("Navigation/resource evidence is incomplete")
+    return {**measurement, "schemaVersion": 1, "thresholdMs": THRESHOLD_MS,
             "availableSessions": available_sessions, "selectedSession": selected_session, "mixedSessions": mixed_sessions,
             "overall": gate(any(g["status"] == "FAIL" for g in (latency, gap, resource)),
                             ["One or more evidence gates are inconclusive"] if any(g["status"] == "INCONCLUSIVE" for g in (latency, gap, resource)) else []),
@@ -407,7 +417,7 @@ def context(run, summary):
         summary["diagnostics"].append({"code": "replay_unreadable", "message": str(error)})
     summary["replay"] = replay
     if len(summary["diagnostics"]) > previous_diagnostics:
-        for name in ("overall", "latencyGate", "frameGapGate", "resourceGate"):
+        for name in ("overall", "latencyGate", "frameGapGate", "resourceGate", "startupGate", "measurementReadiness", "subsecondGoal"):
             if summary[name]["status"] == "PASS":
                 summary[name]["status"] = "INCONCLUSIVE"
             summary[name]["reasons"].append("Provided run metadata/replay evidence is malformed or unreadable")
@@ -421,6 +431,9 @@ def markdown(summary):
              "This report measures GPS receipt through app-received Band frame confirmation. Physical pixel latency is UNVERIFIED; video needs separate review.",
              "Native RAM is " + summary["nativeMemoryEvidence"] + ". File/node counts are not RAM measurements.", "",
              "| Gate | Result | Limits / scope |", "| --- | --- | --- |",
+             f"| Complete subsecond goal | {summary['subsecondGoal']['status']} | Startup plus cached movement, coverage and turns; observed evidence only |",
+             f"| Start to first confirmation | {summary['startupGate']['status']} | Strictly <1000 ms from Start, including GPS/routing/bootstrap |",
+             f"| Measurement readiness | {summary['measurementReadiness']['status']} | Versioned environment, peer and native callback evidence |",
              f"| Fix to confirmation | {summary['latencyGate']['status']} | Normal navigation strictly <1000 ms; initial startup reported separately |",
              f"| Confirmation coverage | {summary['frameGapGate']['status']} | Accepted GPS input must meet its source-timestamp deadline; frame cadence alone is not a failure |",
              f"| Observed resources | {summary['resourceGate']['status']} | Cell files ≤30 (+1 identified transient), cell nodes ≤24, cell ≤8192 bytes |", "",
@@ -452,8 +465,15 @@ def markdown(summary):
     for session in summary["sessions"]:
         start = session.get("start") or {}
         lines.append(f"- {session['sessionId']} (UTC {start.get('wallUTC', 'unknown')}, build {start.get('build', 'unknown')}): {session['acceptedFixes']} accepted fixes, {session['confirmedFixes']} confirmed, {session['unconfirmedFixes']} unconfirmed.")
-    for name in ("latencyGate", "frameGapGate", "resourceGate"):
+    for name in ("startupGate", "measurementReadiness", "subsecondGoal", "latencyGate", "frameGapGate", "resourceGate"):
         lines.extend(f"- {name}: {reason}" for reason in summary[name]["reasons"])
+    lines.extend(["", "## Startup and phase observations", ""])
+    for item in summary["startup"]:
+        lines.append(f"- {item['sessionId']}: Start to confirmation {item['intentToConfirmMs']} ms (unknown when null).")
+    for phase, item in summary["phases"].items():
+        lines.append(f"- {phase}: {item['confirmations']} confirmations, max GPS-to-confirmation {item['maxFixToConfirmMs']} ms.")
+    lines.extend(["", "Commands in summary.json join physical write attempts/retries by session and request ID. Stage percentiles do not establish causality.",
+                  f"Stream resets: {len(summary['streamResets'])}; user observations: {len(summary['observations'])}."])
     lines.extend(["", "## Failures and diagnostics", ""])
     for failure in summary["failures"]:
         lines.append(f"- Failure {failure['id']}, line {failure['line']}, session {failure.get('sessionId')}, fix {failure.get('fixId')}, scene {failure.get('scene')}: {failure['message']}.")

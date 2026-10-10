@@ -74,6 +74,24 @@ final class InterconnectSessionTests: XCTestCase {
         XCTAssertEqual(commandCount, 3)
     }
 
+    func testIncomingApplicationACKWaitIsMeasuredBeforeDispatch() async throws {
+        let session = makeSession(recorder: CommandRecorder(), trust: MemoryTrustStore())
+        try await session.receive(.statusRequest(identity))
+        let observed = expectation(description: "incoming application ACK wait")
+        await session.setPerformanceObserver { event, metrics in
+            guard event == "ble.receive" else { return }
+            XCTAssertEqual(metrics["requestId"], .string("band-evidence"))
+            XCTAssertEqual(metrics["topic"], .string("map.stream.state"))
+            XCTAssertNotNil(metrics["ackWaitMs"])
+            XCTAssertNil(metrics["body"])
+            observed.fulfill()
+        }
+        let envelope = ApplicationEnvelope.message(id: "band-evidence", source: .band,
+            topic: "map.stream.state", body: [:])
+        try await session.receive(.wearMessage(identity: identity, content: try envelope.encoded()))
+        await fulfillment(of: [observed], timeout: 1)
+    }
+
     func testOutgoingRequiresHandshakeAndAckCorrelates() async throws {
         let recorder = CommandRecorder()
         let session = makeSession(recorder: recorder, trust: MemoryTrustStore())
