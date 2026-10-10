@@ -566,6 +566,14 @@ final class AppModel: ObservableObject {
     private func beginAutomaticFinish(reason: String) {
         guard let owner = automaticRunID, automaticFinishTask == nil else { return }
         navigationReplay?.stop()
+        // Freeze scene producers before draining arrival: an ACK for a retired
+        // scene proves receipt only and the Band can legitimately ignore it.
+        rerouteTask?.cancel(); rerouteTask = nil; pendingReroute = nil
+        snapshotRefreshTask?.cancel(); snapshotRefreshTask = nil
+        nextSnapshotPreparation?.cancel(); nextSnapshotPreparation = nil
+        pendingSnapshotRefresh = nil; snapshotIsTransmitting = false
+        renderCoordinator.cancel()
+        invalidateCorridor()
         automaticFinishTask = Task { @MainActor [weak self] in
             guard let self else { return }
             // Let a queued terminal nav.update reach its normal acknowledgement,

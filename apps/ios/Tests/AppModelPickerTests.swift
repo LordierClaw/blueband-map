@@ -135,13 +135,17 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil({ model.navigationState == .arrived }, timeout: .seconds(5))
         XCTAssertGreaterThanOrEqual(renders, 2)
         await gate.release()
-        await waitUntil { model.navigationDebugEntries.filter { $0.stage == "band.displayed" }.count >= 2 }
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertEqual(model.navigationDebugEntries.filter { $0.stage == "band.displayed" }.count, 1,
+            "a cancelled late render cannot replace the arrival scene")
         await sender.releaseNavigation()
         await waitUntil({ await sender.requests.count == 4 }, timeout: .seconds(5))
         try await answerAutomaticDiagnostics(model, sender: sender)
         await waitUntil { model.preparedPerformanceTrace != nil }
         let updates = await sender.navigationUpdates
         XCTAssertEqual(updates.last?["status"], .string("arrived"))
+        let finalScene = await sender.finalScene()
+        XCTAssertEqual(updates.last?["scene"], finalScene)
         let rows = try XCTUnwrap(model.preparedPerformanceTrace).split(separator: 10).map {
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
         }
@@ -974,6 +978,7 @@ private actor MeasurementProbeSender: RouteCardSessionSending {
     func setReceiver(_ receiver: @escaping @MainActor @Sendable (ApplicationEnvelope) -> Void) async {
         await renderer.setReceiver(receiver)
     }
+    func finalScene() async -> JSONValue? { await renderer.prepareValue("sceneId") }
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
         if topic == "diagnostics.get" { requests.append(body); return "probe-ack" }
         if topic == "nav.update" {
