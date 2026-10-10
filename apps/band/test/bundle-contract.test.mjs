@@ -61,7 +61,7 @@ test("page follows one-instance lifecycle and v1 envelope contract", async () =>
   assert.doesNotMatch(page, /@system\.crypto|crypto\.atob|crypto\.hashDigest/)
   assert.doesNotMatch(page, /transform:rotate\(|transform-origin:/)
   assert.doesNotMatch(page, /transform:\s*JSON\.stringify\(\{\s*rotate:/)
-  assert.match(page, /RPK 0\.6\.19/)
+  assert.match(page, /RPK 0\.6\.20/)
   assert.doesNotMatch(page, /<input[^>]+\/>|class="diagnostics"|ECHO PING|CLEAR EVENTS/)
   assert.match(page, /<image[^>]+src="\{\{ mapPath \}\}"[^>]+\/>/)
   assert.match(page, /<image[^>]+src="\{\{ pendingMapPath \}\}"[^>]+@complete="mapComplete\(pendingMapToken\)"[^>]+@error="mapError\(pendingMapToken\)"[^>]+\/>/)
@@ -176,7 +176,7 @@ test("normal npm build keeps the Band entry firmware-safe", { timeout: 120000 },
   const diagnostics = result.stdout + result.stderr
   assert.equal(result.status, 0, diagnostics)
   assert.doesNotMatch(diagnostics, /unsupport(?:ed)? attribute|unsupported (?:attribute|property)/i)
-  assert.match(result.stdout, /verified .*\.0\.6\.19\.rpk/)
+  assert.match(result.stdout, /verified .*\.0\.6\.20\.rpk/)
 
   const compiledEntry = await readFile(new URL("build/pages/index/index.js", root), "utf8")
   assert.equal(/\.\/src\/common\//.test(compiledEntry), false,
