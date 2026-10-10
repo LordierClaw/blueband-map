@@ -115,9 +115,24 @@ test("native callback diagnostics count first owned completion without throttlin
     page.receiveMessage({ data: envelope("probe", "diagnostics.get", { request: "native-1", transport: true }) })
     const report = sent.find(m => m.topic === "diagnostics.report")
     assert.deepEqual(report.body.transport, { v: 1, clockValid: true, attempted: 2, succeeded: 1,
-      failed: 1, pending: 0, peakPending: 2, timeouts204: 1, abandoned: 0, lastCallbackMs: 30, maxCallbackMs: 30 })
+      failed: 1, pending: 0, peakPending: 2, timeouts204: 1, abandoned: 0, saturated: false, lastCallbackMs: 30, maxCallbackMs: 30 })
     assert.ok(Buffer.byteLength(JSON.stringify(report)) <= 512)
     assert.equal(report.body.perf, undefined, "transport has its own bounded reply")
+  } finally { page.onDestroy() }
+})
+
+test("transport reply matches an independent literal maximum-width vector", async () => {
+  const literal = (await readFile(new URL("./fixtures/transport-diagnostics.json", import.meta.url), "utf8")).trim()
+  assert.equal(Buffer.byteLength(literal), 451)
+  const expected = JSON.parse(literal), sent = []
+  const connection = { getReadyState({ success }) { success({ status: 1 }) }, send({ data }) { sent.push(data) } }
+  const page = await loadPage(connection, memoryFile(), { now: () => 9999999999999 })
+  try {
+    page.nextID = 999999; page.rpkBuild = 2147483647; page.rpkVersion = "0.6.19"
+    page.transportPerf = { ...expected.body.transport }
+    delete page.transportPerf.v; delete page.transportPerf.clockValid
+    page.receiveMessage({ data: envelope("probe", "diagnostics.get", { request: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", transport: true }) })
+    assert.equal(JSON.stringify(sent[0]), literal)
   } finally { page.onDestroy() }
 })
 

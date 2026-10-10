@@ -295,6 +295,9 @@ final class InterconnectSessionTests: XCTestCase {
         XCTAssertEqual(operationStarts.count, 2)
         XCTAssertNotNil(operationStarts.first ?? nil)
         XCTAssertEqual(operationStarts.first, operationStarts.last, "retry retains the original operation's session boundary")
+        let contexts = await sender.operationContexts()
+        XCTAssertEqual(contexts.map(\.requestID), ["i-retry-race", "i-retry-race"])
+        XCTAssertEqual(contexts.map(\.topic), ["system.echo", "system.echo"])
         let envelope = try decodePhoneEnvelope(retry)
         let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .band)
         try await session.receive(.wearMessage(identity: identity, content: try ack.encoded()))
@@ -1097,11 +1100,13 @@ private actor FirstTimeoutClock: BlueBandClock {
 private actor BlockingRetryCommandSender {
     private var commands: [BandCommand] = []
     private var starts: [TimeInterval?] = []
+    private var contexts: [BandPerformanceContext.Command] = []
     private var retryWaiters: [CheckedContinuation<BandCommand, Never>] = []
 
     func send(_ command: BandCommand) async throws {
         guard command.subtype == 8 else { return }
         starts.append(BandPerformanceContext.operationStartedUptime)
+        if let context = BandPerformanceContext.command { contexts.append(context) }
         commands.append(command)
         if commands.count == 1 { return }
         retryWaiters.forEach { $0.resume(returning: command) }
@@ -1116,6 +1121,7 @@ private actor BlockingRetryCommandSender {
 
     func phoneSendCount() -> Int { commands.count }
     func operationStarts() -> [TimeInterval?] { starts }
+    func operationContexts() -> [BandPerformanceContext.Command] { contexts }
 }
 
 private enum TestSendError: Swift.Error, Equatable {

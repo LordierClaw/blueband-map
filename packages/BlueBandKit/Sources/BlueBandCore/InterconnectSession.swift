@@ -96,9 +96,19 @@ public actor InterconnectSession {
             let envelope = try ApplicationEnvelope.decode(content, expecting: .ios)
             switch envelope.type {
             case .message:
+                let received = ProcessInfo.processInfo.systemUptime
+                let observer = performanceObserver
                 let ack = ApplicationEnvelope.acknowledgement(id: envelope.id, source: .ios)
-                try await sendCommand(ThirdPartyAppCodec.phoneMessage(identity: identity, content: try ack.encoded()))
+                try await BandPerformanceContext.$operationStartedUptime.withValue(received) {
+                    try await BandPerformanceContext.$command.withValue(.init(requestID: envelope.id,
+                        topic: envelope.topic ?? "", direction: "incomingACK")) {
+                        try await sendCommand(ThirdPartyAppCodec.phoneMessage(identity: identity, content: try ack.encoded()))
+                    }
+                }
                 try ensureReceiveIsCurrent(currentGeneration, identity: identity)
+                observer?("ble.receive", ["requestId": .string(envelope.id), "topic": .string(envelope.topic ?? ""),
+                    "operationStartedUptime": .number(received),
+                    "ackWaitMs": .number((ProcessInfo.processInfo.systemUptime - received) * 1000)])
                 if remember(envelope.id) { eventContinuation.yield(.received(envelope)) }
             case .ack:
                 guard var pending = pendingDeliveries[envelope.id] else { return }
@@ -133,7 +143,9 @@ public actor InterconnectSession {
         try reserve(id: id, token: token, generation: currentGeneration, operationStartedUptime: operationStarted)
         do {
             try await BandPerformanceContext.$operationStartedUptime.withValue(operationStarted) {
-                try await sendCommand(command)
+                try await BandPerformanceContext.$command.withValue(.init(requestID: id, topic: topic, direction: "outgoingCommand")) {
+                    try await sendCommand(command)
+                }
             }
         } catch {
             guard isCurrent(id: id, token: token, generation: currentGeneration) else {
@@ -255,7 +267,10 @@ public actor InterconnectSession {
         Task { [weak session, sender, command, envelope, token, generation] in
             do {
                 try await BandPerformanceContext.$operationStartedUptime.withValue(operationStartedUptime) {
-                    try await sender(command)
+                    try await BandPerformanceContext.$command.withValue(.init(requestID: envelope.id,
+                        topic: envelope.topic ?? "", direction: "outgoingCommand")) {
+                        try await sender(command)
+                    }
                 }
                 await session?.transmitAwaitedCompleted(
                     .success(()),

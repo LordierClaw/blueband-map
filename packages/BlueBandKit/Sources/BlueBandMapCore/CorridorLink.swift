@@ -14,6 +14,7 @@ public final class CorridorLink {
     public private(set) var displayedFixTimestamp: Date?
     public private(set) var failure: String?
     public var onDisplay: ((CorridorViewport, Int) -> Void)?
+    public var onViewRequest: ((CorridorViewport, Int, Date, Int) -> Void)?
     private let send: Send
     private let timeout: Duration
     private var scene = ""
@@ -131,6 +132,7 @@ public final class CorridorLink {
         let seq = sequence
         views[seq] = (viewport, fixTimestamp)
         views = views.filter { $0.key >= seq - 8 }
+        onViewRequest?(viewport, seq, fixTimestamp, viewport.visibleCells.filter { !cachedCells.contains($0.key) }.count)
         do {
             _ = try await send("map.stream.view", ["epoch": .string(owned), "seq": .number(Double(seq)),
                 "x": .number(Double(viewport.x)), "y": .number(Double(viewport.y)),

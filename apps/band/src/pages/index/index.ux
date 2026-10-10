@@ -588,6 +588,10 @@ export default {
   },
 
   onReady() {
+    // Plain, non-rendered state: diagnostics must not trigger reactive image work.
+    this.transportPerf = { attempted: 0, succeeded: 0, failed: 0, pending: 0,
+      peakPending: 0, timeouts204: 0, abandoned: 0, saturated: false,
+      lastCallbackMs: null, maxCallbackMs: null }
     this.streamState = null
     this.streamTransfer = null
     this.streamWritePending = false
@@ -715,6 +719,10 @@ export default {
   },
 
   resetMapLifecycle() {
+    if (this.transportPerf) {
+      this.transportCount("abandoned", this.transportPerf.pending)
+      this.transportPerf.pending = 0
+    }
     this.perfVisual = false
     this.resetStream()
     this.restorePreparedNavigation()
@@ -831,6 +839,14 @@ export default {
     if (message.topic === "diagnostics.get") {
       var request = message.body.request
       if (typeof request !== "string" || !/^[a-z0-9-]{1,32}$/.test(request)) return
+      if (message.body.transport === true) {
+        this.sendEnvelope({
+          v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "diagnostics.report",
+          body: { request: request, rpk: this.rpkBuild, versionName: this.rpkVersion, transport: this.transportSnapshot() }
+        })
+        this.sendACK(message.id)
+        return
+      }
       if (typeof message.body.visual === "boolean") this.perfVisual = message.body.visual
       var perf = this.resourcePerf()
       if (message.body.render === true && this.lastRenderPerf) {
@@ -1881,6 +1897,18 @@ export default {
     return id
   },
 
+  transportCount(field, increment) {
+    var next = this.transportPerf[field] + increment
+    if (next > 2147483647) this.transportPerf.saturated = true
+    this.transportPerf[field] = Math.min(2147483647, next)
+  },
+
+  transportSnapshot() {
+    var value = Object.assign({ v: 1, clockValid: this.perfClockValid }, this.transportPerf)
+    if (!value.clockValid) { value.lastCallbackMs = null; value.maxCallbackMs = null }
+    return value
+  },
+
   sendEnvelope(message) {
     if (message.body && message.body.perf) {
       // Optional measurements must never enlarge the existing 512-byte replies.
@@ -1894,16 +1922,32 @@ export default {
     var page = this
     var ownedConnection = this.connection
     var epoch = this.lifecycleEpoch
+    var started = this.perfNow()
+    var completed = false
+    this.transportCount("attempted", 1)
+    this.transportCount("pending", 1)
+    this.transportPerf.peakPending = Math.max(this.transportPerf.peakPending, this.transportPerf.pending)
+    var finish = function (failed) {
+      if (completed || !page.ownsConnectionEpoch(ownedConnection, epoch) ||
+        !page.connected || !page.acceptingMessages) return false
+      completed = true
+      page.transportPerf.pending = Math.max(0, page.transportPerf.pending - 1)
+      page.transportCount(failed ? "failed" : "succeeded", 1)
+      var elapsed = page.perfElapsed(started)
+      page.transportPerf.lastCallbackMs = elapsed
+      if (elapsed !== null) page.transportPerf.maxCallbackMs = Math.max(page.transportPerf.maxCallbackMs || 0, elapsed)
+      return true
+    }
     ownedConnection.send({
       data: message,
+      success: function () { finish(false) },
       fail: function (data, code) {
-        if (!page.ownsConnectionEpoch(ownedConnection, epoch) ||
-          !page.connected || !page.acceptingMessages) return
+        if (!finish(true)) return
         var nativeCode = typeof code === "number" ? code : data && data.code
         page.lastSendCode = page.validInteger(nativeCode) && nativeCode >= 0 && nativeCode <= 65535 ? nativeCode : -1
         // A native send timeout is not a disconnect. Keep accepted chunks so
         // the phone's bounded exact-command retry can request the ACK again.
-        if (page.lastSendCode === 204) return
+        if (page.lastSendCode === 204) { page.transportCount("timeouts204", 1); return }
         page.lock("SEND FAILED")
       }
     })

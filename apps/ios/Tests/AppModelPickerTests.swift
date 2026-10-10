@@ -12,6 +12,35 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testMeasurementSnapshotIsBoundedAndDoesNotChangeDuringNavigation() async throws {
+        let manager = TestLocationManager()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            location: ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true }),
+            navigationConfigured: true)
+        model.destinationLatitudeInput = "21.1"; model.destinationLongitudeInput = "106.1"
+        model.performanceCaseID = "fg test/中文-01" + String(repeating: "x", count: 40)
+        model.performanceGPSSource = .replay; model.performanceMapMode = .full
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { manager.updating }
+        let snapshot = try XCTUnwrap(model.activeMeasurement)
+        XCTAssertEqual(snapshot.caseID, "fgtest-01" + String(repeating: "x", count: 23))
+        XCTAssertEqual(snapshot.caseID.utf8.count, 32)
+        model.performanceMapMode = .automatic; model.performanceCaseID = "next-case"
+        model.startNavigation() // duplicate Start must not replace the running trace
+        XCTAssertEqual(model.activeMeasurement, snapshot)
+        model.markMeasurementPhase(.turn); model.markVisibleProblem()
+        model.stopNavigation()
+        let rows = try await model.performanceTrace.export().split(separator: 10).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        XCTAssertEqual(rows.filter { $0["event"] as? String == "navigation.intent" }.count, 1)
+        let metadata = try XCTUnwrap(rows.first?["metrics"] as? [String: Any])
+        XCTAssertEqual(metadata["mapMode"] as? String, "full")
+        XCTAssertEqual(metadata["testCaseID"] as? String, snapshot.caseID)
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "measurement.phase" })
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "measurement.observation" })
+    }
+
     func testRejectedStartStillRecordsIntentAndTerminalReason() async throws {
         let model = makeModel(central: PickerCentral(), authMode: .missing)
         model.startNavigation()

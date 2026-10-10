@@ -71,7 +71,14 @@ final class CorridorLinkTests: XCTestCase {
         let oldEpoch = try XCTUnwrap(link.epoch)
         let view = try CorridorViewport(x: 0, y: 8)
         let timestamp = Date(timeIntervalSince1970: 1234)
+        var observed = false
+        link.onViewRequest = { received, sequence, fix, missing in
+            XCTAssertEqual(received, view); XCTAssertEqual(sequence, 1); XCTAssertEqual(fix, timestamp)
+            XCTAssertEqual(missing, view.visibleCells.count)
+            observed = true
+        }
         let accepted = await link.sendView(view, fixTimestamp: timestamp)
+        XCTAssertTrue(observed)
         XCTAssertTrue(accepted)
         XCTAssertNil(link.displayedViewport, "ACK is not visual completion")
         peer.reply(topic: "map.stream.state", body: ["epoch": .string(oldEpoch), "seq": .number(1),

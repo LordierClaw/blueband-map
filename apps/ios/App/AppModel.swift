@@ -78,7 +78,18 @@ final class AppModel: ObservableObject {
     private let performanceFixes: PerformanceFixTracker
     @Published var performanceEnabled = true
     @Published var performanceVisualMarker = false
+    @Published var performanceCaseID = ""
+    @Published var performanceGPSSource: NavigationMeasurement.GPSSource = .unknown
+    @Published var performanceMapMode: NavigationMeasurement.MapMode = .automatic
+    @Published private(set) var activeMeasurement: NavigationMeasurement?
+    @Published private(set) var performanceDiagnosticsStatus = "Chưa chụp chẩn đoán"
     private var performanceProbeRequest: String?
+    private var transportProbeRequest: String?
+    private var performanceProbeSession: String?
+    private var performanceProbeDeadline: TimeInterval = 0
+    private var performanceProbeTask: Task<Void, Never>?
+    private var receivedResourceProbe = false
+    private var receivedTransportProbe = false
 
     private let keyStore: any AuthKeyStoreProtocol
     private let vietmapKeyStore: any VietmapKeyStoreProtocol
@@ -208,6 +219,12 @@ final class AppModel: ObservableObject {
                 speed: location.speed, accepted: accepted, reason: reason)
         }
         corridorLink.onDisplay = { [weak self] view, seq in self?.corridorDisplayed(view, sequence: seq) }
+        corridorLink.onViewRequest = { [weak self] view, seq, timestamp, missing in
+            guard let self else { return }
+            performanceTrace.record("map.view.request", fixID: performanceFixes.identifier(timestamp),
+                scene: activeSceneID, epoch: corridorLink.epoch, viewSequence: seq,
+                metrics: ["x": .number(Double(view.x)), "y": .number(Double(view.y)), "missingCells": .number(Double(missing))])
+        }
     }
 
     var pickerCandidates: [BandCandidate] { BandCandidateOrdering.order(candidates, remembered: rememberedBand) }
@@ -337,29 +354,39 @@ final class AppModel: ObservableObject {
 
     func startNavigation() {
         guard navigationTask == nil else { return }
+        let intentUptime = ProcessInfo.processInfo.systemUptime
+        performanceProbeTask?.cancel(); performanceProbeTask = nil
+        performanceProbeSession = nil
+        resetNavigationDebug()
+        performanceFixes.reset()
+        let measurement = NavigationMeasurement(caseID: performanceCaseID, gpsSource: performanceGPSSource,
+            mapMode: performanceMapMode, visualMarker: performanceVisualMarker)
+        activeMeasurement = measurement
+        corridorUnavailable = measurement.mapMode == .full
+        if performanceEnabled {
+            var metadata = measurement.metadata
+            metadata["build"] = .string("\(BlueBandProduct.version) (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))")
+            metadata["firmware"] = .string(snapshot.firmware ?? "unknown")
+            metadata["transferWindow"] = .number(4)
+            performanceTrace.start(metadata: metadata)
+            performanceTrace.record("navigation.intent", metrics: ["sampleUptimeMs": .number(intentUptime * 1000)])
+        }
         guard rpkState == .ready else {
-            resetNavigationDebug()
             navigationState = .failed("RPK_NOT_READY")
             errorMessage = "Navigation Failed (RPK_NOT_READY). Hãy kết nối và chờ xác thực band."
             logNavigation("navigation.rejected", "reason=RPK_NOT_READY")
+            performanceTrace.end(reason: "rejected-rpk-not-ready")
             return
         }
         guard let destination, let serviceKey = loadVietmapKey(.service) else {
-            resetNavigationDebug()
             navigationState = .failed("CONFIG_MISSING")
             errorMessage = "Navigation Failed (CONFIG_MISSING). Hãy lưu tọa độ đích và Service/API key."
             logNavigation("navigation.rejected", "reason=CONFIG_MISSING")
+            performanceTrace.end(reason: "rejected-config-missing")
             return
         }
         saveDestination()
-        resetNavigationDebug()
-        performanceFixes.reset()
-        if performanceEnabled {
-            performanceTrace.start(metadata: ["build": .string("\(BlueBandProduct.version) (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))"),
-                "firmware": .string(snapshot.firmware ?? "unknown"), "transferWindow": .number(4),
-                "visualMarker": .bool(performanceVisualMarker), "nativeMemory": .null])
-            requestPerformanceDiagnostics()
-        }
+        capturePerformanceDiagnostics()
         navigationDestination = destination
         let tileMapAvailability = loadVietmapKey(.tileMap)?.isEmpty == false ? "present" : "absent"
         logNavigation(
@@ -381,6 +408,8 @@ final class AppModel: ObservableObject {
     }
 
     func stopNavigation() {
+        performanceProbeTask?.cancel(); performanceProbeTask = nil
+        performanceProbeSession = nil
         performanceTrace.end(reason: "stopped")
         navigationGeneration += 1
         invalidateCorridor(keepMap: false)
@@ -1193,16 +1222,60 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func requestPerformanceDiagnostics() {
+    func markMeasurementPhase(_ phase: NavigationMeasurement.Phase) {
+        performanceTrace.record("measurement.phase", metrics: ["phase": .string(phase.rawValue)])
+    }
+
+    func markVisibleProblem() {
+        performanceTrace.record("measurement.observation", metrics: ["visibleProblem": .bool(true)])
+    }
+
+    func capturePerformanceDiagnostics() {
+        guard performanceProbeTask == nil, let ownedSession = performanceTrace.activeSessionID else { return }
         let request = "perf-" + UUID().uuidString.prefix(12).lowercased()
         performanceProbeRequest = request
-        let sender = routeCardSender, visual = performanceVisualMarker
-        Task { _ = try? await sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
-            body: ["request": .string(request), "visual": .bool(visual)]) }
+        transportProbeRequest = request + "-t"
+        performanceProbeSession = ownedSession
+        performanceProbeDeadline = ProcessInfo.processInfo.systemUptime + 8
+        receivedResourceProbe = false; receivedTransportProbe = false
+        performanceDiagnosticsStatus = "Đang chờ chẩn đoán từ Band…"
+        let sender = routeCardSender, visual = activeMeasurement?.visualMarker ?? false
+        performanceProbeTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { if performanceProbeSession == ownedSession { performanceProbeTask = nil } }
+            async let resource: String? = try? sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
+                body: ["request": .string(request), "visual": .bool(visual)])
+            async let transport: String? = try? sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
+                body: ["request": .string(request + "-t"), "transport": .bool(true)])
+            _ = await (resource, transport)
+            while performanceProbeSession == ownedSession, performanceTrace.activeSessionID == ownedSession,
+                  !Task.isCancelled, ProcessInfo.processInfo.systemUptime < performanceProbeDeadline {
+                if receivedResourceProbe && receivedTransportProbe { return }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard !Task.isCancelled, performanceTrace.activeSessionID == ownedSession else { return }
+            performanceDiagnosticsStatus = "Thiếu chẩn đoán; giữ trace để kiểm tra"
+            performanceTrace.record("measurement.probe.incomplete", expectedSessionID: ownedSession,
+                metrics: ["resourceReceived": .bool(receivedResourceProbe), "transportReceived": .bool(receivedTransportProbe)])
+        }
     }
 
     private func recordPerformanceReply(_ envelope: ApplicationEnvelope) {
         guard envelope.src == .band, let body = envelope.body else { return }
+        if envelope.topic == "diagnostics.report" {
+            guard performanceProbeSession == performanceTrace.activeSessionID, performanceProbeSession != nil,
+                  ProcessInfo.processInfo.systemUptime <= performanceProbeDeadline else { return }
+            if body["request"] == transportProbeRequest.map(JSONValue.string) {
+                guard let metrics = NativeTransportDiagnostics.validated(body["transport"]) else {
+                    performanceTrace.record("band.transport.invalid", source: "band"); return
+                }
+                performanceTrace.record("band.transport", source: "band", requestID: transportProbeRequest, metrics: metrics)
+                receivedTransportProbe = true
+                if receivedResourceProbe { performanceDiagnosticsStatus = "Đã nhận đủ chẩn đoán; có thể Dừng và export" }
+                return
+            }
+            guard body["request"] == performanceProbeRequest.map(JSONValue.string) else { return }
+        }
         if envelope.topic == "diagnostics.report", body["request"] == performanceProbeRequest.map(JSONValue.string) {
             let keys = Set(["rpk", "versionName", "perfVersion", "phase", "offset", "received", "sendCode"])
             let metrics = body.filter { keys.contains($0.key) }
@@ -1233,6 +1306,10 @@ final class AppModel: ObservableObject {
             value >= 0, value <= 2147483647, value.rounded() == value { return Int(value) }; return nil }()
         performanceTrace.record("band.telemetry", source: "band", scene: text("sceneId"), epoch: text("epoch"),
             viewSequence: seq, requestID: text("request"), metrics: metrics)
+        if topic == "diagnostics.report" {
+            receivedResourceProbe = true
+            if receivedTransportProbe { performanceDiagnosticsStatus = "Đã nhận đủ chẩn đoán; có thể Dừng và export" }
+        }
     }
 
     private func checkNavigationOwner(_ generation: Int) throws {

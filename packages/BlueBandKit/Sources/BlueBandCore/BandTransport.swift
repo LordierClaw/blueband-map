@@ -5,6 +5,12 @@ public typealias BandPerformanceObserver = @Sendable (String, [String: JSONValue
 
 enum BandPerformanceContext {
     @TaskLocal static var operationStartedUptime: TimeInterval?
+    struct Command: Sendable {
+        let requestID: String
+        let topic: String
+        let direction: String
+    }
+    @TaskLocal static var command: Command?
 }
 
 public protocol BandLink: AnyObject, Sendable {
@@ -145,6 +151,8 @@ public actor BandTransport: BandTransportProtocol {
                     failConfiguration(Error.invalidSessionResponse)
                 }
             case .data:
+                let received = ProcessInfo.processInfo.systemUptime
+                let observer = performanceObserver
                 do {
                     try await write(SPPFrame(packetType: .ack, sequence: frame.sequence, payload: Data()))
                 } catch {
@@ -152,6 +160,8 @@ public actor BandTransport: BandTransportProtocol {
                     return
                 }
                 guard frame.payload.count >= 2 else { continue }
+                observer?("ble.receive.transport", ["ackWaitMs": .number((ProcessInfo.processInfo.systemUptime - received) * 1000),
+                    "operationStartedUptime": .number(received), "wireSequence": .number(Double(frame.sequence))])
                 messageContinuation.yield(BandTransportMessage(
                     channel: frame.payload[0] & 0x0F,
                     opcode: frame.payload[1],
@@ -164,14 +174,23 @@ public actor BandTransport: BandTransportProtocol {
     private func write(_ frame: SPPFrame) async throws {
         let queued = ProcessInfo.processInfo.systemUptime
         let operationStarted = BandPerformanceContext.operationStartedUptime ?? queued
+        let context = BandPerformanceContext.command
+        let queueDepth = writeWaiters.count + (writeLocked ? 1 : 0)
         let observer = performanceObserver
         await acquireWrite()
         let acquired = ProcessInfo.processInfo.systemUptime
         var attempted = false, outcome = "failed"
+        var nativeWriteCount = 0, attemptedBytes = 0
         defer {
             observer?("ble.write", ["queueMs": .number((acquired - queued) * 1000),
                 "writeMs": attempted ? .number((ProcessInfo.processInfo.systemUptime - acquired) * 1000) : .null,
                 "attempted": .bool(attempted), "outcome": .string(outcome),
+                "requestId": context.map { .string($0.requestID) } ?? .null,
+                "topic": context.map { .string($0.topic) } ?? .null,
+                "direction": context.map { .string($0.direction) } ?? .null,
+                "frameKind": .string(String(describing: frame.packetType)),
+                "queueDepth": .number(Double(queueDepth)),
+                "nativeWriteCount": .number(Double(nativeWriteCount)), "attemptedBytes": .number(Double(attemptedBytes)),
                 "operationStartedUptime": .number(operationStarted),
                 "wireSequence": .number(Double(frame.sequence)), "payloadBytes": .number(Double(frame.payload.count)),
                 "maximumWriteLength": .number(Double(link.maximumWriteLength))])
@@ -185,6 +204,8 @@ public actor BandTransport: BandTransportProtocol {
             while offset < bytes.count {
                 let end = min(offset + chunkSize, bytes.count)
                 attempted = true
+                nativeWriteCount += 1
+                attemptedBytes += end - offset
                 try await link.write(Data(bytes[offset..<end]))
                 offset = end
             }

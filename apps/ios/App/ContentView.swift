@@ -159,6 +159,7 @@ struct ContentView: View {
     private var performanceControls: some View {
         Toggle("Đo hiệu năng", isOn: $model.performanceEnabled).disabled(navigationIsActive)
         Toggle("Hiện số khung khi quay video", isOn: $model.performanceVisualMarker).disabled(navigationIsActive)
+        MeasurementControls(model: model, navigationIsActive: navigationIsActive)
         Menu {
             Button("Log tóm tắt (.txt)") { isDebugExportPresented = true }
                 .disabled(model.navigationDebugEntries.isEmpty)

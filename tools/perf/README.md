@@ -72,6 +72,41 @@ counters only; it does not infer continuous bounds between samples.
 
 ## Interpreting results
 
+Measurement contract 2 adds three gates without changing legacy `overall`:
+
+- `startupGate`: `navigation.intent.metrics.sampleUptimeMs` to the first
+  confirmed frame on the same iPhone monotonic clock, strictly below 1000 ms.
+  GPS acquisition, routing, rendering and transfer are all included.
+- `measurementReadiness`: known app/OS/model/firmware, case ID, declared GPS
+  source (`device`/`replay`), map mode (`automatic`/`full`), RPK identity and
+  native callback diagnostics. Missing/old capabilities remain inconclusive.
+- `subsecondGoal`: startup, normal navigation/resource gates and confirmations
+  in marked `cached`, `coverage`, `turn` phases. A visible-problem marker fails
+  this gate and requires video review even if software confirmations are fast.
+
+Phase labels are operator annotations; they do not independently prove that a
+physical turn occurred. A PASS covers this session's observations, not all cases.
+Use the [measurement runbook](../../docs/testing/measurement-runbook.md) to
+collect cold/warm, locked-phone and recovery cases in the same installation.
+
+`summary.json.commands` joins `ble.command`, `ble.write`, retries and ACKs by
+session/request, retaining events and line numbers. `attemptedBytes` counts
+physical write calls attempted, including calls that fail, not radio delivery.
+`nativeWriteCount` is the number of link calls; `queueDepth` counts frames ahead
+when enqueued. Uncorrelated SPP ACKs retain wire sequence and frame kind in the
+timeline. `ble.receive.transport` is SPP-ACK wait; `ble.receive` is application
+ACK wait before dispatch. Neither is remote receive latency.
+
+Band callback counters are cumulative over a page lifetime and sampled before
+the probe's own reply/ACK. `pending` is outstanding, `abandoned` means lifecycle
+invalidated the callback, and `saturated` invalidates exact counter arithmetic.
+Callbacks do not establish peer ACK or display completion. No callback is
+unknown duration. Compare counters only across snapshots of the same page.
+
+On Windows with a Python executable available, use
+`make test-perf PYTHON=C:/Python313/python.exe`. The symlink protection regression
+requires symlink permission; canonical Linux CI runs the entire suite unchanged.
+
 Timing statistics use exact nearest-rank p50/p95/p99/max and count samples
 greater than or equal to 1000 ms. The normal-navigation latency target is
 strictly below 1000 ms. Initial startup is reported separately and does not
