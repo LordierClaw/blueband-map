@@ -12,6 +12,58 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testAutomaticDisconnectPreservesFailureReasonAndExportsWithoutFinalProbe() async throws {
+        let sender = MeasurementProbeSender()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, sender: sender)
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        model.consume(.disconnected)
+        await waitUntil { model.preparedPerformanceTrace != nil }
+        XCTAssertFalse(model.isNavigationRunning)
+        XCTAssertEqual(model.navigationState, .failed("TEST_BAND_DISCONNECTED"))
+        let rows = try XCTUnwrap(model.preparedPerformanceTrace).split(separator: 10).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "band.connection.disconnected" })
+        let end = rows.first { $0["event"] as? String == "session.end" }?["metrics"] as? [String: Any]
+        XCTAssertEqual(end?["reason"] as? String, "TEST_BAND_DISCONNECTED")
+        // Replies already in flight must not revive the stopped test.
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        XCTAssertFalse(model.isNavigationRunning)
+        let requests = await sender.requests.count
+        XCTAssertEqual(requests, 2)
+    }
+
+    func testAutomaticSamplesWhileRouteWaitsAndMissingPeriodicProbeStopsAndExports() async throws {
+        let sender = MeasurementProbeSender(), gate = AutomaticRenderGate()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, routeTransport: SuspendedAutomaticRouteTransport(gate: gate), sender: sender)
+        defer { model.stopNavigation(); Task { await gate.release() } }
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil { model.navigationState == .routing }
+        await waitUntil({ await sender.requests.count == 4 }, timeout: .seconds(12))
+        guard await sender.requests.count == 4 else { return }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        XCTAssertTrue(model.isNavigationRunning)
+        await waitUntil({ await sender.requests.count == 6 }, timeout: .seconds(12))
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: .seconds(10))
+        XCTAssertFalse(model.isNavigationRunning)
+        XCTAssertEqual(model.navigationState, .failed("TEST_BAND_DIAGNOSTICS_TIMEOUT"))
+        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace), as: UTF8.self)
+        XCTAssertTrue(text.contains("automatic.health.sample"))
+        XCTAssertTrue(text.contains("measurement.probe.incomplete"))
+        XCTAssertTrue(text.contains("TEST_BAND_DIAGNOSTICS_TIMEOUT"))
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await gate.release()
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertFalse(model.isNavigationRunning)
+        let requests = await sender.requests.count
+        XCTAssertEqual(requests, 6, "do not add a final probe to a silent peer")
+    }
+
     func testAutomaticStopWhileProbeBlockedExportsAndOldWorkCannotRestartNavigation() async throws {
         let sender = BlockedMeasurementProbeSender(), manager = TestLocationManager()
         let model = makeModel(central: PickerCentral(), authMode: .missing,
@@ -1098,6 +1150,14 @@ private struct ReplayRouteTransport: MapHTTPTransport {
 private struct FailingAutomaticRouteTransport: MapHTTPTransport {
     func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
         throw URLError(.notConnectedToInternet)
+    }
+}
+
+private struct SuspendedAutomaticRouteTransport: MapHTTPTransport {
+    let gate: AutomaticRenderGate
+    func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
+        await gate.pause()
+        return try await ReplayRouteTransport().execute(request)
     }
 }
 
