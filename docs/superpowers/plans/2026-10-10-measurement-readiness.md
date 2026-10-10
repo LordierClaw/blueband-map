@@ -33,11 +33,11 @@
 
 **Interfaces:** `measurement.analyze_measurement(records, integrity_valid) -> dict`, added result keys `startupGate`, `startup`, `measurementReadiness`, `subsecondGoal`, `commands`, `phases`, `streamResets`, `observations`. Records use existing parsed events with `_line`; no changes to encoded schemaVersion.
 
-- [ ] Add RED CLI tests: startup 999/1000/1200 ms, newer GPS after slow routing, missing/duplicate intent, legacy/mixed/incomplete session, unknown metadata, a visible freeze marker, and request joins across retries/two sessions.
-- [ ] Run `make test-perf`; expect behavioral failures for missing complete-goal evidence.
-- [ ] Implement pure analysis and integrate reports; keep legacy statistics/exit semantics.
-- [ ] Run `make test-perf`; require all old and new cases pass, inspect generated report text.
-- [ ] Commit task with recorded RED/GREEN evidence.
+- [x] Add RED CLI tests: startup 999/1000/1200 ms, newer GPS after slow routing, missing/duplicate intent, legacy/mixed/incomplete session, unknown metadata, a visible freeze marker, and request joins across retries/two sessions.
+- [x] Run `make test-perf`; expect behavioral failures for missing complete-goal evidence.
+- [x] Implement pure analysis and integrate reports; keep legacy statistics/exit semantics.
+- [x] Run `make test-perf`; require all old and new cases pass, inspect generated report text.
+- [x] Commit task with recorded RED/GREEN evidence.
 
 ### Task 2: Correlated iPhone measurement and controls
 
@@ -45,11 +45,11 @@
 
 **Interfaces:** trace context carries requestID/topic across write tasks; `navigation.intent` uses `sampleUptimeMs`; `measurement.phase` carries one enumerated phase; `measurement.observation` carries `visibleProblem`; `session.start` carries immutable versioned metadata. `AppModel` exposes bounded case/source/mode settings and marker actions.
 
-- [ ] Add RED tests for end-to-end startup marker order, metadata snapshot, unsafe case normalization, immutable mode, full-frame comparison, request/retry write correlation and incoming ACK-wait observation.
-- [ ] Publish test-only commit to feature branch and run canonical portable/iOS tests; record intended RED failures before implementation.
-- [ ] Implement passive trace and controls; no wire/scheduling changes. Preserve recorder ownership/retention.
-- [ ] Run canonical tests in CI; require GREEN and inspect any Apple-only failures.
-- [ ] Commit task with recorded RED/GREEN evidence.
+- [x] Add RED tests for end-to-end startup marker order, metadata snapshot, unsafe case normalization, immutable mode, full-frame comparison, request/retry write correlation and incoming ACK-wait observation.
+- [x] Publish test-only commit to feature branch and run canonical portable/iOS tests; record intended RED failures before implementation.
+- [x] Implement passive trace and controls; no wire/scheduling changes. Preserve recorder ownership/retention.
+- [x] Run canonical tests in CI; require GREEN and inspect any Apple-only failures.
+- [x] Commit task with recorded RED/GREEN evidence.
 
 ### Task 3: Native Band callback diagnostics
 
@@ -57,11 +57,11 @@
 
 **Interfaces:** `diagnostics.get` accepts optional `transport:true`; reply body has request/rpk/versionName and bounded `transport` numeric summary with callback durations nullable. Existing resource/perf response remains unchanged when absent.
 
-- [ ] Add actual-page RED tests for asynchronous success/failure, 204 preserving state, duplicate callbacks, late connection callbacks, no callback, clock regression and literal max-size vectors.
-- [ ] Run `make test-rpk` in CI and verify intended RED results.
-- [ ] Implement passive counters and correlated iOS intake/on-demand capture with bounded request lifetime.
-- [ ] Run RPK/portable/iOS suites; verify generated firmware-safe bundle and unchanged old vectors.
-- [ ] Commit task with recorded RED/GREEN evidence.
+- [x] Add actual-page RED tests for asynchronous success/failure, 204 preserving state, duplicate callbacks, late connection callbacks, no callback, clock regression and literal max-size vectors.
+- [x] Run `make test-rpk` in CI and verify intended RED results.
+- [x] Implement passive counters and correlated iOS intake/on-demand capture with bounded request lifetime.
+- [x] Run RPK/portable/iOS suites; verify generated firmware-safe bundle and unchanged old vectors.
+- [x] Commit task with recorded RED/GREEN evidence.
 
 ### Task 4: Device packet, release and review
 
@@ -69,11 +69,13 @@
 
 **Interfaces:** one candidate pair identified by source SHA/app version/RPK version and artifact hashes; one folder per case with original export/video/notes and optional GPS sidecar. No output is represented as hardware acceptance.
 
-- [ ] Write a short staged runbook, evidence manifest example and decision table that identifies missing evidence before a long run.
-- [ ] Bump matching app/RPK metadata and any contract fixtures; run `make test`, `make lint`, `git diff --check`, Apple CI and RPK packaging.
-- [ ] Dispatch one fresh whole-branch review, fix important findings with RED/GREEN tests.
-- [ ] Download and inspect exact successful artifacts, create handoff with SHA256SUMS, report what still requires hardware.
+- [x] Write a short staged runbook, evidence manifest example and decision table that identifies missing evidence before a long run.
+- [x] Bump matching app/RPK metadata and any contract fixtures; run `make test`, `make lint`, `git diff --check`, Apple CI and RPK packaging.
+- [x] Dispatch one fresh whole-branch review, fix important findings with RED/GREEN tests.
+- [x] Download and inspect exact successful artifacts, create handoff with SHA256SUMS, report what still requires hardware.
 
 ## Execution record
 
 User authorized executing the previously proposed direction. Execute inline in `codex/map-diagnostics`; use one independent final reviewer. The original workspace's research remains untouched. Decisions and test outputs are kept in the plan-scoped `.superpowers` ledger. Windows lacks Docker/WSL; do not install a system hypervisor or use host Node to pretend equivalence. CI supplies the canonical Linux/Apple gates.
+
+Completed candidate source: `0947f7b9824eb13b6ea25722b3214673079f57a9`. Full RED/GREEN evidence and artifact hashes: [measurement candidate](../../testing/2026-10-10-measurement-candidate.md). Hardware acceptance remains pending as planned.
