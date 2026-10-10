@@ -23,6 +23,7 @@ async function loadPage(connection, file = memoryFile(), clock = Date) {
   )
   const page = structuredClone(component.private)
   for (const [name, value] of Object.entries(component)) if (name !== "private") page[name] = value
+  page.$nextTick = callback => callback()
   page.onReady()
   return page
 }
@@ -526,15 +527,224 @@ test("waiting page probes immediately with one in flight and owns one retry time
   }
 })
 
-function publish(page, scene = SCENE, suffix = "") {
+function stageMap(page, scene = SCENE, suffix = "") {
   page.receiveMessage({ data: envelope(`prepare${suffix}`, "render.prepare", prepare({ sceneId: scene })) })
   page.receiveMessage({ data: envelope(`begin${suffix}`, "map.asset.begin", begin({ scene })) })
   page.receiveMessage({ data: envelope(`chunk${suffix}`, "map.asset.chunk", {
     asset: ASSET, run: RUN, scene, offset: 0, data: Buffer.from(BYTES).toString("base64")
   }) })
   page.receiveMessage({ data: envelope(`end${suffix}`, "map.asset.end", { asset: ASSET, run: RUN, scene }) })
+}
+
+function publish(page, scene = SCENE, suffix = "") {
+  stageMap(page, scene, suffix)
   page.mapComplete(page.pendingPublication.token)
 }
+
+// Small template-backed mount model: tid retains a node; a changed src or an
+// unmounted node needs another native image load. This does not model firmware
+// allocation/cache policy. DOM changes are applied only at flush(), before ticks.
+async function mountedFullImages(page, file) {
+  const ux = await readFile(new URL("../src/pages/index/index.ux", import.meta.url), "utf8")
+  const definitions = [...ux.split("</template>")[0].matchAll(/<image\b[^>]*\/>/g)]
+    .map(match => Object.fromEntries([...match[0].matchAll(/([\w@-]+)="([^"]*)"/g)]
+      .map(([, name, value]) => [name, value])))
+    .filter(attributes => attributes.class.split(" ").includes("map"))
+  const evaluate = (expression, item) => new Function("$page", "$item",
+    `with ($page) { return (${expression.replace(/^\{\{\s*|\s*\}\}$/g, "")}) }`)(page, item)
+  const ticks = [], loads = [], prematureDeletes = []
+  let mounted = new Map()
+  page.$nextTick = callback => ticks.push(callback)
+  const originalDelete = file.delete
+  file.delete = function (options) {
+    if ([...mounted.values()].some(node => node.uri === options.uri)) prematureDeletes.push(options.uri)
+    originalDelete.call(file, options)
+  }
+  function flush(runTicks = true) {
+    const next = new Map()
+    if (page.connected && (page.mapReady || page.pendingPublication)) {
+      definitions.forEach((definition, index) => {
+        const items = definition.for ? evaluate(definition.for) : [null]
+        for (const item of items) {
+          if (definition.if && !evaluate(definition.if, item)) continue
+          const key = `${index}:${definition.for ? item[definition.tid] : "single"}`
+          const uri = evaluate(definition.src, item)
+          let node = mounted.get(key)
+          if (!node || node.uri !== uri) {
+            const callback = name => {
+              const event = definition[`@${name}`]
+              if (!event) return () => {}
+              const [, method, argumentsExpression] = event.match(/^(\w+)\((.*)\)$/)
+              const args = evaluate(`[${argumentsExpression}]`, item)
+              return () => page[method](...args)
+            }
+            node = { uri, decoded: false, complete: callback("complete"), error: callback("error") }
+            loads.push(node)
+          }
+          node.style = definition.style ? evaluate(definition.style, item) : ""
+          next.set(key, node)
+        }
+      })
+    }
+    mounted = next
+    if (runTicks) {
+      const ready = ticks.splice(0)
+      for (const callback of ready) callback()
+    }
+    assert.deepEqual(prematureDeletes, [], "a file must outlive every mounted image using it")
+    return [...mounted.values()]
+  }
+  return { flush, loads, complete(node) { node.decoded = true; node.complete() } }
+}
+
+test("twenty full-frame publications retain the decoded node and retire files after unmount", async () => {
+  const { page, sent, file } = await harness()
+  const images = await mountedFullImages(page, file)
+  let confirmed
+  for (let index = 0; index < 20; index++) {
+    stageMap(page, `scene-${index.toString().padStart(10, "0")}`, `-retained-${index}`)
+    const staged = images.flush().find(node => node !== confirmed)
+    assert.ok(staged)
+    assert.equal(staged.style, "opacity:0;", "pending pixels must not obscure the last complete map")
+    if (confirmed) assert.equal(confirmed.style, "opacity:1;")
+    assert.equal(images.loads.length, index + 1, "one image load per transferred frame")
+    assert.ok(images.flush().length <= 2, "at most confirmed and pending images are mounted")
+    const previous = confirmed
+    images.complete(staged)
+    staged.complete()
+    staged.error()
+    if (previous) { previous.complete(); previous.error() }
+    assert.deepEqual(images.flush(), [staged], "publication must keep its already decoded image node")
+    assert.ok(staged.decoded)
+    assert.equal(staged.style, "opacity:1;")
+    staged.complete()
+    staged.error()
+    if (previous) { previous.complete(); previous.error() }
+    assert.deepEqual(images.flush(), [staged])
+    assert.equal(sent.filter(message => message.topic === "render.result").length, index + 1)
+    assert.equal(file.storage.size, 1)
+    confirmed = staged
+    page.streamVisible = true
+    assert.deepEqual(images.flush(), [confirmed], "corridor coverage must not remount the fallback image")
+    assert.equal(confirmed.style, "opacity:0;")
+    page.streamVisible = false
+    assert.deepEqual(images.flush(), [confirmed])
+    assert.equal(confirmed.style, "opacity:1;")
+  }
+  assert.equal(images.loads.length, 20)
+  assert.equal(file.deletes.length, 19)
+  page.onDestroy()
+  images.flush()
+  confirmed.complete()
+  confirmed.error()
+  assert.equal(sent.filter(message => message.topic === "render.result").length, 20)
+})
+
+test("failed and reset full-frame mounts preserve the last decoded map and ignore stale callbacks", async () => {
+  const { page, sent, file } = await harness()
+  const images = await mountedFullImages(page, file)
+  stageMap(page)
+  const confirmed = images.flush()[0]
+  images.complete(confirmed)
+  images.flush()
+  stageMap(page, "scene-1111111111", "-error")
+  const failed = images.flush().find(node => node !== confirmed)
+  failed.error()
+  assert.deepEqual(images.flush(), [confirmed])
+  failed.complete()
+  failed.error()
+  assert.equal(sent.filter(message => message.topic === "render.result").length, 2)
+  assert.equal(sent.filter(message => message.topic === "render.result")[1].body.status, "error")
+  stageMap(page, "scene-2222222222", "-reset")
+  const stale = images.flush().find(node => node !== confirmed)
+  page.resetMapLifecycle()
+  assert.deepEqual(images.flush(), [confirmed])
+  stageMap(page, "scene-3333333333", "-next")
+  const pending = images.flush().find(node => node !== confirmed)
+  stale.complete()
+  stale.error()
+  assert.equal(page.pendingPublication.scene, "scene-3333333333")
+  page.onDestroy()
+  assert.deepEqual(images.flush(), [])
+  pending.complete()
+  pending.error()
+  assert.equal(sent.filter(message => message.topic === "render.result").length, 2)
+  assert.ok(file.storage.has(confirmed.uri))
+  assert.equal(file.storage.size, 2) // Destroyed pages defer abandoned cleanup to startup.
+})
+
+test("startup removes owned full frames when destruction drops a queued DOM retirement", async () => {
+  const { page, file, connection } = await harness()
+  const images = await mountedFullImages(page, file)
+  stageMap(page)
+  images.complete(images.flush()[0])
+  images.flush()
+  stageMap(page, "scene-1111111111", "-destroyed")
+  const pending = images.flush().find(node => !node.decoded)
+  images.complete(pending)
+  page.onDestroy()
+  assert.equal(page.activeMapOperationID, "")
+  images.flush(false) // A destroyed page is allowed to drop its next DOM callback.
+  file.storage.set("internal://files/unrelated.png", BYTES)
+  file.storage.set("internal://files/nav-not-an-owned-digest.png", BYTES)
+  await loadPage(connection, file)
+  assert.deepEqual([...file.storage.keys()].sort(), [
+    "internal://files/nav-not-an-owned-digest.png", "internal://files/unrelated.png"
+  ])
+})
+
+test("startup full-frame scrub recognizes only owned names and preserves a concurrently mounted map", async () => {
+  const file = memoryFile()
+  const abandoned = "internal://files/nav-0000000000000000-scene-1111111111.jpg"
+  const unrelated = "internal://files/nav-not-an-owned-digest.png"
+  file.storage.set(abandoned, BYTES)
+  file.storage.set(unrelated, BYTES)
+  let finishList
+  file.list = ({ success }) => { finishList = success }
+  const page = await loadPage({
+    getReadyState({ success }) { success({ status: 1 }) }, send() {}
+  }, file)
+  stageMap(page)
+  const liveURI = page.pendingPublication.uri
+  finishList({ fileList: [...file.storage.keys()].map(uri => ({ uri })) })
+  assert.ok(!file.storage.has(abandoned), "a new page must recover files whose DOM retirement was dropped")
+  assert.ok(file.storage.has(unrelated))
+  assert.ok(file.storage.has(liveURI), "late directory listing must not delete the current publication")
+  page.mapComplete(page.pendingPublication.token)
+})
+
+test("a destroyed page's delayed DOM retirement cannot delete its successor's confirmed file", async () => {
+  const { page, file, connection } = await harness()
+  const images = await mountedFullImages(page, file)
+  stageMap(page)
+  images.complete(images.flush()[0])
+  images.flush()
+  stageMap(page, "scene-1111111111", "-old-page")
+  images.complete(images.flush().find(node => !node.decoded))
+  page.onDestroy()
+  images.flush(false)
+  const successor = await loadPage(connection, file)
+  publish(successor, "scene-2222222222", "-new-page")
+  const currentURI = successor.confirmedMap.uri
+  assert.ok(file.storage.has(currentURI))
+  images.flush() // The former page's queued callback arrives after URI reuse.
+  assert.ok(file.storage.has(currentURI), "a destroyed page must not delete its successor's confirmed file")
+  assert.equal(successor.mapImages.length, 1)
+})
+
+test("unavailable DOM retirement hook keeps the file and releases completed publication ownership", async () => {
+  const { page, file } = await harness()
+  publish(page)
+  const previousURI = page.confirmedMap.uri
+  delete page.$nextTick
+  publish(page, "scene-1111111111", "-missing-tick")
+  assert.equal(page.confirmedMap.scene, "scene-1111111111")
+  assert.equal(page.pendingPublication, null)
+  assert.equal(page.activeMapOperationID, "")
+  assert.equal(page.retiredMapURI, previousURI)
+  assert.ok(file.storage.has(previousURI), "never delete before an unavailable DOM update hook")
+  assert.deepEqual(page.pendingDeleteURIs, [])
+})
 
 test("publishes only a prepared 212x520 raster snapshot and one aggregate result", async () => {
   const { page, sent, file } = await harness()

@@ -5,13 +5,12 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.20</text>
+      <text class="version">RPK 0.6.21</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
       <div class="map-frame" if="{{ mapReady || pendingPublication }}">
-        <image class="map" if="{{ mapReady && !streamVisible }}" src="{{ mapPath }}" />
-        <image class="map map-pending" if="{{ pendingPublication }}" src="{{ pendingMapPath }}" @complete="mapComplete(pendingMapToken)" @error="mapError(pendingMapToken)" />
+        <image class="map" for="{{ mapImages }}" tid="token" src="{{ $item.uri }}" style="{{ streamVisible || $item.token !== mapToken ? 'opacity:0;' : 'opacity:1;' }}" @complete="mapComplete($item.token)" @error="mapError($item.token)" />
         <image class="stream-cell" for="{{ streamImages }}" tid="uri" src="{{ $item.uri }}" style="{{ $item.style }}" @complete="streamImageComplete($item.key, $item.uri, $item.token)" @error="streamImageError($item.key, $item.uri, $item.token)" />
         <text class="stream-attribution" if="{{ streamVisible }}">© Vietmap</text>
         <image class="nav-destination" if="{{ mapReady && navDestinationVisible }}" src="{{ navDestinationPath }}" style="{{ navDestinationStyle }}" />
@@ -551,6 +550,7 @@ export default {
     mapReady: false,
     streamVisible: false,
     streamImages: [],
+    mapImages: [],
     mapPath: "",
     mapHashPrefix: "",
     mapRenderer: "",
@@ -577,8 +577,8 @@ export default {
     retiredMapURI: "",
     nextRenderToken: 1,
     showDiagnostics: true,
-    rpkVersion: "0.6.20",
-    rpkBuild: 35,
+    rpkVersion: "0.6.21",
+    rpkBuild: 36,
     perfVisual: false,
     perfFrame: "",
     perfLastNow: 0,
@@ -739,6 +739,9 @@ export default {
       (this.activeTransfer ? this.activeTransfer.uri : this.unconfirmedURI)
     var preserveURI = this.confirmedMap ? this.confirmedMap.uri : ""
     var shouldDelete = cleanupURI && (cleanupURI !== preserveURI || this.unconfirmedTouched)
+    var cleanupMounted = this.mapImages.some(function (image) { return image.uri === cleanupURI })
+    var preserveToken = !this.destroyed && this.confirmedMap ? this.confirmedMap.token : ""
+    this.mapImages = this.mapImages.filter(function (image) { return image.token === preserveToken })
     this.activeMapOperationID = ""
     this.inFlightIDs = []
     this.activeTransfer = null
@@ -761,7 +764,7 @@ export default {
       this.mapToken = ""
       this.showDiagnostics = true
     }
-    if (shouldDelete) this.deleteBestEffort(cleanupURI)
+    if (shouldDelete) this.scheduleDelete(cleanupURI, null, null, cleanupMounted)
   },
 
   restorePreparedNavigation() {
@@ -1054,6 +1057,12 @@ export default {
         if (!entry || typeof entry.uri !== "string") return
         var uri = entry.uri.indexOf("internal://") === 0 ? entry.uri : "internal://files/" + entry.uri
         page.retireCellFile(uri)
+        // A destroyed page may lose its queued DOM retirement callback. Recover
+        // only our full-frame names, excluding anything this page now owns.
+        if (/^internal:\/\/files\/nav-[0-9a-f]{16}(-scene-[a-z0-9-]{1,32})?\.(png|jpg)$/.test(uri) &&
+          uri !== page.unconfirmedURI && (!page.activeTransfer || uri !== page.activeTransfer.uri) &&
+          (!page.pendingPublication || uri !== page.pendingPublication.uri) &&
+          (!page.confirmedMap || uri !== page.confirmedMap.uri)) page.deleteBestEffort(uri)
       })
       page.streamCleanupDone = true
     }
@@ -1679,6 +1688,10 @@ export default {
       writeMs: transfer.writeMs,
       preview: this.preparedRender ? this.preparedRender.preview : null
     }
+    // Keep this same keyed image through confirmation: rebinding its URI onto
+    // another image would start an unobserved native load. Admission permits
+    // only the last confirmed image plus this one pending image.
+    this.mapImages.push({ uri: transfer.uri, token: token })
     this.activeTransfer = null
     this.holdSuccessfulAsset(message.id)
   },
@@ -1801,9 +1814,13 @@ export default {
     this.showDiagnostics = true
   },
 
-  scheduleDelete(uri, success, fail) {
+  scheduleDelete(uri, success, fail, afterDOMUpdate) {
     if (typeof uri !== "string" || !uri || this.pendingDeleteURIs.indexOf(uri) >= 0) return false
+    var mounted = this.mapImages.some(function (image) { return image.uri === uri })
+    if (mounted) this.mapImages = this.mapImages.filter(function (image) { return image.uri !== uri })
     this.invalidateConfirmedURI(uri)
+    // Reserve before waiting so another transfer cannot reuse this file while
+    // the old image is still mounted. $nextTick confirms a DOM update, not pixels.
     this.pendingDeleteURIs.push(uri)
     var page = this
     var completed = false
@@ -1814,15 +1831,25 @@ export default {
       if (index >= 0) page.pendingDeleteURIs.splice(index, 1)
       if (callback) callback()
     }
-    try {
-      file.delete({
-        uri: uri,
-        success: function () { finish(success) },
-        fail: function () { finish(fail) }
-      })
-    } catch (error) {
-      finish(fail)
+    var removeFile = function () {
+      // A successor page may already have reused this URI. Only the live page
+      // owns its deferred reservation; startup scrub handles abandoned files.
+      if ((mounted || afterDOMUpdate) && page.destroyed) { finish(fail); return }
+      try {
+        file.delete({
+          uri: uri,
+          success: function () { finish(success) },
+          fail: function () { finish(fail) }
+        })
+      } catch (error) {
+        finish(fail)
+      }
     }
+    if (mounted || afterDOMUpdate) {
+      // If teardown drops this callback, reset releases operation ownership and
+      // the next page's startup scrub recovers the abandoned owned file.
+      try { this.$nextTick(removeFile) } catch (error) { finish(fail) }
+    } else removeFile()
     return true
   },
 
