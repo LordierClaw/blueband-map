@@ -12,6 +12,84 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testStopRecordsAdmissionAndCleanupBeforeTerminalEvent() async throws {
+        let manager = TestLocationManager()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            location: ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true }),
+            navigationConfigured: true)
+        model.destinationLatitudeInput = "21.1"; model.destinationLongitudeInput = "106.1"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { manager.updating }
+        model.stopNavigation()
+        let rows = try await model.performanceTrace.export().split(separator: 10).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        let events = rows.compactMap { $0["event"] as? String }
+        let requested = try XCTUnwrap(events.firstIndex(of: "navigation.stop.requested"))
+        let stopped = try XCTUnwrap(events.firstIndex(of: "navigation.stopped"))
+        let ended = try XCTUnwrap(events.firstIndex(of: "session.end"))
+        XCTAssertLessThan(requested, stopped); XCTAssertLessThan(stopped, ended)
+        XCTAssertEqual(model.navigationState, .idle)
+        XCTAssertFalse(manager.backgroundEnabled)
+    }
+
+    func testAutomaticTestRejectsInstalledOldRPKWithoutWaitingForGPS() async throws {
+        let sender = MeasurementProbeSender(), manager = TestLocationManager()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            location: ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true }),
+            navigationConfigured: true, sender: sender)
+        defer { model.stopNavigation() }
+        model.destinationLatitudeInput = "21.1"; model.destinationLongitudeInput = "106.1"
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        let requests = await sender.requests
+        let resourceID = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
+        model.consume(.received(.message(id: "old-rpk", source: .band, topic: "diagnostics.report",
+            body: ["request": resourceID, "rpk": .number(31)])))
+        await waitUntil { if case .failed("TEST_RPK_MISMATCH") = model.navigationState { return true }; return false }
+        XCTAssertNil(model.navigationRouteDistanceMeters)
+        XCTAssertFalse(manager.backgroundEnabled, "automatic tests cannot accidentally wait on physical GPS")
+        let rows = try await model.performanceTrace.export().split(separator: 10).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "automatic.preflight.failed" })
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "session.end" })
+    }
+
+    func testAutomaticTestUsesSyntheticFixesOnlyAfterCompleteMatchingPreflight() async throws {
+        let sender = MeasurementProbeSender(), manager = TestLocationManager()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            location: ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true }),
+            navigationConfigured: true, routeTransport: ReplayRouteTransport(), sender: sender,
+            render: { _ in throw CancellationError() })
+        defer { model.stopNavigation() }
+        model.destinationLatitudeInput = "21.1"; model.destinationLongitudeInput = "106.1"
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        XCTAssertNil(model.navigationRouteDistanceMeters)
+        let requests = await sender.requests
+        let resourceID = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
+        let transportID = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
+        model.consume(.received(.message(id: "resource-good", source: .band, topic: "diagnostics.report", body: [
+            "request": resourceID, "rpk": .number(35), "versionName": .string("0.6.20"), "perfVersion": .number(1),
+            "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
+        let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
+            "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
+            "peakPending": .number(2), "timeouts204": .number(0), "abandoned": .number(0),
+            "lastCallbackMs": .number(5), "maxCallbackMs": .number(5)]
+        model.consume(.received(.message(id: "transport-good", source: .band, topic: "diagnostics.report",
+            body: ["request": transportID, "transport": .object(native)])))
+        await waitUntil { model.navigationRouteDistanceMeters == 270 }
+        XCTAssertFalse(manager.backgroundEnabled)
+        XCTAssertEqual(model.activeMeasurement?.gpsSource, .replay)
+        model.stopNavigation()
+        let rows = try await model.performanceTrace.export().split(separator: 10).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "automatic.preflight.ready" })
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "gps.fix" })
+    }
+
     func testBlockedDiagnosticSendExpiresAndOldCompletionCannotClearNextProbe() async throws {
         let sender = BlockedMeasurementProbeSender()
         let manager = TestLocationManager()

@@ -353,6 +353,9 @@ final class AppModel: ObservableObject {
         sessionState = .idle
     }
 
+    // RED scaffold: automatic entry currently delegates to the existing manual path.
+    func startAutomaticNavigationTest() { startNavigation() }
+
     func startNavigation() {
         guard navigationTask == nil else { return }
         let intentUptime = ProcessInfo.processInfo.systemUptime
