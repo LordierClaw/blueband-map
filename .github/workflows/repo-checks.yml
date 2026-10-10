@@ -32,3 +32,9 @@ jobs:
           echo "${GITLEAKS_SHA256}  gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sha256sum -c -
           tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
           ./gitleaks git --redact --no-banner .
+      - name: Upload RPK from canonical test run
+        uses: actions/upload-artifact@v4
+        with:
+          name: blueband-map-verified-rpk-${{ github.sha }}
+          if-no-files-found: error
+          path: apps/band/dist/*.rpk

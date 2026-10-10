@@ -77,6 +77,10 @@ Measurement contract 2 adds three gates without changing legacy `overall`:
 - `startupGate`: `navigation.intent.metrics.sampleUptimeMs` to the first
   confirmed frame on the same iPhone monotonic clock, strictly below 1000 ms.
   GPS acquisition, routing, rendering and transfer are all included.
+  The uptime interval is cross-checked against recorder elapsed time plus
+  `intentAdmissionDelayMs` (Start capture before recorder admission), with 5 ms
+  tolerance. Missing/conflicting anchors or incomplete/mixed sessions are
+  inconclusive even if the provisional startup value is slow.
 - `measurementReadiness`: known app/OS/model/firmware, case ID, declared GPS
   source (`device`/`replay`), map mode (`automatic`/`full`), RPK identity and
   native callback diagnostics. Missing/old capabilities remain inconclusive.
@@ -86,6 +90,8 @@ Measurement contract 2 adds three gates without changing legacy `overall`:
 
 Phase labels are operator annotations; they do not independently prove that a
 physical turn occurred. A PASS covers this session's observations, not all cases.
+Confirmations inherit the phase of their accepted GPS fix, so an old in-flight
+frame cannot satisfy a newly selected turn or coverage phase.
 Use the [measurement runbook](../../docs/testing/measurement-runbook.md) to
 collect cold/warm, locked-phone and recovery cases in the same installation.
 

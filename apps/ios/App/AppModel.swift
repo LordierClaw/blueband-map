@@ -88,6 +88,7 @@ final class AppModel: ObservableObject {
     private var performanceProbeSession: String?
     private var performanceProbeDeadline: TimeInterval = 0
     private var performanceProbeTask: Task<Void, Never>?
+    private var performanceProbeTimeoutTask: Task<Void, Never>?
     private var receivedResourceProbe = false
     private var receivedTransportProbe = false
 
@@ -355,8 +356,7 @@ final class AppModel: ObservableObject {
     func startNavigation() {
         guard navigationTask == nil else { return }
         let intentUptime = ProcessInfo.processInfo.systemUptime
-        performanceProbeTask?.cancel(); performanceProbeTask = nil
-        performanceProbeSession = nil
+        cancelPerformanceProbe()
         resetNavigationDebug()
         performanceFixes.reset()
         let measurement = NavigationMeasurement(caseID: performanceCaseID, gpsSource: performanceGPSSource,
@@ -369,7 +369,8 @@ final class AppModel: ObservableObject {
             metadata["firmware"] = .string(snapshot.firmware ?? "unknown")
             metadata["transferWindow"] = .number(4)
             performanceTrace.start(metadata: metadata)
-            performanceTrace.record("navigation.intent", metrics: ["sampleUptimeMs": .number(intentUptime * 1000)])
+            performanceTrace.record("navigation.intent", metrics: ["sampleUptimeMs": .number(intentUptime * 1000),
+                "intentAdmissionDelayMs": .number((ProcessInfo.processInfo.systemUptime - intentUptime) * 1000)])
         }
         guard rpkState == .ready else {
             navigationState = .failed("RPK_NOT_READY")
@@ -408,8 +409,7 @@ final class AppModel: ObservableObject {
     }
 
     func stopNavigation() {
-        performanceProbeTask?.cancel(); performanceProbeTask = nil
-        performanceProbeSession = nil
+        cancelPerformanceProbe()
         performanceTrace.end(reason: "stopped")
         navigationGeneration += 1
         invalidateCorridor(keepMap: false)
@@ -469,6 +469,7 @@ final class AppModel: ObservableObject {
     private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String, generation: Int) async {
         defer {
             if generation == navigationGeneration {
+                cancelPerformanceProbe()
                 performanceTrace.end(reason: navigationStateCode)
                 invalidateCorridor()
                 locationClient.stop()
@@ -1240,24 +1241,39 @@ final class AppModel: ObservableObject {
         receivedResourceProbe = false; receivedTransportProbe = false
         performanceDiagnosticsStatus = "Đang chờ chẩn đoán từ Band…"
         let sender = routeCardSender, visual = activeMeasurement?.visualMarker ?? false
-        performanceProbeTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer { if performanceProbeSession == ownedSession { performanceProbeTask = nil } }
+        performanceProbeTask = Task { @MainActor in
             async let resource: String? = try? sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
                 body: ["request": .string(request), "visual": .bool(visual)])
             async let transport: String? = try? sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
                 body: ["request": .string(request + "-t"), "transport": .bool(true)])
             _ = await (resource, transport)
-            while performanceProbeSession == ownedSession, performanceTrace.activeSessionID == ownedSession,
-                  !Task.isCancelled, ProcessInfo.processInfo.systemUptime < performanceProbeDeadline {
-                if receivedResourceProbe && receivedTransportProbe { return }
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-            guard !Task.isCancelled, performanceTrace.activeSessionID == ownedSession else { return }
+        }
+        // The deadline must not await a Bluetooth write or its acknowledgement. A sender
+        // can ignore cancellation, so it also must not own or release a successor's guard.
+        performanceProbeTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled, let self,
+                  performanceProbeSession == ownedSession, performanceProbeRequest == request,
+                  performanceTrace.activeSessionID == ownedSession else { return }
             performanceDiagnosticsStatus = "Thiếu chẩn đoán; giữ trace để kiểm tra"
             performanceTrace.record("measurement.probe.incomplete", expectedSessionID: ownedSession,
                 metrics: ["resourceReceived": .bool(receivedResourceProbe), "transportReceived": .bool(receivedTransportProbe)])
+            cancelPerformanceProbe()
         }
+    }
+
+    private func cancelPerformanceProbe() {
+        performanceProbeTask?.cancel(); performanceProbeTask = nil
+        performanceProbeTimeoutTask?.cancel(); performanceProbeTimeoutTask = nil
+        performanceProbeSession = nil
+        performanceProbeRequest = nil
+        transportProbeRequest = nil
+    }
+
+    private func completePerformanceProbeIfReady() {
+        guard receivedResourceProbe && receivedTransportProbe else { return }
+        performanceDiagnosticsStatus = "Đã nhận đủ chẩn đoán; có thể Dừng và export"
+        cancelPerformanceProbe()
     }
 
     private func recordPerformanceReply(_ envelope: ApplicationEnvelope) {
@@ -1271,7 +1287,7 @@ final class AppModel: ObservableObject {
                 }
                 performanceTrace.record("band.transport", source: "band", requestID: transportProbeRequest, metrics: metrics)
                 receivedTransportProbe = true
-                if receivedResourceProbe { performanceDiagnosticsStatus = "Đã nhận đủ chẩn đoán; có thể Dừng và export" }
+                completePerformanceProbeIfReady()
                 return
             }
             guard body["request"] == performanceProbeRequest.map(JSONValue.string) else { return }
@@ -1307,8 +1323,11 @@ final class AppModel: ObservableObject {
         performanceTrace.record("band.telemetry", source: "band", scene: text("sceneId"), epoch: text("epoch"),
             viewSequence: seq, requestID: text("request"), metrics: metrics)
         if topic == "diagnostics.report" {
-            receivedResourceProbe = true
-            if receivedTransportProbe { performanceDiagnosticsStatus = "Đã nhận đủ chẩn đoán; có thể Dừng và export" }
+            receivedResourceProbe = ["files", "nodes", "pendingDeletes"].allSatisfy { perf[$0] != nil }
+                && body["perfVersion"] == .number(1)
+                && { if case let .number(n)? = body["rpk"] { return n.isFinite && n >= 0 }; return false }()
+                && { if case let .string(version)? = body["versionName"] { return !version.isEmpty && version != "unknown" }; return false }()
+            completePerformanceProbeIfReady()
         }
     }
 

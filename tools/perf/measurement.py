@@ -62,15 +62,19 @@ def analyze_measurement(records, integrity_valid):
         if len(intents) == 1 and len(firsts) == 1:
             start = intents[0]["metrics"].get("sampleUptimeMs")
             end = firsts[0]["metrics"].get("sampleUptimeMs")
+            admission_delay = intents[0]["metrics"].get("intentAdmissionDelayMs")
+            recorded = firsts[0]["monotonicMs"] - intents[0]["monotonicMs"]
             if (numeric(start) and numeric(end) and end >= start and
+                    numeric(admission_delay) and abs(end - start - recorded - admission_delay) <= 5 and
                     intents[0]["eventSeq"] < firsts[0]["eventSeq"] and firsts[0]["metrics"].get("clockValid") is True):
                 elapsed = end - start
         if elapsed is None:
-            startup_reasons.append("Requires one intent and first confirmation on the iPhone monotonic clock")
+            startup_reasons.append("Requires one intent and first confirmation with consistent uptime/admission delay (5 ms tolerance)")
         startup.append({"sessionId": session, "intentToConfirmMs": elapsed,
                         "intentLine": intents[0]["_line"] if len(intents) == 1 else None,
                         "confirmationLine": firsts[0]["_line"] if len(firsts) == 1 else None})
         phase = None
+        fix_phases = {}
         for row in rows:
             event, m = row["event"], row["metrics"]
             reference = {k: row[k] for k in ("sessionId", "eventSeq", "fixId", "requestId", "scene", "epoch", "viewSeq") if k in row}
@@ -79,9 +83,12 @@ def analyze_measurement(records, integrity_valid):
                 phase = m.get("phase") if m.get("phase") in ("startup", "cached", "coverage", "turn", "recovery") else None
                 if phase:
                     phases[phase]["markers"] += 1
-            if event == "map.confirmed" and row.get("_trustedConfirmation") is True and phase and m.get("initial") is False and numeric(m.get("fixToConfirmMs")):
-                phases[phase]["confirmations"] += 1
-                phases[phase]["maxFixToConfirmMs"] = max(phases[phase]["maxFixToConfirmMs"] or 0, m["fixToConfirmMs"])
+            if event == "gps.fix" and m.get("accepted") is True:
+                fix_phases[row.get("fixId")] = phase
+            origin_phase = fix_phases.get(row.get("fixId"))
+            if event == "map.confirmed" and row.get("_trustedConfirmation") is True and origin_phase and m.get("initial") is False and numeric(m.get("fixToConfirmMs")):
+                phases[origin_phase]["confirmations"] += 1
+                phases[origin_phase]["maxFixToConfirmMs"] = max(phases[origin_phase]["maxFixToConfirmMs"] or 0, m["fixToConfirmMs"])
             if event == "measurement.observation":
                 observations.append(reference)
             if event == "map.stream.reset":
@@ -98,7 +105,7 @@ def analyze_measurement(records, integrity_valid):
                     for key in ("nativeWriteCount", "attemptedBytes"):
                         if numeric(m.get(key)):
                             command[key] += m[key]
-    startup_gate = gate(any(numeric(s["intentToConfirmMs"]) and s["intentToConfirmMs"] >= 1000 for s in startup), startup_reasons)
+    startup_gate = gate(not startup_reasons and any(numeric(s["intentToConfirmMs"]) and s["intentToConfirmMs"] >= 1000 for s in startup), startup_reasons)
     readiness = gate(reasons=reasons)
     goal_reasons = ["Startup evidence incomplete"] if startup_gate["status"] == "INCONCLUSIVE" else []
     if readiness["status"] != "PASS":

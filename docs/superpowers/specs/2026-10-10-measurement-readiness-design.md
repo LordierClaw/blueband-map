@@ -23,6 +23,18 @@ Keep schemaVersion 1 input compatible. Existing `overall` and normal-navigation 
 
 Startup measures accepted intent to the first trustworthy confirmed frame. >=1000 ms is FAIL, missing/duplicate intent, missing first confirmation, conflicting clocks, corrupted/unfinished trace or missing measurement contract is INCONCLUSIVE. Fast latest GPS after a long route request cannot mask slow startup. Old traces remain analyzable but cannot pass the new complete goal.
 
+Intent includes `intentAdmissionDelayMs`, measured between the Start capture and
+trace admission. Cross-check uptime delta against recorder elapsed time plus that
+delay, with 5 ms tolerance. Thus metadata/trace setup remains part of startup and
+contradictory anchors cannot produce a false PASS. Phase observations inherit the
+phase at accepted GPS receipt; a late old confirmation cannot satisfy a new phase.
+
+The eight-second diagnostic deadline runs independently of physical-send awaits.
+Expiry records incomplete evidence and releases the capture control. Cancellation,
+timeout and completion all own both session ID and request ID; a delayed old send
+cannot clear a successor probe in the same session. A resource response needs its
+identity and all three resource counters before the UI reports a complete capture.
+
 Readiness requires known app/OS/model/Band/RPK identities, nonempty case ID, declared GPS source, declared map mode and no integrity loss. A user-marked visible problem is reported as a failure observation, never ignored because callback latency passes. Separate observer/native send availability from timing measurements; no callback means unknown, not zero duration.
 
 Per-command summaries join only within a session and request ID, retaining all retries and failed/cancelled attempts. Show raw stage observations and incomplete joins; do not infer one root cause from the largest uncorrelated percentile. Report phase groups, stream-reset reasons, frame failures and trace completeness with evidence line numbers. Session selection continues to reject an unknown ID; mixed sessions cannot produce a single-case PASS.
