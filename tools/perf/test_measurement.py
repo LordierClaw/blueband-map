@@ -22,11 +22,52 @@ def measured(startup=999, session="s1"):
     rows[-2:-2] = [record("band.identity", tail, {"rpk": 34, "versionName": "0.6.19", "perfVersion": 1}),
                     record("band.transport", tail, {"v": 1, "clockValid": True, "attempted": 12,
                         "succeeded": 12, "failed": 0, "pending": 0, "peakPending": 2,
-                        "timeouts204": 0, "lastCallbackMs": 10, "maxCallbackMs": 20})]
+                        "timeouts204": 0, "abandoned": 0, "saturated": False, "lastCallbackMs": 10, "maxCallbackMs": 20})]
     return stamp(rows, session)
 
 
 class MeasurementTest(unittest.TestCase):
+    def test_untrusted_startup_or_missing_contract_cannot_be_a_timing_failure(self):
+        rows = measured(1200)
+        next(r for r in rows if r["event"] == "map.confirmed")["fixId"] = "wrong"
+        self.assertEqual(self.analyze(rows)["startupGate"]["status"], "INCONCLUSIVE")
+        rows = measured()
+        del rows[0]["metrics"]["measurementVersion"]
+        self.assertEqual(self.analyze(rows)["startupGate"]["status"], "INCONCLUSIVE")
+
+    def test_saturated_or_inconsistent_native_counters_cannot_be_ready(self):
+        for changes in ({"saturated": True}, {"attempted": 99}, {"versionName": "unknown"}):
+            rows = measured()
+            event = "band.identity" if "versionName" in changes else "band.transport"
+            next(r for r in rows if r["event"] == event)["metrics"].update(changes)
+            self.assertEqual(self.analyze(rows)["measurementReadiness"]["status"], "INCONCLUSIVE")
+
+    def test_all_phases_can_pass_observed_goal_but_malformed_sidecar_cannot(self):
+        rows = measured()
+        rows.insert(4, record("measurement.phase", 1200, {"phase": "cached"}))
+        index = next(i for i, row in enumerate(rows) if row["event"] == "band.telemetry")
+        extra = []
+        for seq, phase in ((3, "coverage"), (4, "turn")):
+            at = 1999 + (seq - 3) * 500
+            extra += [record("measurement.phase", at - 300, {"phase": phase}),
+                      record("gps.fix", at - 250, {"gpsInputAgeMs": 50, "accepted": True}, fixId=f"f{seq}"),
+                      record("map.confirmed", at, {"fixToConfirmMs": 300, "appToConfirmMs": 250,
+                          "frameGapMs": 500, "mode": "corridor", "clockValid": True, "initial": False,
+                          "appState": "active"}, fixId=f"f{seq}", scene="a", epoch=1, viewSeq=seq)]
+        for row in rows[index:]:
+            row["monotonicMs"] += 1000
+        rows[index:index] = extra
+        rows = stamp(rows)
+        self.assertEqual(self.analyze(rows)["subsecondGoal"]["status"], "PASS")
+        with tempfile.TemporaryDirectory() as folder:
+            run = Path(folder)
+            (run / "navigation.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+            (run / "run.json").write_text("{")
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("report.py")), folder], capture_output=True)
+            self.assertEqual(result.returncode, 0)
+            summary = json.loads((run / "summary.json").read_text())
+            self.assertEqual(summary["subsecondGoal"]["status"], "INCONCLUSIVE")
+
     def analyze(self, rows, session=None):
         with tempfile.TemporaryDirectory() as folder:
             run = Path(folder)

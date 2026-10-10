@@ -1,5 +1,10 @@
 # Đo map realtime trên iPhone và Smart Band — T01–T07
 
+Với bản đo 0.5.24 / RPK 0.6.19, thực hiện [runbook đo đầy đủ](../testing/measurement-runbook.md)
+trước. T01–T07 bên dưới giữ quy trình GPS cũ; startup vẫn được chấm riêng từ
+lúc bấm Bắt đầu, kể cả lượt SETUP FAIL. Không loại thời gian PREPARE/khởi tạo
+khỏi yêu cầu tổng thể dưới 1 giây.
+
 Mục tiêu: chạy cùng tuyến GPS đã cố định, ghi đúng các thao tác thực tế và giữ đủ bằng chứng để so baseline với candidate. Đây là hướng dẫn chạy thiết bị; kết quả unit test, dry-run hoặc CI không thay thế kết quả iPhone/Smart Band.
 
 ## Chuẩn bị một lần

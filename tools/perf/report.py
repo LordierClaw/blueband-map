@@ -245,6 +245,7 @@ def analyze(path, selected_session=None):
                     trusted = False
                 if not trusted:
                     continue
+                item["_trustedConfirmation"] = True
                 active_scene = item["scene"]
                 active_epoch = item.get("epoch") if metrics["mode"] == "corridor" else None
                 first_confirmation = not fix["confirmationLines"]

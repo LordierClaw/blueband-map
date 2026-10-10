@@ -221,7 +221,7 @@ final class AppModel: ObservableObject {
         corridorLink.onDisplay = { [weak self] view, seq in self?.corridorDisplayed(view, sequence: seq) }
         corridorLink.onViewRequest = { [weak self] view, seq, timestamp, missing in
             guard let self else { return }
-            performanceTrace.record("map.view.request", fixID: performanceFixes.identifier(timestamp),
+            self.performanceTrace.record("map.view.request", fixID: performanceFixes.identifier(timestamp),
                 scene: activeSceneID, epoch: corridorLink.epoch, viewSequence: seq,
                 metrics: ["x": .number(Double(view.x)), "y": .number(Double(view.y)), "missingCells": .number(Double(missing))])
         }

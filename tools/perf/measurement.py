@@ -13,6 +13,15 @@ def gate(failed=False, reasons=()):
             "reasons": sorted(set(reasons))}
 
 
+def transport_ready(m):
+    counters = ("attempted", "succeeded", "failed", "pending", "peakPending", "timeouts204", "abandoned")
+    return (m.get("v") == 1 and m.get("clockValid") is True and m.get("saturated") is False
+            and all(type(m.get(k)) in (int, float) and numeric(m[k]) and m[k] % 1 == 0 and m[k] <= 2147483647 for k in counters)
+            and m["attempted"] == m["succeeded"] + m["failed"] + m["pending"] + m["abandoned"]
+            and m["succeeded"] + m["failed"] > 0 and m["peakPending"] >= m["pending"]
+            and m["timeouts204"] <= m["failed"])
+
+
 def analyze_measurement(records, integrity_valid):
     startup, observations, resets, commands = [], [], [], {}
     phases = defaultdict(lambda: {"markers": 0, "confirmations": 0, "maxFixToConfirmMs": None})
@@ -29,6 +38,7 @@ def analyze_measurement(records, integrity_valid):
         metadata = starts[0]["metrics"] if len(starts) == 1 else {}
         if metadata.get("measurementVersion") != 2:
             reasons.append("Missing measurementVersion 2")
+            startup_reasons.append("Missing measurementVersion 2")
         for key in ("build", "osVersion", "deviceModel", "firmware"):
             if not isinstance(metadata.get(key), str) or metadata[key].lower() in ("", "unknown", "unavailable"):
                 reasons.append("Missing environment: " + key)
@@ -39,15 +49,15 @@ def analyze_measurement(records, integrity_valid):
         if metadata.get("mapMode") not in ("automatic", "full"):
             reasons.append("Map mode is unknown")
         identity = [r["metrics"] for r in rows if r["event"] == "band.identity"]
-        if not any(numeric(m.get("rpk")) and isinstance(m.get("versionName"), str)
+        if not any(numeric(m.get("rpk")) and isinstance(m.get("versionName"), str) and re.fullmatch(r"\d+\.\d+\.\d+", m["versionName"])
                    and m.get("perfVersion") == 1 for m in identity):
             reasons.append("Band identity/performance capability unverified")
         transports = [r["metrics"] for r in rows if r["event"] == "band.transport"]
-        if not any(m.get("v") == 1 and m.get("clockValid") is True and all(numeric(m.get(k)) for k in
-                   ("attempted", "succeeded", "failed", "pending", "peakPending", "timeouts204")) for m in transports):
+        if not any(transport_ready(m) for m in transports):
             reasons.append("Band native send callback evidence unavailable")
         intents = [r for r in rows if r["event"] == "navigation.intent"]
-        firsts = [r for r in rows if r["event"] == "map.confirmed" and r["metrics"].get("initial") is True]
+        firsts = [r for r in rows if r["event"] == "map.confirmed" and r["metrics"].get("initial") is True
+                  and r.get("_trustedConfirmation") is True]
         elapsed = None
         if len(intents) == 1 and len(firsts) == 1:
             start = intents[0]["metrics"].get("sampleUptimeMs")
@@ -69,7 +79,7 @@ def analyze_measurement(records, integrity_valid):
                 phase = m.get("phase") if m.get("phase") in ("startup", "cached", "coverage", "turn", "recovery") else None
                 if phase:
                     phases[phase]["markers"] += 1
-            if event == "map.confirmed" and phase and m.get("initial") is False and numeric(m.get("fixToConfirmMs")):
+            if event == "map.confirmed" and row.get("_trustedConfirmation") is True and phase and m.get("initial") is False and numeric(m.get("fixToConfirmMs")):
                 phases[phase]["confirmations"] += 1
                 phases[phase]["maxFixToConfirmMs"] = max(phases[phase]["maxFixToConfirmMs"] or 0, m["fixToConfirmMs"])
             if event == "measurement.observation":

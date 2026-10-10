@@ -12,6 +12,70 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testDiagnosticsRequireMatchingLiveSessionAndCompleteResourceReply() async throws {
+        let sender = MeasurementProbeSender()
+        let manager = TestLocationManager()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            location: ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true }),
+            navigationConfigured: true, sender: sender)
+        model.destinationLatitudeInput = "21.1"; model.destinationLongitudeInput = "106.1"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { await sender.requests.count == 2 }
+        let requests = await sender.requests
+        let resourceID = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
+        let transportID = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
+        var resource: [String: JSONValue] = ["request": resourceID, "rpk": .number(34), "versionName": .string("0.6.19"),
+            "perfVersion": .number(1), "perf": .object(["v": .number(1), "clockValid": .bool(true)])]
+        let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
+            "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
+            "peakPending": .number(2), "timeouts204": .number(0), "abandoned": .number(0),
+            "lastCallbackMs": .number(5), "maxCallbackMs": .number(5)]
+        let transport = ApplicationEnvelope.message(id: "native", source: .band, topic: "diagnostics.report",
+            body: ["request": transportID, "transport": .object(native)])
+        model.consume(.received(.message(id: "resource", source: .band, topic: "diagnostics.report", body: resource)))
+        model.consume(.received(transport))
+        XCTAssertFalse(model.performanceDiagnosticsStatus.hasPrefix("Đã nhận đủ"), "partial perf is not measurement readiness")
+        resource["perf"] = .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])
+        model.consume(.received(.message(id: "complete", source: .band, topic: "diagnostics.report", body: resource)))
+        XCTAssertTrue(model.performanceDiagnosticsStatus.hasPrefix("Đã nhận đủ"))
+        model.stopNavigation(); model.startNavigation()
+        model.consume(.received(transport))
+        model.consume(.received(.message(id: "late", source: .band, topic: "diagnostics.report", body: resource)))
+        model.stopNavigation()
+        let data = try await model.performanceTrace.export()
+        let rows = try data.split(separator: 10).map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any]) }
+        let latest = rows.last?["sessionId"] as? String
+        XCTAssertFalse(rows.contains { $0["sessionId"] as? String == latest && $0["event"] as? String == "band.transport" })
+    }
+
+    func testFullFrameComparisonDoesNotOpenCorridorEvenIfInputsChangeDuringSession() async throws {
+        let manager = TestLocationManager()
+        let location = ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true })
+        let sender = WindowedRouteCardSession(streaming: true)
+        let model = makeModel(central: PickerCentral(), authMode: .missing, location: location, navigationConfigured: true,
+            routeTransport: ReplayRouteTransport(), sender: sender, render: { request in
+                let context = CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: context.makeImage()!, retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "fixture", configuration: config)
+            })
+        defer { model.stopNavigation() }
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.destinationLatitudeInput = "0.002"; model.destinationLongitudeInput = "0.001"
+        model.performanceMapMode = .full
+        model.consume(.connected); model.startNavigation()
+        model.performanceMapMode = .automatic
+        await waitUntil { manager.updating }
+        location.locationManager(manager, didUpdateLocations: [CLLocation(coordinate: .init(latitude: 0, longitude: 0),
+            altitude: 0, horizontalAccuracy: 5, verticalAccuracy: 5, course: 0, speed: 3, timestamp: Date())])
+        await waitUntil { model.routePreviewPNG != nil }
+        let opens = await sender.streamOpens
+        XCTAssertEqual(opens, 0)
+        XCTAssertNil(model.routePreviewTiles)
+    }
+
     func testMeasurementSnapshotIsBoundedAndDoesNotChangeDuringNavigation() async throws {
         let manager = TestLocationManager()
         let model = makeModel(central: PickerCentral(), authMode: .missing,
@@ -639,6 +703,14 @@ final class AppModelPickerTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("Condition was not met", file: file, line: line)
+    }
+}
+
+private actor MeasurementProbeSender: RouteCardSessionSending {
+    private(set) var requests: [[String: JSONValue]] = []
+    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
+        if topic == "diagnostics.get" { requests.append(body) }
+        return "probe-ack"
     }
 }
 
