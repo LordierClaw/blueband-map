@@ -19,13 +19,24 @@ struct ContentView: View {
         NavigationStack {
             traceExportForm
             .navigationTitle(BlueBandProduct.displayName)
-            .toolbar { Button("Cấu hình") { isConfigPresented = true } }
+            .toolbar {
+                if model.isNavigationRunning {
+                    Button("Dừng", role: .destructive) { model.stopNavigation() }
+                        .accessibilityIdentifier("navigation.stop")
+                }
+                Button("Cấu hình") { isConfigPresented = true }
+            }
             .sheet(isPresented: $isConfigPresented) { ConfigView(model: model) }
             .sheet(isPresented: $isBandPickerPresented) { BandPickerView(model: model) }
             .onAppear { model.navigationScreenActive(true) }
             .onDisappear { model.navigationScreenActive(false) }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 model.applicationStateChanged(phase == .active ? "active" : phase == .background ? "background" : "inactive")
+            }
+            .onChange(of: model.preparedTraceID) { _, id in
+                guard id != nil, let data = model.preparedPerformanceTrace else { return }
+                traceData = data
+                isTraceExportPresented = true
             }
         }
     }
@@ -67,6 +78,7 @@ struct ContentView: View {
             }
             Section("RPK trust") {
                 LabeledContent("Handshake", value: rpkLabel)
+                LabeledContent("Bản Band đã báo", value: model.observedRPK)
                 Button("Reset trusted fingerprint", role: .destructive) { Task { await model.resetTrustedRPK() } }
             }
             navigationSection
@@ -129,10 +141,12 @@ struct ContentView: View {
             }
             if let preview = model.routePreviewTiles {
                 CorridorPreviewView(viewport: preview.viewport, images: preview.images)
+                    .allowsHitTesting(false)
             } else if let data = model.routePreviewPNG, let image = UIImage(data: data) {
                 Image(uiImage: image)
                     .resizable().interpolation(.high).scaledToFit()
                     .frame(maxWidth: 212).accessibilityLabel("Bản đồ điều hướng đang hiển thị trên band")
+                    .allowsHitTesting(false)
             }
             if navigationIsActive {
                 Button("Dừng điều hướng", role: .destructive) { model.stopNavigation() }
@@ -157,6 +171,19 @@ struct ContentView: View {
 
     @ViewBuilder
     private var performanceControls: some View {
+        Button("Chạy test tự động") { model.startAutomaticNavigationTest() }
+            .disabled(navigationIsActive || model.rpkState != .ready)
+            .accessibilityIdentifier("navigation.automatic")
+        Text("Tự chạy tuyến mẫu ở 10 m/s, tối đa 10 phút; tự dừng và mở lưu log. Giữ app iPhone và Band mở; không cần di chuyển.")
+            .font(.caption).foregroundStyle(.secondary)
+        if !model.automaticTestStatus.isEmpty {
+            Text(model.automaticTestStatus).font(.caption)
+        }
+        if let data = model.preparedPerformanceTrace {
+            Button("Lưu kết quả test (.jsonl)") {
+                traceData = data; isTraceExportPresented = true
+            }
+        }
         Toggle("Đo hiệu năng", isOn: $model.performanceEnabled).disabled(navigationIsActive)
         Toggle("Hiện số khung khi quay video", isOn: $model.performanceVisualMarker).disabled(navigationIsActive)
         MeasurementControls(model: model, navigationIsActive: navigationIsActive)
@@ -189,10 +216,7 @@ struct ContentView: View {
     }
 
     private var navigationIsActive: Bool {
-        switch model.navigationState {
-        case .idle, .arrived, .failed: false
-        default: true
-        }
+        model.isNavigationRunning
     }
 
     private var navigationLabel: String {

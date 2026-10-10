@@ -12,6 +12,104 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testAutomaticStopWhileProbeBlockedExportsAndOldWorkCannotRestartNavigation() async throws {
+        let sender = BlockedMeasurementProbeSender(), manager = TestLocationManager()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            location: ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true }),
+            navigationConfigured: true, sender: sender)
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.count == 2 }
+        XCTAssertTrue(model.isNavigationRunning)
+        model.stopNavigation()
+        XCTAssertFalse(model.isNavigationRunning)
+        XCTAssertFalse(manager.backgroundEnabled)
+        await waitUntil { model.preparedPerformanceTrace != nil }
+        let data = try XCTUnwrap(model.preparedPerformanceTrace)
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(text.contains("navigation.stopped")); XCTAssertTrue(text.contains("session.end"))
+        await sender.releaseAll()
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertEqual(model.navigationState, .idle)
+        XCTAssertNil(model.navigationRouteDistanceMeters)
+    }
+
+    func testAutomaticMissingDiagnosticsStopsAndPreparesExportByDeadline() async throws {
+        let sender = BlockedMeasurementProbeSender()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, sender: sender)
+        defer { model.stopNavigation(); Task { await sender.releaseAll() } }
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.count == 2 }
+        try await Task.sleep(for: .seconds(9))
+        XCTAssertEqual(model.navigationState, .failed("TEST_DIAGNOSTICS_INCOMPLETE"))
+        XCTAssertFalse(model.isNavigationRunning)
+        XCTAssertNotNil(model.preparedPerformanceTrace)
+        XCTAssertNil(model.navigationStart)
+    }
+
+    func testAutomaticRouteFailureCollectsFinalDiagnosticsStopsAndExports() async throws {
+        let sender = MeasurementProbeSender()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, routeTransport: FailingAutomaticRouteTransport(), sender: sender)
+        defer { model.stopNavigation() }
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil { await sender.requests.count == 4 }
+        XCTAssertTrue(model.isNavigationRunning, "Stop remains available during final diagnostics")
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil { model.preparedPerformanceTrace != nil }
+        XCTAssertFalse(model.isNavigationRunning)
+        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace), as: UTF8.self)
+        XCTAssertTrue(text.contains("automatic.finished")); XCTAssertTrue(text.contains("navigation.failed"))
+        XCTAssertTrue(text.contains("session.end"))
+    }
+
+    func testAutomaticArrivalStopsAndExportsWithoutManualLocationOrStop() async throws {
+        let sender = MeasurementProbeSender()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, routeTransport: ShortAutomaticRouteTransport(), sender: sender,
+            render: { request in
+                let context = try XCTUnwrap(CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: try XCTUnwrap(context.makeImage()), retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "cpu-warm", configuration: config)
+            })
+        defer { model.stopNavigation() }
+        model.performanceMapMode = .full
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil({ await sender.requests.count == 4 }, timeout: .seconds(5))
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil { model.preparedPerformanceTrace != nil }
+        XCTAssertFalse(model.isNavigationRunning)
+        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace), as: UTF8.self)
+        XCTAssertTrue(text.contains("replay.fix")); XCTAssertTrue(text.contains("automatic.finished"))
+        XCTAssertTrue(text.contains("session.end"))
+        let arrival = await sender.navigationUpdates.last { $0["status"] == .string("arrived") }
+        XCTAssertNotNil(arrival, "endpoint must reach the normal navigation sender before teardown")
+        XCTAssertTrue(text.contains("nav.delivery.ack"))
+    }
+
+    private func answerAutomaticDiagnostics(_ model: AppModel, sender: MeasurementProbeSender) async throws {
+        let requests = Array(await sender.requests.suffix(2))
+        let resource = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
+        let transport = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
+        model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report", body: [
+            "request": resource, "rpk": .number(35), "versionName": .string("0.6.20"), "perfVersion": .number(1),
+            "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
+        let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
+            "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
+            "peakPending": .number(2), "timeouts204": .number(0), "abandoned": .number(0),
+            "lastCallbackMs": .number(5), "maxCallbackMs": .number(5)]
+        model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report",
+            body: ["request": transport, "transport": .object(native)])))
+    }
+
     func testStopRecordsAdmissionAndCleanupBeforeTerminalEvent() async throws {
         let manager = TestLocationManager()
         let model = makeModel(central: PickerCentral(), authMode: .missing,
@@ -796,10 +894,11 @@ final class AppModelPickerTests: XCTestCase {
 
     private func waitUntil(
         _ condition: @escaping @MainActor () async -> Bool,
+        timeout: Duration = .seconds(2),
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {
-        let deadline = ContinuousClock.now + .seconds(2)
+        let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if await condition() { return }
             try? await Task.sleep(for: .milliseconds(5))
@@ -827,9 +926,15 @@ private actor BlockedMeasurementProbeSender: RouteCardSessionSending {
 
 private actor MeasurementProbeSender: RouteCardSessionSending {
     private(set) var requests: [[String: JSONValue]] = []
+    private(set) var navigationUpdates: [[String: JSONValue]] = []
+    private let renderer = WindowedRouteCardSession()
+    func setReceiver(_ receiver: @escaping @MainActor @Sendable (ApplicationEnvelope) -> Void) async {
+        await renderer.setReceiver(receiver)
+    }
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
-        if topic == "diagnostics.get" { requests.append(body) }
-        return "probe-ack"
+        if topic == "diagnostics.get" { requests.append(body); return "probe-ack" }
+        if topic == "nav.update" { navigationUpdates.append(body); return "nav-ack" }
+        return try await renderer.sendAwaitingAcknowledgement(topic: topic, body: body)
     }
 }
 
@@ -929,6 +1034,18 @@ private enum PickerCentralError: Swift.Error {
 private struct ReplayRouteTransport: MapHTTPTransport {
     func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
         MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: Data(#"{"code":"OK","paths":[{"distance":270,"points_encoded":true,"points":"??gE?gEgE","instructions":[{"distance":111,"heading":0,"sign":0,"interval":[0,1],"street_name":"Đường A"},{"distance":157,"heading":45,"sign":2,"interval":[1,2],"street_name":"Đường B"},{"distance":0,"heading":0,"sign":4,"interval":[2,2],"street_name":""}]}]}"#.utf8))
+    }
+}
+
+private struct FailingAutomaticRouteTransport: MapHTTPTransport {
+    func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
+        throw URLError(.notConnectedToInternet)
+    }
+}
+
+private struct ShortAutomaticRouteTransport: MapHTTPTransport {
+    func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
+        MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: Data(#"{"code":"OK","paths":[{"distance":6,"points_encoded":true,"points":"aau`Aaa_jSI?","instructions":[{"distance":6,"heading":0,"sign":0,"interval":[0,1],"street_name":"Fixture"}]}]}"#.utf8))
     }
 }
 

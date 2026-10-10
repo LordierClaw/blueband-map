@@ -73,6 +73,18 @@ final class AppModel: ObservableObject {
     @Published private(set) var locationNeedsSettings = false
     @Published private(set) var lastMapFixAgeMilliseconds: Int?
     @Published private(set) var latencyViolations = 0
+    @Published private(set) var isNavigationRunning = false
+    @Published private(set) var automaticTestStatus = ""
+    @Published private(set) var observedRPK = "Chưa đọc phiên bản"
+    @Published private(set) var preparedPerformanceTrace: Data?
+    @Published private(set) var preparedTraceID: UUID?
+    private var navigationReplay: NavigationReplay?
+    private var automaticRunID: UUID?
+    private var automaticFinishTask: Task<Void, Never>?
+    private var exportOwner = UUID()
+    private var probeRPKMatches = false
+    private var automaticPreflight = false
+    private var automaticTurnFixes: Set<Int> = []
 
     let performanceTrace: PerformanceTraceRecorder
     private let performanceFixes: PerformanceFixTracker
@@ -209,19 +221,25 @@ final class AppModel: ObservableObject {
         catch { errorMessage = "Không đọc được AuthKey trong Keychain." }
         loadVietmapKeyHealth()
         locationClient.onHealthChange = { [weak self] in
-            guard let self else { return }
+            guard let self, navigationReplay == nil else { return }
             locationHealth = locationClient.healthText
             locationNeedsSettings = locationClient.needsSettings
             logNavigation("gps.health", locationClient.diagnostic)
         }
         locationClient.onFixObserved = { [weak self] location, accepted, reason in
-            guard let self else { return }
+            guard let self, navigationReplay == nil else { return }
             performanceFixes.received(timestamp: location.timestamp, accuracy: location.horizontalAccuracy,
                 speed: location.speed, accepted: accepted, reason: reason)
         }
         corridorLink.onDisplay = { [weak self] view, seq in self?.corridorDisplayed(view, sequence: seq) }
         corridorLink.onViewRequest = { [weak self] view, seq, timestamp, missing in
             guard let self else { return }
+            if automaticRunID != nil, let fixID = performanceFixes.identifier(timestamp) {
+                let phase: NavigationMeasurement.Phase = automaticTurnFixes.contains(fixID)
+                    ? .turn : missing > 0 ? .coverage : .cached
+                performanceTrace.record("measurement.phase", fixID: fixID,
+                    metrics: ["phase": .string(phase.rawValue), "basis": .string("viewport-request")])
+            }
             self.performanceTrace.record("map.view.request", fixID: performanceFixes.identifier(timestamp),
                 scene: activeSceneID, epoch: corridorLink.epoch, viewSequence: seq,
                 metrics: ["x": .number(Double(view.x)), "y": .number(Double(view.y)), "missingCells": .number(Double(missing))])
@@ -353,24 +371,38 @@ final class AppModel: ObservableObject {
         sessionState = .idle
     }
 
-    // RED scaffold: automatic entry currently delegates to the existing manual path.
-    func startAutomaticNavigationTest() { startNavigation() }
+    func startAutomaticNavigationTest() {
+        guard !isNavigationRunning else { return }
+        automaticRunID = UUID()
+        navigationReplay = NavigationReplay()
+        automaticTestStatus = "Đang kiểm tra RPK 0.6.20 (35)…"
+        locationClient.stopPrewarming()
+        locationClient.stop()
+        locationNeedsSettings = false
+        startNavigation()
+    }
 
     func startNavigation() {
-        guard navigationTask == nil else { return }
+        guard !isNavigationRunning else { return }
+        exportOwner = UUID()
+        preparedPerformanceTrace = nil; preparedTraceID = nil
         let intentUptime = ProcessInfo.processInfo.systemUptime
         cancelPerformanceProbe()
         resetNavigationDebug()
         performanceFixes.reset()
-        let measurement = NavigationMeasurement(caseID: performanceCaseID, gpsSource: performanceGPSSource,
+        automaticTurnFixes.removeAll()
+        let automatic = automaticRunID != nil
+        let measurement = NavigationMeasurement(caseID: automatic ? "auto-" + UUID().uuidString.prefix(8).lowercased() : performanceCaseID,
+            gpsSource: automatic ? .replay : performanceGPSSource,
             mapMode: performanceMapMode, visualMarker: performanceVisualMarker)
         activeMeasurement = measurement
         corridorUnavailable = measurement.mapMode == .full
-        if performanceEnabled {
+        if performanceEnabled || automatic {
             var metadata = measurement.metadata
             metadata["build"] = .string("\(BlueBandProduct.version) (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))")
             metadata["firmware"] = .string(snapshot.firmware ?? "unknown")
             metadata["transferWindow"] = .number(4)
+            metadata["inAppReplay"] = .bool(automatic)
             performanceTrace.start(metadata: metadata)
             performanceTrace.record("navigation.intent", metrics: ["sampleUptimeMs": .number(intentUptime * 1000),
                 "intentAdmissionDelayMs": .number((ProcessInfo.processInfo.systemUptime - intentUptime) * 1000)])
@@ -379,17 +411,22 @@ final class AppModel: ObservableObject {
             navigationState = .failed("RPK_NOT_READY")
             errorMessage = "Navigation Failed (RPK_NOT_READY). Hãy kết nối và chờ xác thực band."
             logNavigation("navigation.rejected", "reason=RPK_NOT_READY")
-            performanceTrace.end(reason: "rejected-rpk-not-ready")
+            if automatic { rejectAutomaticTest("RPK_NOT_READY") }
+            else { performanceTrace.end(reason: "rejected-rpk-not-ready") }
             return
         }
-        guard let destination, let serviceKey = loadVietmapKey(.service) else {
+        guard let destination = automatic ? NavigationReplay.destination : destination,
+              let serviceKey = loadVietmapKey(.service) else {
             navigationState = .failed("CONFIG_MISSING")
             errorMessage = "Navigation Failed (CONFIG_MISSING). Hãy lưu tọa độ đích và Service/API key."
             logNavigation("navigation.rejected", "reason=CONFIG_MISSING")
-            performanceTrace.end(reason: "rejected-config-missing")
+            if automatic { rejectAutomaticTest("CONFIG_MISSING") }
+            else { performanceTrace.end(reason: "rejected-config-missing") }
             return
         }
-        saveDestination()
+        if !automatic { saveDestination() }
+        isNavigationRunning = true
+        automaticPreflight = automatic
         capturePerformanceDiagnostics()
         navigationDestination = destination
         let tileMapAvailability = loadVietmapKey(.tileMap)?.isEmpty == false ? "present" : "absent"
@@ -402,18 +439,51 @@ final class AppModel: ObservableObject {
         snapshotRetryAfter = .distantPast
         let generation = navigationGeneration
         navigationTask = Task { @MainActor [weak self] in
-            await self?.runNavigation(
+            guard let self else { return }
+            if automatic {
+                while performanceProbeSession != nil {
+                    do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+                    guard generation == navigationGeneration else { return }
+                }
+                guard generation == navigationGeneration, !Task.isCancelled else { return }
+                guard receivedResourceProbe && receivedTransportProbe && probeRPKMatches else {
+                    rejectAutomaticTest("TEST_DIAGNOSTICS_INCOMPLETE")
+                    return
+                }
+                automaticPreflight = false
+                performanceTrace.record("automatic.preflight.ready")
+                startReplay(generation: generation)
+            }
+            await runNavigation(
                 destination: destination,
                 serviceKey: serviceKey,
-                tileMapKey: self?.loadVietmapKey(.tileMap) ?? "",
+                tileMapKey: loadVietmapKey(.tileMap) ?? "",
                 generation: generation
             )
         }
     }
 
-    func stopNavigation() {
+    func stopNavigation(reason: String = "stopped") {
+        performanceTrace.record("navigation.stop.requested", metrics: ["reason": .string(reason)])
+        let wasAutomatic = automaticRunID != nil
+        automaticFinishTask?.cancel(); automaticFinishTask = nil
+        automaticPreflight = false
         cancelPerformanceProbe()
-        performanceTrace.end(reason: "stopped")
+        cancelNavigationWork()
+        navigationReplay?.stop(); navigationReplay = nil
+        automaticRunID = nil
+        isNavigationRunning = false
+        navigationState = .idle
+        performanceTrace.record("navigation.stopped", metrics: ["reason": .string(reason)])
+        performanceTrace.end(reason: reason)
+        if wasAutomatic {
+            automaticTestStatus = "Đã dừng (\(reason)); đang chuẩn bị log…"
+            prepareAutomaticExport()
+        }
+        updateNavigationPrewarming()
+    }
+
+    private func cancelNavigationWork() {
         navigationGeneration += 1
         invalidateCorridor(keepMap: false)
         corridorUnavailable = false
@@ -441,7 +511,100 @@ final class AppModel: ObservableObject {
         snapshotRetryAfter = .distantPast
         guidanceBearingPolicy = GuidanceBearingPolicy()
         routePreviewPNG = nil
-        navigationState = .idle
+    }
+
+    private func rejectAutomaticTest(_ code: String) {
+        guard automaticRunID != nil else { return }
+        performanceTrace.record("automatic.preflight.failed", metrics: ["code": .string(code)])
+        stopNavigation(reason: code)
+        navigationState = .failed(code)
+        errorMessage = code == "TEST_RPK_MISMATCH"
+            ? "Band báo \(observedRPK). Test cần RPK 0.6.20 (35); hãy cài đúng file rồi mở lại app Band."
+            : "Test chưa bắt đầu (\(code)). Log đã được giữ để kiểm tra."
+    }
+
+    private func startReplay(generation: Int) {
+        guard let replay = navigationReplay else { return }
+        var previousCourse: Double?
+        automaticTestStatus = "Đang chạy tuyến tự động · 10 m/s · không cần di chuyển"
+        replay.onFixObserved = { [weak self, weak replay] fix in
+            guard let self, let replay, generation == navigationGeneration else { return }
+            performanceFixes.received(timestamp: fix.timestamp, accuracy: fix.horizontalAccuracy,
+                speed: fix.speed, accepted: true, reason: "in-app-replay")
+            if fix.speed > 0 {
+                if let previousCourse, let id = performanceFixes.identifier(fix.timestamp) {
+                    let delta = abs((fix.course - previousCourse + 540).truncatingRemainder(dividingBy: 360) - 180)
+                    if delta >= 30 { automaticTurnFixes.insert(id) }
+                }
+                previousCourse = fix.course
+            }
+            performanceTrace.record("replay.fix", fixID: performanceFixes.identifier(fix.timestamp), metrics: [
+                "scheduledElapsedMs": .number(replay.lastScheduledElapsedSeconds * 1000),
+                "emittedElapsedMs": .number(replay.lastEmittedElapsedSeconds * 1000)])
+        }
+        replay.onPhase = { [weak self] phase in
+            guard let self, generation == navigationGeneration else { return }
+            performanceTrace.record("automatic.phase", metrics: ["phase": .string(phase)])
+            if phase == "timeout" { navigationState = .failed("TEST_TIMEOUT") }
+        }
+        replay.onFinished = { [weak self] in
+            guard let self, generation == navigationGeneration else { return }
+            // Arrival must be consumed by runNavigation before teardown. Only the
+            // hard deadline can interrupt an independently stuck route/render task.
+            if navigationState == .failed("TEST_TIMEOUT") { beginAutomaticFinish(reason: "TEST_TIMEOUT") }
+        }
+        markMeasurementPhase(.startup)
+        replay.start()
+    }
+
+    private func beginAutomaticFinish(reason: String) {
+        guard let owner = automaticRunID, automaticFinishTask == nil else { return }
+        navigationReplay?.stop()
+        automaticFinishTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Let a queued terminal nav.update reach its normal acknowledgement,
+            // with a hard bound independent of sender cancellation cooperation.
+            if reason == "arrived" {
+                let deadline = ProcessInfo.processInfo.systemUptime + 3
+                while updateTask != nil && ProcessInfo.processInfo.systemUptime < deadline {
+                    do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+                    guard automaticRunID == owner else { return }
+                }
+                performanceTrace.record("automatic.arrival.delivery", metrics: ["drained": .bool(updateTask == nil)])
+            }
+            guard automaticRunID == owner, !Task.isCancelled else { return }
+            // Quiesce producers before the final probe, without awaiting a stuck task.
+            cancelNavigationWork()
+            cancelPerformanceProbe()
+            automaticTestStatus = "Đã kết thúc tuyến; đang lấy chẩn đoán cuối (tối đa 8 giây)…"
+            capturePerformanceDiagnostics()
+            while performanceProbeSession != nil {
+                do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+                guard automaticRunID == owner else { return }
+            }
+            guard automaticRunID == owner, !Task.isCancelled else { return }
+            performanceTrace.record("automatic.finished", metrics: ["reason": .string(reason),
+                "endDiagnosticsComplete": .bool(receivedResourceProbe && receivedTransportProbe)])
+            stopNavigation(reason: reason)
+            if reason.hasPrefix("failed:") || reason == "TEST_TIMEOUT" { navigationState = .failed(reason) }
+        }
+    }
+
+    private func prepareAutomaticExport() {
+        let owner = exportOwner
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let data = try await performanceTrace.export()
+                guard exportOwner == owner else { return }
+                preparedPerformanceTrace = data
+                automaticTestStatus = "Test đã dừng. Lưu file kết quả để gửi phân tích."
+                preparedTraceID = owner
+            } catch {
+                guard exportOwner == owner else { return }
+                automaticTestStatus = "Đã dừng nhưng chưa đọc được trace; hãy thử Export debug log."
+            }
+        }
     }
 
     func navigationScreenActive(_ active: Bool) {
@@ -459,7 +622,7 @@ final class AppModel: ObservableObject {
     }
 
     private func updateNavigationPrewarming() {
-        if navigationScreenIsActive, rpkState == .ready, applicationState == "active" {
+        if navigationReplay == nil, navigationScreenIsActive, rpkState == .ready, applicationState == "active" {
             locationClient.startPrewarming()
             if let key = loadVietmapKey(.tileMap) { snapshotRenderer.prewarm(tileMapKey: key) }
             else { snapshotRenderer.stopPrewarming() }
@@ -472,6 +635,9 @@ final class AppModel: ObservableObject {
     private func runNavigation(destination: GeoPoint, serviceKey: String, tileMapKey: String, generation: Int) async {
         defer {
             if generation == navigationGeneration {
+                if automaticRunID != nil {
+                    beginAutomaticFinish(reason: navigationStateCode)
+                } else {
                 cancelPerformanceProbe()
                 performanceTrace.end(reason: navigationStateCode)
                 invalidateCorridor()
@@ -486,6 +652,8 @@ final class AppModel: ObservableObject {
                 snapshotIsTransmitting = false
                 pendingSnapshotRefresh = nil
                 navigationTask = nil
+                isNavigationRunning = false
+                }
             }
         }
         guard generation == navigationGeneration, !Task.isCancelled else { return }
@@ -494,8 +662,8 @@ final class AppModel: ObservableObject {
         sendStartupStatus("locating")
         logNavigation("gps.wait", "requiredAccuracyM=25")
         do {
-            var iterator = locationClient.locations().makeAsyncIterator()
-            var first = locationClient.recentLocation()
+            var iterator = (navigationReplay?.locations() ?? locationClient.locations()).makeAsyncIterator()
+            var first = navigationReplay != nil ? navigationReplay?.recentLocation() : locationClient.recentLocation()
             if first == nil {
                 while let location = try await iterator.next() {
                     guard !Task.isCancelled else { return }
@@ -529,7 +697,8 @@ final class AppModel: ObservableObject {
                 generation: generation
             )
             try checkNavigationOwner(generation)
-            first = locationClient.recentLocation() ?? first
+            first = (navigationReplay != nil ? navigationReplay?.recentLocation() : locationClient.recentLocation()) ?? first
+            navigationReplay?.follow(route: route)
             var tracker = RouteProgressTracker()
             var progress = tracker.update(route: route, location: first.geoPoint, horizontalAccuracyMeters: first.horizontalAccuracy)
             var selection = GuidancePresentationPolicy.select(
@@ -1242,6 +1411,7 @@ final class AppModel: ObservableObject {
         performanceProbeSession = ownedSession
         performanceProbeDeadline = ProcessInfo.processInfo.systemUptime + 8
         receivedResourceProbe = false; receivedTransportProbe = false
+        probeRPKMatches = false
         performanceDiagnosticsStatus = "Đang chờ chẩn đoán từ Band…"
         let sender = routeCardSender, visual = activeMeasurement?.visualMarker ?? false
         performanceProbeTask = Task { @MainActor in
@@ -1299,6 +1469,15 @@ final class AppModel: ObservableObject {
             let keys = Set(["rpk", "versionName", "perfVersion", "phase", "offset", "received", "sendCode"])
             let metrics = body.filter { keys.contains($0.key) }
             performanceTrace.record("band.identity", source: "band", metrics: metrics)
+            if case let .number(build)? = body["rpk"], build.isFinite, (0...1_000_000).contains(build) {
+                let version: String = { if case let .string(v)? = body["versionName"] { return v }; return "unknown" }()
+                observedRPK = "\(version) (\(Int(build)))"
+            }
+            probeRPKMatches = body["rpk"] == .number(35) && body["versionName"] == .string("0.6.20")
+            if automaticPreflight && !probeRPKMatches {
+                rejectAutomaticTest("TEST_RPK_MISMATCH")
+                return
+            }
         }
         guard let topic = envelope.topic, ["diagnostics.report", "map.stream.state", "map.cell.result", "map.cell.decoded", "render.result"].contains(topic),
               case let .object(perf)? = body["perf"], perf["v"] == .number(1) else { return }
@@ -1425,7 +1604,7 @@ final class AppModel: ObservableObject {
     }
 
     var navigationStartText: String { Self.fullCoordinate(navigationStart) }
-    var liveLocationHealth: String { locationClient.healthText }
+    var liveLocationHealth: String { navigationReplay != nil ? "Vị trí mô phỏng trong app · GPS thiết bị tạm dừng" : locationClient.healthText }
     var navigationDestinationText: String { Self.fullCoordinate(navigationDestination) }
 
     var navigationStateCode: String {
@@ -1517,7 +1696,9 @@ final class AppModel: ObservableObject {
         var next: NavigationUpdate? = first
         while let update = next, !Task.isCancelled, generation == navigationGeneration {
             do {
-                _ = try await session.sendAwaitingAcknowledgement(topic: NavigationUpdate.topic, body: update.jsonBody())
+                _ = try await routeCardSender.sendAwaitingAcknowledgement(topic: NavigationUpdate.topic, body: update.jsonBody())
+                try checkNavigationOwner(generation)
+                performanceTrace.record("nav.delivery.ack", metrics: ["status": .string(update.status.rawValue)])
                 try await updateClock.sleep(for: .seconds(1))
                 try checkNavigationOwner(generation)
             } catch {

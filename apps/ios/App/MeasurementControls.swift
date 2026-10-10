@@ -12,7 +12,7 @@ struct MeasurementControls: View {
             Picker("Nguồn GPS", selection: $model.performanceGPSSource) {
                 Text("Chưa chọn").tag(NavigationMeasurement.GPSSource.unknown)
                 Text("GPS thiết bị").tag(NavigationMeasurement.GPSSource.device)
-                Text("Replay").tag(NavigationMeasurement.GPSSource.replay)
+                Text("Replay từ công cụ ngoài").tag(NavigationMeasurement.GPSSource.replay)
             }.disabled(navigationIsActive)
             Picker("Bản đồ", selection: $model.performanceMapMode) {
                 Text("Tự động").tag(NavigationMeasurement.MapMode.automatic)
