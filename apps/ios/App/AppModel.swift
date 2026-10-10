@@ -1755,7 +1755,12 @@ final class AppModel: ObservableObject {
             } catch {
                 guard generation == navigationGeneration else { return }
                 updateCoalescer.reset()
-                if !Task.isCancelled { logNavigation("nav.delivery.failed", "scene=\(update.scene)") }
+                guard !Task.isCancelled, !(error is CancellationError) else { return }
+                logNavigation("nav.delivery.failed", "scene=\(update.scene)")
+                if automaticRunID != nil {
+                    failAutomaticLink("TEST_NAV_DELIVERY_FAILED")
+                    return
+                }
                 break
             }
             next = updateCoalescer.completed()

@@ -41,9 +41,16 @@ final class AppModelPickerTests: XCTestCase {
         try await answerAutomaticDiagnostics(model, sender: sender)
         await waitUntil({ await sender.navigationUpdates.contains { $0["status"] == .string(status) } }, timeout: .seconds(5))
         await waitUntil { model.preparedPerformanceTrace != nil }
+        await diagnoseMissingAutomaticExport(model)
         XCTAssertFalse(model.isNavigationRunning)
         XCTAssertEqual(model.navigationState, .failed("TEST_NAV_DELIVERY_FAILED"))
-        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace), as: UTF8.self)
+        let data = try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus)
+        let text = String(decoding: data, as: UTF8.self)
+        let rows = try data.split(separator: 10).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        let end = rows.first { $0["event"] as? String == "session.end" }?["metrics"] as? [String: Any]
+        XCTAssertEqual(end?["reason"] as? String, "TEST_NAV_DELIVERY_FAILED")
         XCTAssertTrue(text.contains("nav.delivery.failed"))
         XCTAssertTrue(text.contains("TEST_NAV_DELIVERY_FAILED"))
         XCTAssertFalse(text.contains("automatic.finished"), "a rejected update cannot become a successful arrival")
@@ -59,9 +66,10 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil { await sender.requests.count == 2 }
         model.consume(.disconnected)
         await waitUntil { model.preparedPerformanceTrace != nil }
+        await diagnoseMissingAutomaticExport(model)
         XCTAssertFalse(model.isNavigationRunning)
         XCTAssertEqual(model.navigationState, .failed("TEST_BAND_DISCONNECTED"))
-        let rows = try XCTUnwrap(model.preparedPerformanceTrace).split(separator: 10).map {
+        let rows = try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus).split(separator: 10).map {
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
         }
         XCTAssertTrue(rows.contains { $0["event"] as? String == "band.connection.disconnected" })
@@ -91,7 +99,7 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: .seconds(10))
         XCTAssertFalse(model.isNavigationRunning)
         XCTAssertEqual(model.navigationState, .failed("TEST_BAND_DIAGNOSTICS_TIMEOUT"))
-        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace), as: UTF8.self)
+        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus), as: UTF8.self)
         XCTAssertTrue(text.contains("automatic.health.sample"))
         XCTAssertTrue(text.contains("measurement.probe.incomplete"))
         XCTAssertTrue(text.contains("TEST_BAND_DIAGNOSTICS_TIMEOUT"))
@@ -115,7 +123,8 @@ final class AppModelPickerTests: XCTestCase {
         XCTAssertFalse(model.isNavigationRunning)
         XCTAssertFalse(manager.backgroundEnabled)
         await waitUntil { model.preparedPerformanceTrace != nil }
-        let data = try XCTUnwrap(model.preparedPerformanceTrace)
+        await diagnoseMissingAutomaticExport(model)
+        let data = try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus)
         let text = String(decoding: data, as: UTF8.self)
         XCTAssertTrue(text.contains("navigation.stopped")); XCTAssertTrue(text.contains("session.end"))
         await sender.releaseAll()
@@ -134,7 +143,8 @@ final class AppModelPickerTests: XCTestCase {
         try await Task.sleep(for: .seconds(9))
         XCTAssertEqual(model.navigationState, .failed("TEST_DIAGNOSTICS_INCOMPLETE"))
         XCTAssertFalse(model.isNavigationRunning)
-        XCTAssertNotNil(model.preparedPerformanceTrace)
+        XCTAssertNotNil(model.preparedPerformanceTrace, model.automaticTestStatus)
+        await diagnoseMissingAutomaticExport(model)
         XCTAssertNil(model.navigationStart)
     }
 
@@ -150,8 +160,9 @@ final class AppModelPickerTests: XCTestCase {
         XCTAssertTrue(model.isNavigationRunning, "Stop remains available during final diagnostics")
         try await answerAutomaticDiagnostics(model, sender: sender)
         await waitUntil { model.preparedPerformanceTrace != nil }
+        await diagnoseMissingAutomaticExport(model)
         XCTAssertFalse(model.isNavigationRunning)
-        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace), as: UTF8.self)
+        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus), as: UTF8.self)
         XCTAssertTrue(text.contains("automatic.finished")); XCTAssertTrue(text.contains("navigation.failed"))
         XCTAssertTrue(text.contains("session.end"))
     }
@@ -177,8 +188,9 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil({ await sender.requests.count == 4 }, timeout: .seconds(5))
         try await answerAutomaticDiagnostics(model, sender: sender)
         await waitUntil { model.preparedPerformanceTrace != nil }
+        await diagnoseMissingAutomaticExport(model)
         XCTAssertFalse(model.isNavigationRunning)
-        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace), as: UTF8.self)
+        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus), as: UTF8.self)
         XCTAssertTrue(text.contains("replay.fix")); XCTAssertTrue(text.contains("automatic.finished"))
         XCTAssertTrue(text.contains("session.end"))
         let arrival = await sender.navigationUpdates.last { $0["status"] == .string("arrived") }
@@ -199,6 +211,20 @@ final class AppModelPickerTests: XCTestCase {
             "lastCallbackMs": .number(5), "maxCallbackMs": .number(5)]
         model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report",
             body: ["request": transport, "transport": .object(native)])))
+    }
+
+    // Called only after the bounded export assertion has already failed. Keep
+    // storage failure distinct from lifecycle/queue delay in simulator logs.
+    private func diagnoseMissingAutomaticExport(_ model: AppModel) async {
+        guard model.preparedPerformanceTrace == nil else { return }
+        let status = model.automaticTestStatus
+        do {
+            let data = try await model.performanceTrace.export()
+            print("AUTOMATIC_EXPORT_DIAGNOSTIC status=\(status) directBytes=\(data.count)")
+        } catch {
+            let value = error as NSError
+            print("AUTOMATIC_EXPORT_DIAGNOSTIC status=\(status) domain=\(value.domain) code=\(value.code)")
+        }
     }
 
     func testLateMapPublicationCannotOverwriteQueuedAutomaticArrival() async throws {
@@ -233,11 +259,12 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil({ await sender.requests.count == 4 }, timeout: .seconds(5))
         try await answerAutomaticDiagnostics(model, sender: sender)
         await waitUntil { model.preparedPerformanceTrace != nil }
+        await diagnoseMissingAutomaticExport(model)
         let updates = await sender.navigationUpdates
         XCTAssertEqual(updates.last?["status"], .string("arrived"))
         let finalScene = await sender.finalScene()
         XCTAssertEqual(updates.last?["scene"], finalScene)
-        let rows = try XCTUnwrap(model.preparedPerformanceTrace).split(separator: 10).map {
+        let rows = try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus).split(separator: 10).map {
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
         }
         let delivery = rows.first { $0["event"] as? String == "automatic.arrival.delivery" }?["metrics"] as? [String: Any]

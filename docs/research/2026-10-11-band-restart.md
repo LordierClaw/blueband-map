@@ -63,6 +63,16 @@ supports avoiding unnecessary reactive state and image allocations but does not
 diagnose this crash. Their [interconnect API](https://iot.mi.com/vela/quickapp/en/features/network/interconnect.html)
 documents callbacks, not a native queue/RAM guarantee.
 
+Checked Xiaomi's diagnostic documentation on 2026-10-11: the
+[heap snapshot workflow](https://iot.mi.com/vela/quickapp/en/tools/debug/memory.html)
+requires suitable firmware for a device that uses low-level capabilities. The
+[real-device debugging guide](https://iot.mi.com/vela/quickapp/zh/tools/devicedebug/start.html)
+currently lists Watch S4 and designated partner firmware; it does not establish
+Band 10 support for retrieving heap/kernel logs. Consequently periodic app
+diagnostics improve the pre-failure history but must not be advertised as a
+firmware crash dump or native RAM measurement. This handoff does not require a
+firmware change or additional device-debug setup.
+
 ## Separate renderer experiment
 
 Before a CPU optimization, profile a public synthetic MVT fixture with non-empty
@@ -80,8 +90,14 @@ presented as a fix for Band reboot.
 
 - [x] Preserve new raw capture privately and run canonical `make perf-report`.
 - [x] Confirm installed pair and actual replay source from trace.
-- [ ] Observe failing behavioral tests for automatic health and disconnect reason.
-- [ ] Observe failing behavioral tests for full-frame mounted-node ownership.
+- [x] Observe failing behavioral tests for automatic health and disconnect reason:
+  iOS run 38074647212 at d9bba385d1b681da4bed1f77c35be6bc8cb0efa7 ran 120 tests;
+  the two new tests produced four expected failures. The other 118 passed.
+- [x] Observe failing behavioral tests for full-frame mounted-node ownership:
+  50 passed / 4 failed before the fix; independent review exposed one additional
+  old-page deletion race (54 passed / 1 failed), then all 56 runtime tests passed.
+  The page now retains the decoded image node across publication. Retirement
+  waits for DOM removal; a destroyed page cannot delete a successor's reused URI.
 - [ ] Implement and verify scoped changes; review late callbacks/cancellation.
 - [ ] Run `make test`, iOS simulator tests, package verification and `git diff --check`.
 - [ ] Hardware acceptance: the same stationary automatic route, periodic samples,
