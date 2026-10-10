@@ -80,6 +80,29 @@ test("route-progress cell replacement keeps the decoded old pixels until new pix
   assert.equal(state.decoded("0:0", "old-0:0"), false)
 })
 
+test("a resident image completes once and cached pixels must decode again after unmount", async () => {
+  const { default: corridor } = await import("./helpers/corridor.mjs")
+  const state = corridor.create("epoch-1")
+  for (const key of corridor.cells(0, 0)) state.store(key, `file-${key}`, 10)
+  state.request(1, 0, 0)
+  for (const item of state.images()) assert.equal(state.decoded(item.key, item.uri), true)
+  assert.equal(state.decoded("0:4", "file-0:4"), false, "a repeated native callback is not a new decode")
+
+  const moved = state.request(2, 0, 128)
+  for (const key of moved.missing) state.store(key, `file-${key}`, 10)
+  for (const item of state.images()) state.decoded(item.key, item.uri)
+  assert.equal(state.position.seq, 2)
+  assert.equal(state.images().some(item => item.key === "0:4"), false)
+  assert.equal(state.decoded("0:4", "file-0:4"), false, "an unmounted file cannot complete")
+
+  assert.deepEqual(state.request(3, 0, 0).missing, [])
+  assert.equal(state.position.seq, 2, "cached files must await their new native mount")
+  assert.equal(state.decoded("0:4", "file-0:4"), true)
+  assert.equal(state.decoded("0:4", "file-0:4"), false)
+  assert.equal(state.decoded("1:4", "file-1:4"), true)
+  assert.equal(state.position.seq, 3)
+})
+
 test("long curved corridor replay keeps full coverage and bounded files across content changes", async () => {
   const { default: corridor } = await import("./helpers/corridor.mjs")
   const state = corridor.create("replay")

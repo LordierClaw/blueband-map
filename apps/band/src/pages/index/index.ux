@@ -5,14 +5,14 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.19</text>
+      <text class="version">RPK 0.6.20</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
       <div class="map-frame" if="{{ mapReady || pendingPublication }}">
         <image class="map" if="{{ mapReady && !streamVisible }}" src="{{ mapPath }}" />
         <image class="map map-pending" if="{{ pendingPublication }}" src="{{ pendingMapPath }}" @complete="mapComplete(pendingMapToken)" @error="mapError(pendingMapToken)" />
-        <image class="stream-cell" for="{{ streamImages }}" tid="uri" src="{{ $item.uri }}" style="{{ $item.style }}" @complete="streamImageComplete($item.key, $item.uri)" @error="streamImageError($item.key, $item.uri)" />
+        <image class="stream-cell" for="{{ streamImages }}" tid="uri" src="{{ $item.uri }}" style="{{ $item.style }}" @complete="streamImageComplete($item.key, $item.uri, $item.token)" @error="streamImageError($item.key, $item.uri, $item.token)" />
         <text class="stream-attribution" if="{{ streamVisible }}">© Vietmap</text>
         <image class="nav-destination" if="{{ mapReady && navDestinationVisible }}" src="{{ navDestinationPath }}" style="{{ navDestinationStyle }}" />
         <image class="nav-marker" if="{{ mapReady && navMarkerVisible }}" src="{{ navMarkerPath }}" style="{{ navMarkerStyle }}" />
@@ -145,7 +145,7 @@ function create(epoch) {
     },
     decoded(key, uri) {
       const file = records().find(file => file.key === key && file.uri === uri)
-      if (!file || state.images().every(item => item.uri !== uri)) return false
+      if (!file || state.images().every(item => item.uri !== uri) || file.decoded) return false
       file.decoded = true
       promote()
       return true
@@ -577,8 +577,8 @@ export default {
     retiredMapURI: "",
     nextRenderToken: 1,
     showDiagnostics: true,
-    rpkVersion: "0.6.19",
-    rpkBuild: 34,
+    rpkVersion: "0.6.20",
+    rpkBuild: 35,
     perfVisual: false,
     perfFrame: "",
     perfLastNow: 0,
@@ -593,6 +593,7 @@ export default {
       peakPending: 0, timeouts204: 0, abandoned: 0, saturated: false,
       lastCallbackMs: null, maxCallbackMs: null }
     this.streamState = null
+    this.nextStreamImageToken = 1
     this.streamTransfer = null
     this.streamWritePending = false
     this.streamGarbage = []
@@ -1250,33 +1251,39 @@ export default {
 
   syncStreamImages() {
     if (!this.streamState) return
-    var previousImages = this.streamImages, mountedAt = this.perfNow()
-    this.streamImages = this.streamState.images().map(function (item) {
-      var previous = previousImages.find(function (image) { return image.uri === item.uri })
+    var page = this, previousImages = this.streamImages, mountedAt = this.perfNow()
+    var images = this.streamState.images().map(function (item) {
+      var previous = previousImages.find(function (image) { return image.uri === item.uri && image.key === item.key })
+      var style = "left:" + item.x + "px;top:" + item.y + "px;opacity:" + item.opacity + ";"
+      if (previous && previous.style === style) return previous
       return { key: item.key, uri: item.uri,
+        token: previous ? previous.token : "image-" + page.lifecycleEpoch + "-" + page.nextStreamImageToken++,
         perf: previous ? previous.perf : { mountedAt: mountedAt, completed: false },
-        style: "left:" + item.x + "px;top:" + item.y + "px;opacity:" + item.opacity + ";" }
+        style: style }
     })
+    // Replacing an unchanged reactive list can retrigger native completion events.
+    if (images.length !== previousImages.length || images.some(function (image, index) { return image !== previousImages[index] })) {
+      this.streamImages = images
+    }
     this.streamVisible = this.streamState.visible
     if (this.streamVisible && this.streamState.destination) this.applyDestination(this.streamState.destination)
     if (this.streamVisible) this.perfFrame = "v" + this.streamState.position.seq
-    var page = this
     this.streamState.takeRetired().forEach(function (record) { page.retireCellFile(record.uri) })
   },
 
-  streamImageComplete(key, uri) {
-    if (!this.streamState) return
+  streamImageComplete(key, uri, token) {
+    if (this.destroyed || !this.streamState) return
+    var image = this.streamImages.find(function (item) { return item.uri === uri && item.key === key && item.token === token })
+    // A cached URI can leave and re-enter the list. Only its current mount owns
+    // this callback, and each mount can report its first decode exactly once.
+    if (!image || image.perf.completed) return
     var applyStartedAt = this.perfNow()
-    var image = this.streamImages.find(function (item) { return item.uri === uri && item.key === key })
     var previous = this.streamState.position.seq
     var record = this.streamState.records().find(function (file) { return file.key === key && file.uri === uri })
     if (!this.streamState.decoded(key, uri)) return
-    var perf
-    if (image && !image.perf.completed) {
-      image.perf.completed = true
-      var decodeMs = this.perfElapsed(image.perf.mountedAt, applyStartedAt)
-      perf = { v: 1, clockValid: this.perfClockValid, decodeMs: decodeMs }
-    }
+    image.perf.completed = true
+    var decodeMs = this.perfElapsed(image.perf.mountedAt, applyStartedAt)
+    var perf = { v: 1, clockValid: this.perfClockValid, decodeMs: decodeMs }
     this.syncStreamImages()
     var applyMs = this.perfElapsed(applyStartedAt)
     if (record && record.hash) {
@@ -1294,9 +1301,12 @@ export default {
     }
   },
 
-  streamImageError(key, uri) {
+  streamImageError(key, uri, token) {
+    if (this.destroyed || !this.streamState || !this.streamImages.some(function (item) {
+      return item.key === key && item.uri === uri && item.token === token
+    })) return
     var applyStartedAt = this.perfNow()
-    if (!this.streamState || !this.streamState.failed(key, uri)) return
+    if (!this.streamState.failed(key, uri)) return
     this.syncStreamImages()
     this.retireCellFile(uri)
     var applyMs = this.perfElapsed(applyStartedAt), perf = this.resourcePerf()

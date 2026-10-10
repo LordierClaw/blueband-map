@@ -183,16 +183,99 @@ test("corridor streaming requires a confirmed scene and resets on full-map repla
   } finally { page.onDestroy() }
 })
 
-function streamCell(page, key, suffix = key, data = CELL_PNG) {
+function streamCell(page, key, suffix = key, data = CELL_PNG, epoch = "e1") {
   const digest = createHash("sha256").update(data).digest("hex")
-  page.receiveMessage({ data: envelope(`cb-${suffix}`, "map.cell.begin", { epoch: "e1", cell: key, bytes: data.length, sha256: digest }) })
+  page.receiveMessage({ data: envelope(`cb-${suffix}`, "map.cell.begin", { epoch, cell: key, bytes: data.length, sha256: digest }) })
   const offsets = Array.from({ length: Math.ceil(data.length / 216) }, (_, i) => i * 216)
   if (offsets.length > 1) [offsets[0], offsets[1]] = [offsets[1], offsets[0]]
   for (const offset of offsets) page.receiveMessage({ data: envelope(`cc-${suffix}-${offset}`, "map.cell.chunk", {
-    epoch: "e1", cell: key, offset, data: data.subarray(offset, offset + 216).toString("base64")
+    epoch, cell: key, offset, data: data.subarray(offset, offset + 216).toString("base64")
   }) })
-  page.receiveMessage({ data: envelope(`ce-${suffix}`, "map.cell.end", { epoch: "e1", cell: key }) })
+  page.receiveMessage({ data: envelope(`ce-${suffix}`, "map.cell.end", { epoch, cell: key }) })
 }
+
+test("repeated native completions cannot refresh their own image list or flood decoded replies", async () => {
+  const { page, sent } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
+    const mounted = page.streamImages, first = mounted[0]
+    page.streamImageComplete(first.key, first.uri, first.token)
+    assert.equal(page.streamImages, mounted, "partial decode has no visual change to remount")
+    for (const item of mounted) page.streamImageComplete(item.key, item.uri, item.token)
+    assert.equal(page.streamState.position.seq, 1, "all first completions still promote coverage")
+    const displayed = page.streamImages, before = sent.length
+    for (let repeat = 0; repeat < 100; repeat++) {
+      for (const item of displayed) page.streamImageComplete(item.key, item.uri, item.token)
+    }
+    assert.equal(page.streamImages, displayed, "a callback cannot trigger another reactive image refresh")
+    assert.equal(sent.length, before, "duplicate native callbacks have no transport side effects")
+    assert.equal(sent.filter(message => message.topic === "map.cell.decoded").length, 10)
+  } finally { page.onDestroy() }
+})
+
+test("cached remount reports a new decode while ignoring callbacks from the old mount", async () => {
+  const { page, sent, file } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri, item.token)
+    const oldMount = page.streamImages.find(item => item.key === "0:4")
+    page.receiveMessage({ data: envelope("move", "map.stream.view", { epoch: "e1", seq: 2, x: 0, y: 128 }) })
+    for (const key of corridorMap.cells(0, 128).filter(key => !page.streamState.has(key))) streamCell(page, key)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri, item.token)
+    assert.equal(page.streamState.position.seq, 2)
+    assert.equal(page.streamImages.some(item => item.uri === oldMount.uri), false)
+    const writes = file.writes.length
+    page.receiveMessage({ data: envelope("return", "map.stream.view", { epoch: "e1", seq: 3, x: 0, y: 0 }) })
+    const remounted = page.streamImages.find(item => item.uri === oldMount.uri)
+    assert.ok(remounted)
+    assert.notEqual(remounted.token, oldMount.token, "each native mount must own its callbacks")
+    const before = sent.length, images = page.streamImages
+    page.streamImageComplete(oldMount.key, oldMount.uri, oldMount.token)
+    page.streamImageError(oldMount.key, oldMount.uri, oldMount.token)
+    assert.equal(sent.length, before)
+    assert.equal(page.streamImages, images)
+    assert.equal(page.streamState.position.seq, 2)
+    assert.equal(file.storage.has(oldMount.uri), true)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri, item.token)
+    assert.equal(page.streamState.position.seq, 3)
+    assert.equal(file.writes.length, writes, "returning to cached cells needs decode, not another transfer")
+    assert.equal(sent.filter(message => message.topic === "map.cell.decoded" && message.body.cell === "0:4").length, 2)
+  } finally { page.onDestroy() }
+})
+
+test("epoch replacement and destruction reject late native image callbacks", async () => {
+  const { page, sent, file } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
+    streamCell(page, "0:0")
+    const old = page.streamImages[0]
+    page.receiveMessage({ data: envelope("open2", "map.stream.open", { scene: SCENE, epoch: "e2", version: 1 }) })
+    page.receiveMessage({ data: envelope("view2", "map.stream.view", { epoch: "e2", seq: 1, x: 0, y: 0 }) })
+    streamCell(page, "0:0", "epoch2", CELL_PNG, "e2")
+    const current = page.streamImages[0], before = sent.length
+    page.streamImageComplete(old.key, old.uri, old.token)
+    page.streamImageError(old.key, old.uri, old.token)
+    assert.equal(sent.length, before)
+    page.streamImageComplete(current.key, current.uri, current.token)
+    assert.equal(sent.filter(message => message.topic === "map.cell.decoded").length, 1)
+    assert.equal(sent.at(-1).body.epoch, "e2")
+    page.onDestroy()
+    const destroyedImages = page.streamImages, destroyedSends = sent.length, deletes = file.deletes.length
+    page.streamImageComplete(current.key, current.uri, current.token)
+    page.streamImageError(current.key, current.uri, current.token)
+    assert.equal(page.streamImages, destroyedImages)
+    assert.equal(sent.length, destroyedSends)
+    assert.equal(file.deletes.length, deletes)
+  } finally { page.onDestroy() }
+})
 
 test("windowed cell transfers populate a moving viewport without replacing the full map", async () => {
   const { page, sent, file } = await harness()
@@ -217,7 +300,7 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     assert.equal(state.body.perf.nativeMemory, null)
     assert.equal(page.perfFrame, "f456789", "staging must not advance the visible sequence label")
     assert.equal(page.perfVisual, false, "the filming overlay stays off in production")
-    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri, item.token)
     assert.equal(page.streamVisible, true)
     assert.equal(page.perfFrame, "v1")
     const writes = file.writes.length
@@ -228,7 +311,7 @@ test("windowed cell transfers populate a moving viewport without replacing the f
     assert.equal(page.navDestinationStyle, priorDestination, "destination must wait for matching coverage")
     for (const key of corridorMap.cells(0, 4).filter(key => !page.streamState.has(key))) streamCell(page, key)
     page.receiveMessage({ data: envelope("view2-retry", "map.stream.view", view2) })
-    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri, item.token)
     assert.equal(page.streamState.position.y, 4)
     assert.equal(page.navDestinationStyle, "left:92px;top:273px;")
     assert.equal(file.writes.length - writes, 2, "only the entering row is transferred")
@@ -256,7 +339,7 @@ test("changed cell content retires old pixels only after native decode", async (
     page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
     page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
     for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
-    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri, item.token)
     const old = page.streamImages.find(item => item.key === "0:0").uri
     // A different valid image byte stream (ancillary bytes after IEND do not change native dimensions).
     streamCell(page, "0:0", "replacement", Buffer.concat([CELL_PNG, Buffer.from([0])]))
@@ -267,7 +350,7 @@ test("changed cell content retires old pixels only after native decode", async (
     page.receiveMessage({ data: envelope("diag-staged", "diagnostics.get", { request: "staged" }) })
     assert.equal(sent.filter(m => m.topic === "diagnostics.report").at(-1).body.perf.files, 11,
       "old and staging versions of the same cell both count")
-    page.streamImageComplete(replacement.key, replacement.uri)
+    page.streamImageComplete(replacement.key, replacement.uri, replacement.token)
     assert.equal(file.storage.has(old), false)
     assert.equal(page.streamVisible, true)
     assert.equal(page.streamImages.length, 10)
@@ -281,7 +364,7 @@ test("a replacement decodes while the moving viewport still awaits entering cell
     page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
     page.receiveMessage({ data: envelope("view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
     for (const key of corridorMap.cells(0, 0)) streamCell(page, key)
-    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+    for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri, item.token)
     const old = page.streamImages.find(item => item.key === "0:0").uri
     // GPS advances while iOS is replacing a visible cell. The sender cannot send
     // the entering row until this replacement has received its native decode reply.
@@ -292,14 +375,14 @@ test("a replacement decodes while the moving viewport still awaits entering cell
     streamCell(page, "0:0", "moving-replacement", replacementBytes)
     const replacement = page.streamImages.find(item => item.key === "0:0" && item.uri !== old)
     assert.ok(replacement, "available cells must mount before all entering files arrive, or sender and decoder deadlock")
-    page.streamImageComplete(replacement.key, replacement.uri)
+    page.streamImageComplete(replacement.key, replacement.uri, replacement.token)
     assert.ok(sent.some(message => message.topic === "map.cell.decoded" &&
       message.body.sha256 === createHash("sha256").update(replacementBytes).digest("hex")))
     assert.equal(page.streamState.position.seq, 1, "partial decoding must not expose an uncovered viewport")
     assert.equal(file.storage.has(old), true)
     for (const key of missing) {
       streamCell(page, key)
-      for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri)
+      for (const item of page.streamImages.slice()) page.streamImageComplete(item.key, item.uri, item.token)
       assert.ok(page.streamImages.length <= 24)
     }
     assert.equal(page.streamState.position.seq, 2)
@@ -529,13 +612,13 @@ test("cell telemetry counts staged files and measures each mounted image only on
     assert.deepEqual(stored.body.perf, { v: 1, clockValid: true, writeMs: 17 })
     const item = page.streamImages[0]
     now += 23
-    page.streamImageComplete(item.key, item.uri)
+    page.streamImageComplete(item.key, item.uri, item.token)
     assert.deepEqual(sent.filter(m => m.topic === "map.cell.decoded").at(-1).body.perf,
       { v: 1, clockValid: true, decodeMs: 23 })
     now += 99
-    page.streamImageComplete(item.key, item.uri)
-    assert.equal(sent.filter(m => m.topic === "map.cell.decoded").at(-1).body.perf, undefined,
-      "duplicate callback must not invent a second decode sample")
+    page.streamImageComplete(item.key, item.uri, item.token)
+    assert.equal(sent.filter(m => m.topic === "map.cell.decoded").length, 1,
+      "duplicate callback must not send another decoded envelope")
     const manifest = JSON.parse(await readFile(new URL("../src/manifest.json", import.meta.url)))
     assert.equal(during.rpk, manifest.versionCode)
     assert.equal(during.versionName, manifest.versionName)
@@ -608,15 +691,15 @@ test("decode failure telemetry retains pending cleanup without accepting stale c
     streamCell(page, "0:0")
     const item = page.streamImages[0]
     file.delete = () => {}
-    page.streamImageError(item.key, item.uri)
+    page.streamImageError(item.key, item.uri, item.token)
     const failure = sent.filter(m => m.topic === "map.stream.state").at(-1)
     assert.equal(failure.body.code, "decodeFailed")
     assert.deepEqual(failure.body.perf, { v: 1, clockValid: true, files: 1, nodes: 0,
       pendingDeletes: 1, inFlight: 0, nativeMemory: null, applyMs: failure.body.perf?.applyMs })
     assert.equal(typeof failure.body.perf.applyMs, "number")
     const count = sent.length
-    page.streamImageComplete(item.key, item.uri)
-    page.streamImageError(item.key, item.uri)
+    page.streamImageComplete(item.key, item.uri, item.token)
+    page.streamImageError(item.key, item.uri, item.token)
     assert.equal(sent.length, count)
   } finally { page.onDestroy() }
 })
