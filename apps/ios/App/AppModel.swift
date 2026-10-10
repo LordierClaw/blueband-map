@@ -85,6 +85,7 @@ final class AppModel: ObservableObject {
     private var probeRPKMatches = false
     private var automaticPreflight = false
     private var automaticTurnFixes: Set<Int> = []
+    private var automaticArrivalAcknowledged = false
 
     let performanceTrace: PerformanceTraceRecorder
     private let performanceFixes: PerformanceFixTracker
@@ -237,7 +238,7 @@ final class AppModel: ObservableObject {
             if automaticRunID != nil, let fixID = performanceFixes.identifier(timestamp) {
                 let phase: NavigationMeasurement.Phase = automaticTurnFixes.contains(fixID)
                     ? .turn : missing > 0 ? .coverage : .cached
-                performanceTrace.record("measurement.phase", fixID: fixID,
+                self.performanceTrace.record("measurement.phase", fixID: fixID,
                     metrics: ["phase": .string(phase.rawValue), "basis": .string("viewport-request")])
             }
             self.performanceTrace.record("map.view.request", fixID: performanceFixes.identifier(timestamp),
@@ -391,6 +392,7 @@ final class AppModel: ObservableObject {
         resetNavigationDebug()
         performanceFixes.reset()
         automaticTurnFixes.removeAll()
+        automaticArrivalAcknowledged = false
         let automatic = automaticRunID != nil
         let measurement = NavigationMeasurement(caseID: automatic ? "auto-" + UUID().uuidString.prefix(8).lowercased() : performanceCaseID,
             gpsSource: automatic ? .replay : performanceGPSSource,
@@ -534,7 +536,11 @@ final class AppModel: ObservableObject {
             if fix.speed > 0 {
                 if let previousCourse, let id = performanceFixes.identifier(fix.timestamp) {
                     let delta = abs((fix.course - previousCourse + 540).truncatingRemainder(dividingBy: 360) - 180)
-                    if delta >= 30 { automaticTurnFixes.insert(id) }
+                    if delta >= 30 {
+                        automaticTurnFixes.insert(id)
+                        performanceTrace.record("measurement.phase", fixID: id,
+                            metrics: ["phase": .string("turn"), "basis": .string("replay-course-change")])
+                    }
                 }
                 previousCourse = fix.course
             }
@@ -570,7 +576,8 @@ final class AppModel: ObservableObject {
                     do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
                     guard automaticRunID == owner else { return }
                 }
-                performanceTrace.record("automatic.arrival.delivery", metrics: ["drained": .bool(updateTask == nil)])
+                performanceTrace.record("automatic.arrival.delivery", metrics: ["drained": .bool(updateTask == nil),
+                    "acknowledged": .bool(automaticArrivalAcknowledged)])
             }
             guard automaticRunID == owner, !Task.isCancelled else { return }
             // Quiesce producers before the final probe, without awaiting a stuck task.
@@ -1525,6 +1532,8 @@ final class AppModel: ObservableObject {
         horizontalAccuracyMeters: Double,
         status: NavigationStatus
     ) {
+        // A late map publication must not replace the queued terminal update.
+        guard automaticFinishTask == nil || status == .arrived else { return }
         guard let scene = activeSceneID else { return }
         let selection = GuidancePresentationPolicy.select(
             route: route,
@@ -1698,6 +1707,7 @@ final class AppModel: ObservableObject {
             do {
                 _ = try await routeCardSender.sendAwaitingAcknowledgement(topic: NavigationUpdate.topic, body: update.jsonBody())
                 try checkNavigationOwner(generation)
+                if automaticRunID != nil && update.status == .arrived { automaticArrivalAcknowledged = true }
                 performanceTrace.record("nav.delivery.ack", metrics: ["status": .string(update.status.rawValue)])
                 try await updateClock.sleep(for: .seconds(1))
                 try checkNavigationOwner(generation)

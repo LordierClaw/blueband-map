@@ -110,6 +110,45 @@ final class AppModelPickerTests: XCTestCase {
             body: ["request": transport, "transport": .object(native)])))
     }
 
+    func testLateMapPublicationCannotOverwriteQueuedAutomaticArrival() async throws {
+        let sender = MeasurementProbeSender(), gate = AutomaticRenderGate()
+        var renders = 0
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, routeTransport: ShortAutomaticRouteTransport(longer: true), sender: sender,
+            render: { request in
+                renders += 1
+                if renders == 2 { await gate.pause() }
+                let context = try XCTUnwrap(CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: try XCTUnwrap(context.makeImage()), retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "cpu-warm", configuration: config)
+            })
+        defer { model.stopNavigation(); Task { await gate.release(); await sender.releaseNavigation() } }
+        model.performanceMapMode = .full
+        await sender.holdFirstNavigation()
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil({ model.navigationState == .arrived }, timeout: .seconds(5))
+        XCTAssertGreaterThanOrEqual(renders, 2)
+        await gate.release()
+        await waitUntil { model.navigationDebugEntries.filter { $0.stage == "band.displayed" }.count >= 2 }
+        await sender.releaseNavigation()
+        await waitUntil({ await sender.requests.count == 4 }, timeout: .seconds(5))
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil { model.preparedPerformanceTrace != nil }
+        let updates = await sender.navigationUpdates
+        XCTAssertEqual(updates.last?["status"], .string("arrived"))
+        let rows = try XCTUnwrap(model.preparedPerformanceTrace).split(separator: 10).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        let delivery = rows.first { $0["event"] as? String == "automatic.arrival.delivery" }?["metrics"] as? [String: Any]
+        XCTAssertEqual(delivery?["acknowledged"] as? Bool, true)
+    }
+
     func testStopRecordsAdmissionAndCleanupBeforeTerminalEvent() async throws {
         let manager = TestLocationManager()
         let model = makeModel(central: PickerCentral(), authMode: .missing,
@@ -928,14 +967,28 @@ private actor MeasurementProbeSender: RouteCardSessionSending {
     private(set) var requests: [[String: JSONValue]] = []
     private(set) var navigationUpdates: [[String: JSONValue]] = []
     private let renderer = WindowedRouteCardSession()
+    private var holdNavigation = false
+    private var navigationWaiter: CheckedContinuation<Void, Never>?
+    func holdFirstNavigation() { holdNavigation = true }
+    func releaseNavigation() { holdNavigation = false; navigationWaiter?.resume(); navigationWaiter = nil }
     func setReceiver(_ receiver: @escaping @MainActor @Sendable (ApplicationEnvelope) -> Void) async {
         await renderer.setReceiver(receiver)
     }
     func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
         if topic == "diagnostics.get" { requests.append(body); return "probe-ack" }
-        if topic == "nav.update" { navigationUpdates.append(body); return "nav-ack" }
+        if topic == "nav.update" {
+            navigationUpdates.append(body)
+            if holdNavigation { await withCheckedContinuation { navigationWaiter = $0 } }
+            return "nav-ack"
+        }
         return try await renderer.sendAwaitingAcknowledgement(topic: topic, body: body)
     }
+}
+
+private actor AutomaticRenderGate {
+    private var waiter: CheckedContinuation<Void, Never>?
+    func pause() async { await withCheckedContinuation { waiter = $0 } }
+    func release() { waiter?.resume(); waiter = nil }
 }
 
 private actor CellRenderProbe {
@@ -1044,8 +1097,11 @@ private struct FailingAutomaticRouteTransport: MapHTTPTransport {
 }
 
 private struct ShortAutomaticRouteTransport: MapHTTPTransport {
+    var longer = false
     func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
-        MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: Data(#"{"code":"OK","paths":[{"distance":6,"points_encoded":true,"points":"aau`Aaa_jSI?","instructions":[{"distance":6,"heading":0,"sign":0,"interval":[0,1],"street_name":"Fixture"}]}]}"#.utf8))
+        let short = #"{"code":"OK","paths":[{"distance":6,"points_encoded":true,"points":"aau`Aaa_jSI?","instructions":[{"distance":6,"heading":0,"sign":0,"interval":[0,1],"street_name":"Fixture"}]}]}"#
+        let body = longer ? short.replacingOccurrences(of: "aau`Aaa_jSI?", with: "q~t`Aaa_jSyA?") : short
+        return MapHTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: Data(body.utf8))
     }
 }
 

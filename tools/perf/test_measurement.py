@@ -56,6 +56,44 @@ class MeasurementTest(unittest.TestCase):
         self.assertEqual(summary["phases"]["turn"]["confirmations"], 0)
         self.assertEqual(summary["subsecondGoal"]["status"], "INCONCLUSIVE")
 
+    def test_fix_phase_after_receipt_overrides_only_the_matching_fix(self):
+        rows = measured()
+        rows.insert(4, record("measurement.phase", 1200, {"phase": "cached"}))
+        rows.insert(6, record("measurement.phase", 1400, {"phase": "coverage"}, fixId="f2"))
+        index = next(i for i, row in enumerate(rows) if row["event"] == "band.telemetry")
+        for row in rows[index:]:
+            row["monotonicMs"] += 550
+        rows[index:index] = [
+            record("gps.fix", 1749, {"gpsInputAgeMs": 50, "accepted": True}, fixId="f3"),
+            record("map.confirmed", 2049, {"fixToConfirmMs": 350, "appToConfirmMs": 300,
+                "frameGapMs": 550, "mode": "corridor", "clockValid": True, "initial": False,
+                "appState": "active"}, fixId="f3", scene="a", epoch=1, viewSeq=3),
+        ]
+        summary = self.analyze(stamp(rows))
+        self.assertEqual(summary["diagnostics"], [])
+        self.assertEqual(summary["phases"]["coverage"]["confirmations"], 1)
+        self.assertEqual(summary["phases"]["cached"]["confirmations"], 1)
+        self.assertEqual(summary["phases"]["coverage"]["maxFixToConfirmMs"], 300)
+        self.assertEqual(summary["phases"]["cached"]["maxFixToConfirmMs"], 350)
+
+    def test_unmatched_fix_marker_does_not_change_the_unkeyed_phase(self):
+        rows = measured()
+        rows.insert(4, record("measurement.phase", 1200, {"phase": "cached"}))
+        rows.insert(5, record("measurement.phase", 1201, {"phase": "turn"}, fixId="other-fix"))
+        summary = self.analyze(stamp(rows))
+        self.assertEqual(summary["diagnostics"], [])
+        self.assertEqual(summary["phases"]["cached"]["confirmations"], 1)
+        self.assertEqual(summary["phases"]["turn"]["confirmations"], 0)
+
+    def test_fix_phase_after_confirmation_does_not_relabel_that_confirmation(self):
+        rows = measured()
+        rows.insert(4, record("measurement.phase", 1200, {"phase": "cached"}))
+        rows.insert(7, record("measurement.phase", 1500, {"phase": "turn"}, fixId="f2"))
+        summary = self.analyze(stamp(rows))
+        self.assertEqual(summary["diagnostics"], [])
+        self.assertEqual(summary["phases"]["cached"]["confirmations"], 1)
+        self.assertEqual(summary["phases"]["turn"]["confirmations"], 0)
+
     def test_untrusted_startup_or_missing_contract_cannot_be_a_timing_failure(self):
         rows = measured(1200)
         next(r for r in rows if r["event"] == "map.confirmed")["fixId"] = "wrong"

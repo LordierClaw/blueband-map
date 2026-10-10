@@ -80,11 +80,16 @@ def analyze_measurement(records, integrity_valid):
             reference = {k: row[k] for k in ("sessionId", "eventSeq", "fixId", "requestId", "scene", "epoch", "viewSeq") if k in row}
             reference.update(line=row["_line"], metrics=m)
             if event == "measurement.phase":
-                phase = m.get("phase") if m.get("phase") in ("startup", "cached", "coverage", "turn", "recovery") else None
-                if phase:
-                    phases[phase]["markers"] += 1
+                marked_phase = m.get("phase") if m.get("phase") in ("startup", "cached", "coverage", "turn", "recovery") else None
+                if "fixId" in row:
+                    # Automatic classification can follow GPS receipt, but is local to that fix.
+                    fix_phases[row["fixId"]] = marked_phase
+                else:
+                    phase = marked_phase
+                if marked_phase:
+                    phases[marked_phase]["markers"] += 1
             if event == "gps.fix" and m.get("accepted") is True:
-                fix_phases[row.get("fixId")] = phase
+                fix_phases.setdefault(row.get("fixId"), phase)
             origin_phase = fix_phases.get(row.get("fixId"))
             if event == "map.confirmed" and row.get("_trustedConfirmation") is True and origin_phase and m.get("initial") is False and numeric(m.get("fixToConfirmMs")):
                 phases[origin_phase]["confirmations"] += 1
