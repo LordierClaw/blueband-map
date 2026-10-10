@@ -12,7 +12,7 @@ def measured(startup=999, session="s1"):
     rows = trace(session, latency=startup)
     rows[0]["metrics"].update(measurementVersion=2, osVersion="27.0", deviceModel="iPhone16,1",
                               testCaseID="walk-01", gpsSource="device", mapMode="automatic", firmware="fixture")
-    rows.insert(1, record("navigation.intent", 0, {"sampleUptimeMs": 10000}))
+    rows.insert(1, record("navigation.intent", 0, {"sampleUptimeMs": 10000, "intentAdmissionDelayMs": 0}))
     first = next(r for r in rows if r["event"] == "map.confirmed")
     first["metrics"]["sampleUptimeMs"] = 10000 + startup
     # A recent GPS update cannot erase time spent acquiring GPS/routing/bootstrap.
@@ -27,6 +27,35 @@ def measured(startup=999, session="s1"):
 
 
 class MeasurementTest(unittest.TestCase):
+    def test_slow_startup_requires_complete_unmixed_versioned_evidence(self):
+        missing = measured(1200)
+        del missing[0]["metrics"]["measurementVersion"]
+        lost = measured(1200); lost[-1]["metrics"]["droppedEvents"] = 1
+        unfinished = [r for r in measured(1200) if r["event"] != "session.end"]
+        mixed = measured(1200) + measured(1200, session="s2")
+        for rows in (missing, lost, stamp(unfinished), mixed):
+            with self.subTest(rows=rows):
+                self.assertEqual(self.analyze(rows)["startupGate"]["status"], "INCONCLUSIVE")
+
+    def test_startup_anchor_cross_checks_elapsed_time_but_includes_pre_trace_work(self):
+        rows = measured(1200)
+        rows[1]["metrics"]["sampleUptimeMs"] = 11050
+        rows[2]["metrics"]["sampleUptimeMs"] = 11100
+        self.assertEqual(self.analyze(rows)["startupGate"]["status"], "INCONCLUSIVE")
+        rows = measured(999)
+        rows[1]["metrics"]["sampleUptimeMs"] = 9700
+        rows[1]["metrics"]["intentAdmissionDelayMs"] = 300
+        summary = self.analyze(rows)
+        self.assertEqual(summary["startup"][0]["intentToConfirmMs"], 1299)
+        self.assertEqual(summary["startupGate"]["status"], "FAIL")
+
+    def test_late_old_fix_confirmation_cannot_satisfy_a_new_phase(self):
+        rows = measured()
+        rows.insert(5, record("measurement.phase", 1498, {"phase": "turn"}))
+        summary = self.analyze(stamp(rows))
+        self.assertEqual(summary["phases"]["turn"]["confirmations"], 0)
+        self.assertEqual(summary["subsecondGoal"]["status"], "INCONCLUSIVE")
+
     def test_untrusted_startup_or_missing_contract_cannot_be_a_timing_failure(self):
         rows = measured(1200)
         next(r for r in rows if r["event"] == "map.confirmed")["fixId"] = "wrong"

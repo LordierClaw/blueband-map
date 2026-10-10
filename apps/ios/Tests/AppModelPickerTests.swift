@@ -12,6 +12,30 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testBlockedDiagnosticSendExpiresAndOldCompletionCannotClearNextProbe() async throws {
+        let sender = BlockedMeasurementProbeSender()
+        let manager = TestLocationManager()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            location: ForegroundLocationClient(manager: manager, makeBackgroundActivity: { nil }, servicesEnabled: { true }),
+            navigationConfigured: true, sender: sender)
+        defer { model.stopNavigation(); Task { await sender.releaseAll() } }
+        model.destinationLatitudeInput = "21.1"; model.destinationLongitudeInput = "106.1"
+        model.consume(.connected); model.startNavigation()
+        await waitUntil { await sender.count == 2 }
+        try await Task.sleep(for: .seconds(9))
+        XCTAssertTrue(model.performanceDiagnosticsStatus.hasPrefix("Thiếu chẩn đoán"))
+        model.capturePerformanceDiagnostics()
+        await waitUntil { await sender.count == 4 }
+        await sender.releaseFirstPair()
+        for _ in 0..<100 { await Task.yield() }
+        model.capturePerformanceDiagnostics()
+        let count = await sender.count
+        XCTAssertEqual(count, 4, "late completion must not release a successor's capture guard")
+        let data = try await model.performanceTrace.export()
+        let rows = try data.split(separator: 10).map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any]) }
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "measurement.probe.incomplete" })
+    }
+
     func testDiagnosticsRequireMatchingLiveSessionAndCompleteResourceReply() async throws {
         let sender = MeasurementProbeSender()
         let manager = TestLocationManager()
@@ -703,6 +727,23 @@ final class AppModelPickerTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("Condition was not met", file: file, line: line)
+    }
+}
+
+private actor BlockedMeasurementProbeSender: RouteCardSessionSending {
+    private(set) var count = 0
+    private var pending: [CheckedContinuation<String, Never>] = []
+    func sendAwaitingAcknowledgement(topic: String, body: [String: JSONValue]) async throws -> String {
+        count += 1
+        return await withCheckedContinuation { pending.append($0) }
+    }
+    func releaseFirstPair() {
+        let pair = Array(pending.prefix(2)); pending.removeFirst(min(2, pending.count))
+        for continuation in pair { continuation.resume(returning: "ack") }
+    }
+    func releaseAll() {
+        let all = pending; pending.removeAll()
+        for continuation in all { continuation.resume(returning: "ack") }
     }
 }
 
