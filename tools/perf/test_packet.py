@@ -179,9 +179,10 @@ class PacketTest(unittest.TestCase):
 
     def test_observed_failure_cannot_hide_missing_resource_evidence(self):
         telemetry = next(row for row in self.rows if row["event"] == "band.telemetry")["metrics"]
-        telemetry["files"] = 32
+        telemetry["nodes"] = 25
         self.write_case(self.rows)
         self.assertEqual(self.invoke()["status"], "READY_FOR_ANALYSIS", "complete resource violations remain useful evidence")
+        telemetry["files"] = 32
         del telemetry["nodes"]
         self.write_case(self.rows)
         result = self.invoke()
