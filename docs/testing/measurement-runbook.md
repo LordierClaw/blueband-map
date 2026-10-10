@@ -71,6 +71,15 @@ export chứa nhiều phiên. Giữ JSONL nguyên gốc; báo cáo là dữ li�
 Đọc `startupGate`, `measurementReadiness`, `subsecondGoal` cùng các gate cũ.
 Exit code 0 chỉ có nghĩa phân tích chạy được, không có nghĩa độ trễ đạt.
 
+Để kiểm tra toàn bộ bộ ca trước khi rời địa điểm thử, sao chép
+`tools/perf/packet.example.json` thành `packet.json` trong thư mục cha các ca rồi
+chạy `make perf-packet PACKET=/duong/dan/bo-ca`. Công cụ đọc các thư mục đã khai
+báo, tìm phiên khớp mã ca duy nhất và chỉ rõ dữ liệu thiếu/sai phiên bản. Nếu cùng
+mã ca được chạy nhiều lần, thêm `sessionId` đúng trong `packet.json`. Nó giữ riêng
+kết quả độ trễ và trạng thái đủ dữ liệu: ca chậm/lỗi vẫn có thể đủ để phân tích,
+không cần chạy lại chỉ để có PASS. Hash mã nguồn trong `run.json` là khai báo của
+người thử, chưa phải bằng chứng xác thực binary trên thiết bị.
+
 ## Chỉ chạy dài khi ca ngắn đủ dữ liệu
 
 | Quan sát | Bước tiếp theo |

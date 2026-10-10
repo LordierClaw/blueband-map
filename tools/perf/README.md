@@ -6,6 +6,36 @@ make perf-report RUN=/absolute/path/to/run SESSION=session-id-from-report
 make test-perf
 ```
 
+## Checking a collection before leaving the test site
+
+Copy `tools/perf/packet.example.json` to `packet.json` in the parent of the case
+folders, then run `make perf-packet PACKET=/absolute/path/to/collection`. Each
+declared direct child folder holds `navigation.jsonl` and `run.json` from the
+measurement runbook. The example targets measurement candidate `0947f7b`, iOS
+0.5.24 (40), RPK 0.6.19 (34); change expected identities deliberately for another
+candidate. Unknown manifest fields are rejected to catch misspelled requirements.
+
+Only listed cases are read. The tool selects a session only when its trace case
+ID matches uniquely. For repeated case IDs, add `"sessionId": "exact-export-id"`
+to that case in `packet.json`; available IDs are listed in the report. Never
+rename an actual case or alter evidence just to satisfy the checker.
+
+Outputs are `packet-report.md` and `packet-summary.json` in the collection root.
+Source captures and existing per-case reports are preserved. `READY_FOR_ANALYSIS`
+means the declared capture checks have enough evidence, including valid slow or
+failed observations; it does **not** mean latency passed. `NEEDS_ATTENTION` lists
+missing/ambiguous data, version/source/mode/GPS mismatches, incomplete telemetry,
+or required phases/app states without confirmed observations. Correct file/session
+selection and metadata first; this status does not automatically require a retest.
+Each case retains the original analyzer gates, including observed failures.
+
+Hardware acceptance stays UNVERIFIED. Source SHA is only a sidecar declaration;
+the trace does not attest to the binary hash. Cold/warm conditions, actual turns,
+video and native RAM still need human review. The report checks only declared
+cases, not every possible scenario. Exit 0 means analysis completed (including
+NEEDS_ATTENTION); malformed configuration, unsafe output aliases or I/O failure
+return 2. Windows uses the same `PYTHON=...` override as other perf targets.
+
 Python standard library only. The analyzer reads `navigation.jsonl` and writes
 `report.md`, `summary.json`, and `timeline.csv` in the run folder. Those three
 names are reserved outputs and replaced on subsequent runs. Input aliases and

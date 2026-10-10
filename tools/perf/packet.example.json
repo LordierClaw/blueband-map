@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "sourceSHA": "0947f7b9824eb13b6ea25722b3214673079f57a9",
+  "expected": {
+    "appBuild": "0.5.24 (40)",
+    "rpkVersion": "0.6.19",
+    "rpkBuild": 34
+  },
+  "cases": [
+    {"id": "fg-cold-01", "directory": "fg-cold-01", "mapMode": "automatic", "requiredAppState": "active"},
+    {"id": "fg-warm-01", "directory": "fg-warm-01", "mapMode": "automatic", "requiredAppState": "active"},
+    {"id": "fg-move-01", "directory": "fg-move-01", "mapMode": "automatic", "requiredPhases": ["cached", "coverage", "turn"], "requiredAppState": "active"},
+    {"id": "bg-move-01", "directory": "bg-move-01", "mapMode": "automatic", "requiredAppState": "background"},
+    {"id": "recovery-01", "directory": "recovery-01", "mapMode": "automatic", "requiredPhases": ["recovery"]},
+    {"id": "full-compare-01", "directory": "full-compare-01", "mapMode": "full", "requiredAppState": "active"}
+  ]
+}

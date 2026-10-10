@@ -80,12 +80,15 @@ clean:
 	docker compose run --rm node-rpk npm run clean
 	rm -rf -- packages/BlueBandKit/.build apps/ios/BlueBandMap.xcodeproj tools/protocol-lab/.coverage
 
-.PHONY: test-perf perf-report test-gps-replay
+.PHONY: test-perf perf-report perf-packet test-gps-replay
 test-perf:
 	$(PYTHON) -m unittest discover -s tools/perf -p 'test_*.py'
 
 perf-report:
 	$(PYTHON) tools/perf/report.py "$(RUN)" $(if $(SESSION),--session "$(SESSION)")
+
+perf-packet:
+	$(PYTHON) tools/perf/packet.py "$(PACKET)"
 
 test-gps-replay:
 	$(MAKE) -C ../blueband-map-route-test test
