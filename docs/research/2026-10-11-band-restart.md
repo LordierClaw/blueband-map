@@ -98,8 +98,27 @@ presented as a fix for Band reboot.
   old-page deletion race (54 passed / 1 failed), then all 56 runtime tests passed.
   The page now retains the decoded image node across publication. Retirement
   waits for DOM removal; a destroyed page cannot delete a successor's reused URI.
-- [ ] Implement and verify scoped changes; review late callbacks/cancellation.
-- [ ] Run `make test`, iOS simulator tests, package verification and `git diff --check`.
+- [x] Implement and verify scoped changes; review late callbacks/cancellation.
+  Run 38076003917 at f974fe3 reproduced rejected arrival/movement remaining
+  active with the wrong terminal state before the delivery fix. The final
+  handler excludes stale owners and cancellation and exports the exact failure
+  reason. Independent review found no remaining Critical/Important issues.
+- [x] Run `make test`, iOS simulator tests, package verification and `git diff --check`.
+  Final code: `f274685b094a04a8b10f30327e67da7627040d34`.
+  [Canonical Linux run](https://github.com/LordierClaw/blueband-map/actions/runs/38076651028)
+  passed 67 Python, 205 portable Swift, 67 Band and 19 protocol-lab tests, plus
+  the repository's shell/metadata/runtime checks and package verification.
+  [iOS run](https://github.com/LordierClaw/blueband-map/actions/runs/38076651043)
+  passed all 122 simulator tests and built/verified the unsigned arm64 IPA.
+  Downloaded ZIP digests matched GitHub; local `make` artifact inspection
+  confirmed iOS 0.5.26 (42) and RPK 0.6.21 (36).
+  Local Windows `make test` hits the existing symlink privilege limitation;
+  the complete test result above comes from canonical Linux CI.
+- [ ] Explain intermittent simulator export failures: run 38076003917 also had
+  missing prepared exports in four other tests. Final run passed these with
+  unchanged deadlines and recorder implementation. Extra failure-only test
+  diagnostics are retained; this is not a claimed storage fix. Existing Swift
+  6 delegate-isolation warnings also remain outside this change.
 - [ ] Hardware acceptance: the same stationary automatic route, periodic samples,
   same-node frame replacements and arrival/export; kernel reboot cause and
   physical pixel latency remain separate unverified observations.
