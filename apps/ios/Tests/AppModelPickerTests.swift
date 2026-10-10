@@ -12,6 +12,45 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testAutomaticRejectedArrivalStopsAndExportsFailureWithoutFinalProbe() async throws {
+        try await assertAutomaticNavigationRejection(status: "arrived")
+    }
+
+    func testAutomaticRejectedMovementStopsAndExportsFailureWithoutFinalProbe() async throws {
+        try await assertAutomaticNavigationRejection(status: "navigating")
+    }
+
+    private func assertAutomaticNavigationRejection(status: String) async throws {
+        let sender = MeasurementProbeSender()
+        await sender.rejectNavigation(status: status)
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, routeTransport: ShortAutomaticRouteTransport(), sender: sender,
+            render: { request in
+                let context = try XCTUnwrap(CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 424 * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: try XCTUnwrap(context.makeImage()), retainedFillLayers: 0, retainedLineLayers: 0,
+                    retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0, snapshotMilliseconds: 0,
+                    cacheState: "cpu-warm", configuration: config)
+            })
+        defer { model.stopNavigation() }
+        model.performanceMapMode = .full
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil({ await sender.navigationUpdates.contains { $0["status"] == .string(status) } }, timeout: .seconds(5))
+        await waitUntil { model.preparedPerformanceTrace != nil }
+        XCTAssertFalse(model.isNavigationRunning)
+        XCTAssertEqual(model.navigationState, .failed("TEST_NAV_DELIVERY_FAILED"))
+        let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace), as: UTF8.self)
+        XCTAssertTrue(text.contains("nav.delivery.failed"))
+        XCTAssertTrue(text.contains("TEST_NAV_DELIVERY_FAILED"))
+        XCTAssertFalse(text.contains("automatic.finished"), "a rejected update cannot become a successful arrival")
+        let requests = await sender.requests.count
+        XCTAssertEqual(requests, 2, "stop locally without probing a peer that rejected navigation")
+    }
+
     func testAutomaticDisconnectPreservesFailureReasonAndExportsWithoutFinalProbe() async throws {
         let sender = MeasurementProbeSender()
         let model = makeModel(central: PickerCentral(), authMode: .missing,
@@ -152,7 +191,7 @@ final class AppModelPickerTests: XCTestCase {
         let resource = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
         let transport = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
         model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report", body: [
-            "request": resource, "rpk": .number(35), "versionName": .string("0.6.20"), "perfVersion": .number(1),
+            "request": resource, "rpk": .number(36), "versionName": .string("0.6.21"), "perfVersion": .number(1),
             "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
         let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
             "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
@@ -264,7 +303,7 @@ final class AppModelPickerTests: XCTestCase {
         let resourceID = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
         let transportID = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
         model.consume(.received(.message(id: "resource-good", source: .band, topic: "diagnostics.report", body: [
-            "request": resourceID, "rpk": .number(35), "versionName": .string("0.6.20"), "perfVersion": .number(1),
+            "request": resourceID, "rpk": .number(36), "versionName": .string("0.6.21"), "perfVersion": .number(1),
             "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
         let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
             "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
@@ -1024,8 +1063,10 @@ private actor MeasurementProbeSender: RouteCardSessionSending {
     private(set) var navigationUpdates: [[String: JSONValue]] = []
     private let renderer = WindowedRouteCardSession()
     private var holdNavigation = false
+    private var rejectedNavigationStatus: String?
     private var navigationWaiter: CheckedContinuation<Void, Never>?
     func holdFirstNavigation() { holdNavigation = true }
+    func rejectNavigation(status: String) { rejectedNavigationStatus = status }
     func releaseNavigation() { holdNavigation = false; navigationWaiter?.resume(); navigationWaiter = nil }
     func setReceiver(_ receiver: @escaping @MainActor @Sendable (ApplicationEnvelope) -> Void) async {
         await renderer.setReceiver(receiver)
@@ -1035,6 +1076,9 @@ private actor MeasurementProbeSender: RouteCardSessionSending {
         if topic == "diagnostics.get" { requests.append(body); return "probe-ack" }
         if topic == "nav.update" {
             navigationUpdates.append(body)
+            if let rejectedNavigationStatus, body["status"] == .string(rejectedNavigationStatus) {
+                throw URLError(.networkConnectionLost)
+            }
             if holdNavigation { await withCheckedContinuation { navigationWaiter = $0 } }
             return "nav-ack"
         }

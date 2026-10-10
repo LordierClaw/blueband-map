@@ -81,6 +81,7 @@ final class AppModel: ObservableObject {
     private var navigationReplay: NavigationReplay?
     private var automaticRunID: UUID?
     private var automaticFinishTask: Task<Void, Never>?
+    private var automaticHealthTask: Task<Void, Never>?
     private var exportOwner = UUID()
     private var probeRPKMatches = false
     private var automaticPreflight = false
@@ -376,7 +377,7 @@ final class AppModel: ObservableObject {
         guard !isNavigationRunning else { return }
         automaticRunID = UUID()
         navigationReplay = NavigationReplay()
-        automaticTestStatus = "Đang kiểm tra RPK 0.6.20 (35)…"
+        automaticTestStatus = "Đang kiểm tra RPK 0.6.21 (36)…"
         locationClient.stopPrewarming()
         locationClient.stop()
         locationNeedsSettings = false
@@ -469,6 +470,7 @@ final class AppModel: ObservableObject {
         performanceTrace.record("navigation.stop.requested", metrics: ["reason": .string(reason)])
         let wasAutomatic = automaticRunID != nil
         automaticFinishTask?.cancel(); automaticFinishTask = nil
+        automaticHealthTask?.cancel(); automaticHealthTask = nil
         automaticPreflight = false
         cancelPerformanceProbe()
         cancelNavigationWork()
@@ -480,7 +482,7 @@ final class AppModel: ObservableObject {
         performanceTrace.end(reason: reason)
         if wasAutomatic {
             automaticTestStatus = "Đã dừng (\(reason)); đang chuẩn bị log…"
-            prepareAutomaticExport()
+            prepareAutomaticExport(reason: reason)
         }
         updateNavigationPrewarming()
     }
@@ -521,7 +523,7 @@ final class AppModel: ObservableObject {
         stopNavigation(reason: code)
         navigationState = .failed(code)
         errorMessage = code == "TEST_RPK_MISMATCH"
-            ? "Band báo \(observedRPK). Test cần RPK 0.6.20 (35); hãy cài đúng file rồi mở lại app Band."
+            ? "Band báo \(observedRPK). Test cần RPK 0.6.21 (36); hãy cài đúng file rồi mở lại app Band."
             : "Test chưa bắt đầu (\(code)). Log đã được giữ để kiểm tra."
     }
 
@@ -561,10 +563,39 @@ final class AppModel: ObservableObject {
         }
         markMeasurementPhase(.startup)
         replay.start()
+        startAutomaticHealthSampling()
+    }
+
+    private func startAutomaticHealthSampling() {
+        guard let owner = automaticRunID else { return }
+        automaticHealthTask?.cancel()
+        automaticHealthTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                guard let self, automaticRunID == owner, automaticFinishTask == nil else { return }
+                // One bounded probe pair at a time, including while route/render
+                // work is suspended. Do not accumulate queued diagnostics.
+                if performanceProbeSession == nil {
+                    performanceTrace.record("automatic.health.sample")
+                    capturePerformanceDiagnostics()
+                }
+            }
+        }
+    }
+
+    private func failAutomaticLink(_ reason: String) {
+        guard automaticRunID != nil else { return }
+        performanceTrace.record("automatic.health.failed", metrics: ["reason": .string(reason)])
+        // The peer is unavailable: stop/export locally without another final
+        // probe. stopNavigation invalidates every owner before late replies.
+        stopNavigation(reason: reason)
+        navigationState = .failed(reason)
+        errorMessage = "Test đã dừng vì mất phản hồi từ Band. Lưu log để kiểm tra."
     }
 
     private func beginAutomaticFinish(reason: String) {
         guard let owner = automaticRunID, automaticFinishTask == nil else { return }
+        automaticHealthTask?.cancel(); automaticHealthTask = nil
         navigationReplay?.stop()
         // Freeze scene producers before draining arrival: an ACK for a retired
         // scene proves receipt only and the Band can legitimately ignore it.
@@ -605,7 +636,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func prepareAutomaticExport() {
+    private func prepareAutomaticExport(reason: String) {
         let owner = exportOwner
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -613,7 +644,7 @@ final class AppModel: ObservableObject {
                 let data = try await performanceTrace.export()
                 guard exportOwner == owner else { return }
                 preparedPerformanceTrace = data
-                automaticTestStatus = "Test đã dừng. Lưu file kết quả để gửi phân tích."
+                automaticTestStatus = "Test đã dừng (\(reason)). Lưu file kết quả để gửi phân tích."
                 preparedTraceID = owner
             } catch {
                 guard exportOwner == owner else { return }
@@ -1446,7 +1477,9 @@ final class AppModel: ObservableObject {
             performanceDiagnosticsStatus = "Thiếu chẩn đoán; giữ trace để kiểm tra"
             performanceTrace.record("measurement.probe.incomplete", expectedSessionID: ownedSession,
                 metrics: ["resourceReceived": .bool(receivedResourceProbe), "transportReceived": .bool(receivedTransportProbe)])
+            let runningAutomaticProbe = automaticRunID != nil && !automaticPreflight && automaticFinishTask == nil
             cancelPerformanceProbe()
+            if runningAutomaticProbe { failAutomaticLink("TEST_BAND_DIAGNOSTICS_TIMEOUT") }
         }
     }
 
@@ -1460,7 +1493,7 @@ final class AppModel: ObservableObject {
 
     private func completePerformanceProbeIfReady() {
         guard receivedResourceProbe && receivedTransportProbe else { return }
-        performanceDiagnosticsStatus = "Đã nhận đủ chẩn đoán; có thể Dừng và export"
+        performanceDiagnosticsStatus = "Đã nhận đủ chẩn đoán Band"
         cancelPerformanceProbe()
     }
 
@@ -1488,7 +1521,7 @@ final class AppModel: ObservableObject {
                 let version: String = { if case let .string(v)? = body["versionName"] { return v }; return "unknown" }()
                 observedRPK = "\(version) (\(Int(build)))"
             }
-            probeRPKMatches = body["rpk"] == .number(35) && body["versionName"] == .string("0.6.20")
+            probeRPKMatches = body["rpk"] == .number(36) && body["versionName"] == .string("0.6.21")
             if automaticPreflight && !probeRPKMatches {
                 rejectAutomaticTest("TEST_RPK_MISMATCH")
                 return
@@ -1762,9 +1795,11 @@ final class AppModel: ObservableObject {
             sessionState = .applicationReady
             updateNavigationPrewarming()
         case .disconnected:
+            performanceTrace.record("band.connection.disconnected")
             rpkState = .locked
             renderCoordinator.disconnected()
-            stopNavigation()
+            if automaticRunID != nil { failAutomaticLink("TEST_BAND_DISCONNECTED") }
+            else { stopNavigation(reason: "band-disconnected") }
             updateNavigationPrewarming()
         case let .sent(envelope): append(envelope, delivery: .sent)
         case let .received(envelope):

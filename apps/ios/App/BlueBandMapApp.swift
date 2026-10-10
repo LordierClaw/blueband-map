@@ -5,7 +5,7 @@ import BlueBandMapCore
 
 enum BlueBandProduct {
     static let displayName = "BlueBandMap"
-    static let version = "0.5.25"
+    static let version = "0.5.26"
     static let bundleIdentifier = "dev.lordierclaw.bluebandmap"
     static let rpkPackage = "dev.lordierclaw.bluebandmap.band"
 }
