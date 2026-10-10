@@ -121,7 +121,9 @@ def check_case(root, case, manifest):
     if summary["diagnostics"]:
         issues.append("trace_integrity")
     for key in GATES[:-1]:
-        if summary[key]["status"] == "INCONCLUSIVE":
+        # Analyzer FAIL takes precedence over incomplete-evidence reasons. Keep
+        # those reasons independently; a complete observed violation has none.
+        if summary[key]["status"] == "INCONCLUSIVE" or summary[key]["reasons"]:
             issues.append("incomplete:" + key)
     for phase in case.get("requiredPhases", []):
         if not summary["phases"].get(phase, {}).get("confirmations"):

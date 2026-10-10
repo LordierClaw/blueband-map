@@ -414,7 +414,7 @@ def context(run, summary):
         if (run / "replay.gpx").exists():
             root = ET.parse(run / "replay.gpx").getroot()
             replay["gpxPoints"] = sum(1 for node in root.iter() if node.tag.split("}")[-1] in ("trkpt", "rtept"))
-    except (OSError, ValueError, UnicodeError, ET.ParseError) as error:
+    except (OSError, ValueError, UnicodeError, ET.ParseError, csv.Error) as error:
         summary["diagnostics"].append({"code": "replay_unreadable", "message": str(error)})
     summary["replay"] = replay
     if len(summary["diagnostics"]) > previous_diagnostics:

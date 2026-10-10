@@ -177,6 +177,29 @@ class PacketTest(unittest.TestCase):
         first = next(i for i, line in enumerate(text.splitlines()) if line.startswith("| `walk-01`"))
         self.assertTrue(text.splitlines()[first + 1].startswith("| `cold-01`"))
 
+    def test_observed_failure_cannot_hide_missing_resource_evidence(self):
+        telemetry = next(row for row in self.rows if row["event"] == "band.telemetry")["metrics"]
+        telemetry["files"] = 32
+        self.write_case(self.rows)
+        self.assertEqual(self.invoke()["status"], "READY_FOR_ANALYSIS", "complete resource violations remain useful evidence")
+        del telemetry["nodes"]
+        self.write_case(self.rows)
+        result = self.invoke()
+        self.assertEqual(result["cases"][0]["gates"]["resourceGate"]["status"], "FAIL")
+        self.assertEqual(result["status"], "NEEDS_ATTENTION", "FAIL must not conceal missing evidence")
+        self.assertIn("incomplete:resourceGate", result["cases"][0]["issues"])
+
+    def test_oversized_replay_field_does_not_abort_other_cases(self):
+        (self.root / "walk-01/replay.csv").write_text("lat,lon\n" + "1" * 131073 + ",2\n", encoding="utf-8")
+        other = json.loads(json.dumps(self.rows))
+        other[0]["metrics"]["testCaseID"] = "other-01"
+        self.write_case(other, name="other-01")
+        self.manifest["cases"].append({"id": "other-01", "directory": "other-01", "mapMode": "automatic"})
+        result = self.invoke()
+        self.assertEqual(result["status"], "NEEDS_ATTENTION")
+        self.assertIn("trace_integrity", result["cases"][0]["issues"])
+        self.assertEqual(result["cases"][1]["status"], "READY_FOR_ANALYSIS")
+
 
 if __name__ == "__main__":
     unittest.main()
