@@ -63,6 +63,44 @@ final class CorridorLinkTests: XCTestCase {
         XCTAssertFalse(link.ready, "timeout must force a new epoch before retry")
     }
 
+    func testAdvertisedLargeChunksCarryMoreBytesPerAcknowledgedMessage() async throws {
+        let peer = CorridorPeer()
+        peer.advertisedChunkBytes = 540
+        let link = CorridorLink(timeout: .milliseconds(30)) { try await peer.send($0, $1) }
+        peer.receive = link.consume
+        _ = await link.open(scene: "scene-1")
+        let cell = try XCTUnwrap(CorridorViewport(x: 0, y: 0).visibleCells.first)
+        let data = Data((0..<2_000).map { UInt8(truncatingIfNeeded: $0 &* 37) })
+        let stored = await link.sendCell(cell, data: data)
+        XCTAssertTrue(stored)
+        let begin = try XCTUnwrap(peer.messages.first { $0.topic == "map.cell.begin" })
+        XCTAssertEqual(begin.body["chunk"], .number(540), "the Band must know the declared chunk size")
+        let chunks = peer.messages.filter { $0.topic == "map.cell.chunk" }
+        XCTAssertEqual(chunks.count, 4, "2,000 bytes need 4 chunks instead of 10")
+        var restored = Data()
+        for chunk in chunks.sorted(by: { number($0.body, "offset") < number($1.body, "offset") }) {
+            guard case let .string(encoded)? = chunk.body["data"] else { return XCTFail("missing bytes") }
+            restored.append(try XCTUnwrap(Data(base64Encoded: encoded)))
+            // Worst-case 32-byte command ID; the full-frame planner uses the same 940-byte hardware bound.
+            XCTAssertLessThanOrEqual(try ApplicationEnvelope.message(id: String(repeating: "x", count: 32), source: .ios,
+                topic: chunk.topic, body: chunk.body).encoded().count, 940)
+        }
+        XCTAssertEqual(restored, data)
+    }
+
+    func testUnknownAdvertisedChunkSizeKeepsTheOriginalContract() async throws {
+        let peer = CorridorPeer()
+        peer.advertisedChunkBytes = 4_096
+        let link = CorridorLink(timeout: .milliseconds(30)) { try await peer.send($0, $1) }
+        peer.receive = link.consume
+        _ = await link.open(scene: "scene-1")
+        let cell = try XCTUnwrap(CorridorViewport(x: 0, y: 0).visibleCells.first)
+        let stored = await link.sendCell(cell, data: Data(repeating: 7, count: 1_000))
+        XCTAssertTrue(stored)
+        XCTAssertNil(peer.messages.first { $0.topic == "map.cell.begin" }?.body["chunk"])
+        XCTAssertEqual(peer.messages.filter { $0.topic == "map.cell.chunk" }.count, 5)
+    }
+
     func testOnlyConfirmedViewMovesDisplayedCameraAndOldEpochCannotAffectNewScene() async throws {
         let peer = CorridorPeer()
         let link = CorridorLink(timeout: .milliseconds(30)) { try await peer.send($0, $1) }
@@ -156,13 +194,16 @@ private final class CorridorPeer {
     var correlate = true
     var busyBegins = 0
     var holdChunks = false
+    var advertisedChunkBytes: Double?
     var held: [CheckedContinuation<Void, Never>] = []
     func send(_ topic: String, _ body: [String: JSONValue]) async throws -> String {
         messages.append((topic, body))
         let id = "cmd-\(messages.count)"
         if topic == "map.stream.open" {
-            reply(topic: "map.stream.ready", body: ["epoch": body["epoch"]!, "scene": body["scene"]!,
-                "version": .number(1), "cellSize": .number(128), "maximumFiles": .number(30), "maximumResident": .number(24)])
+            var ready: [String: JSONValue] = ["epoch": body["epoch"]!, "scene": body["scene"]!,
+                "version": .number(1), "cellSize": .number(128), "maximumFiles": .number(30), "maximumResident": .number(24)]
+            if let advertisedChunkBytes { ready["cellChunkBytes"] = .number(advertisedChunkBytes) }
+            reply(topic: "map.stream.ready", body: ready)
         } else if topic == "map.cell.begin" {
             let busy = busyBegins > 0
             if busy { busyBegins -= 1 }

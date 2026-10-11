@@ -219,7 +219,8 @@ test("corridor streaming requires a confirmed scene and resets on full-map repla
     page.receiveMessage({ data: envelope("stream-open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
     const ready = sent.find(message => message.topic === "map.stream.ready")
     assert.ok(ready, "application capability reply is required; unknown-topic ACK is insufficient")
-    assert.deepEqual(ready.body, { scene: SCENE, epoch: "e1", version: 1, cellSize: 128, maximumFiles: 30, maximumResident: 24 })
+    assert.deepEqual(ready.body, { scene: SCENE, epoch: "e1", version: 1, cellSize: 128, maximumFiles: 30, maximumResident: 24,
+      cellChunkBytes: 540 })
     assert.equal(page.streamVisible, false, "opening cannot hide the confirmed full map")
     page.receiveMessage({ data: envelope("stream-view", "map.stream.view", { epoch: "e1", seq: 1, x: 0, y: 0 }) })
     const need = sent.find(message => message.topic === "map.stream.state")
@@ -231,16 +232,46 @@ test("corridor streaming requires a confirmed scene and resets on full-map repla
   } finally { page.onDestroy() }
 })
 
-function streamCell(page, key, suffix = key, data = CELL_PNG, epoch = "e1") {
+function streamCell(page, key, suffix = key, data = CELL_PNG, epoch = "e1", chunk = 216) {
   const digest = createHash("sha256").update(data).digest("hex")
-  page.receiveMessage({ data: envelope(`cb-${suffix}`, "map.cell.begin", { epoch, cell: key, bytes: data.length, sha256: digest }) })
-  const offsets = Array.from({ length: Math.ceil(data.length / 216) }, (_, i) => i * 216)
+  const begin = { epoch, cell: key, bytes: data.length, sha256: digest }
+  if (chunk !== 216) begin.chunk = chunk
+  page.receiveMessage({ data: envelope(`cb-${suffix}`, "map.cell.begin", begin) })
+  const offsets = Array.from({ length: Math.ceil(data.length / chunk) }, (_, i) => i * chunk)
   if (offsets.length > 1) [offsets[0], offsets[1]] = [offsets[1], offsets[0]]
   for (const offset of offsets) page.receiveMessage({ data: envelope(`cc-${suffix}-${offset}`, "map.cell.chunk", {
-    epoch, cell: key, offset, data: data.subarray(offset, offset + 216).toString("base64")
+    epoch, cell: key, offset, data: data.subarray(offset, offset + chunk).toString("base64")
   }) })
   page.receiveMessage({ data: envelope(`ce-${suffix}`, "map.cell.end", { epoch, cell: key }) })
 }
+
+test("cells accept the advertised 540-byte chunk only when begin declares it", async () => {
+  const { page, sent } = await harness()
+  try {
+    publish(page)
+    page.receiveMessage({ data: envelope("open", "map.stream.open", { scene: SCENE, epoch: "e1", version: 1 }) })
+    const [first, second, third] = corridorMap.cells(0, 0)
+    assert.ok(CELL_PNG.length > 540, "fixture must span more than one large chunk")
+    streamCell(page, first, "large", CELL_PNG, "e1", 540)
+    const stored = sent.filter(m => m.topic === "map.cell.result" && m.body.cell === first).at(-1)
+    assert.equal(stored.body.status, "stored", "two out-of-order 540-byte chunks complete the cell")
+    streamCell(page, second, "legacy")
+    assert.equal(sent.filter(m => m.topic === "map.cell.result" && m.body.cell === second).at(-1).body.status, "stored",
+      "a begin without chunk keeps the 216-byte contract for older iPhone builds")
+    const digest = createHash("sha256").update(CELL_PNG).digest("hex")
+    page.receiveMessage({ data: envelope("cb-odd", "map.cell.begin", { epoch: "e1", cell: third, bytes: CELL_PNG.length,
+      sha256: digest, chunk: 300 }) })
+    const rejected = sent.filter(m => m.topic === "map.cell.result" && m.body.cell === third).at(-1)
+    assert.equal(rejected.body.status, "error")
+    assert.equal(rejected.body.code, "invalidPayload")
+    page.receiveMessage({ data: envelope("cb-mixed", "map.cell.begin", { epoch: "e1", cell: third, bytes: CELL_PNG.length,
+      sha256: digest, chunk: 540 }) })
+    page.receiveMessage({ data: envelope("cc-mixed", "map.cell.chunk", { epoch: "e1", cell: third, offset: 0,
+      data: CELL_PNG.subarray(0, 216).toString("base64") }) })
+    assert.equal(sent.filter(m => m.topic === "map.cell.result" && m.body.cell === third).at(-1).body.code, "invalidChunk",
+      "a chunk shorter than the declared size is rejected")
+  } finally { page.onDestroy() }
+})
 
 test("repeated native completions cannot refresh their own image list or flood decoded replies", async () => {
   const { page, sent } = await harness()

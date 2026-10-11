@@ -25,6 +25,12 @@ public final class CorridorLink {
     private var hashes: [String: String] = [:]
     private var decodedHash: String?
     private var expectedHash: String?
+    /// Raw cell bytes per `map.cell.chunk`. 216 is the original contract; a Band that
+    /// advertises `cellChunkBytes: 540` accepts ~2.5x more payload per acknowledged
+    /// message (envelope stays under the 940-byte full-frame hardware bound).
+    public static let legacyChunkBytes = 216
+    public static let largeChunkBytes = 540
+    private var chunkBytes = CorridorLink.legacyChunkBytes
 
     public var diagnostic: String {
         let mode = !ready ? "full" : displayedSequence < 0 ? "loading" : "tiles"
@@ -42,6 +48,7 @@ public final class CorridorLink {
         cachedCells.removeAll(); hashes.removeAll(); views.removeAll()
         displayedViewport = nil; displayedFixTimestamp = nil; displayedSequence = -1; sequence = 0
         cellInFlight = nil; cellReply = nil; decodedHash = nil; expectedHash = nil
+        chunkBytes = Self.legacyChunkBytes
     }
 
     public func close() async {
@@ -76,6 +83,8 @@ public final class CorridorLink {
             var begin = identity
             begin["bytes"] = .number(Double(data.count))
             begin["sha256"] = .string(hash)
+            let chunkBytes = self.chunkBytes
+            if chunkBytes != Self.legacyChunkBytes { begin["chunk"] = .number(Double(chunkBytes)) }
             let deadline = ContinuousClock.now.advanced(by: timeout)
             while true {
                 cellReply = nil
@@ -93,7 +102,7 @@ public final class CorridorLink {
                 hashes[cell.key] = hash
                 return checkCacheBound()
             }
-            let offsets = Array(stride(from: 0, to: data.count, by: 216)), send = self.send
+            let offsets = Array(stride(from: 0, to: data.count, by: chunkBytes)), send = self.send
             for start in stride(from: 0, to: offsets.count, by: 4) {
                 try Task.checkCancellation()
                 guard epoch == owned, ready else { return false }
@@ -101,7 +110,7 @@ public final class CorridorLink {
                     for offset in offsets[start..<min(start + 4, offsets.count)] {
                         var chunk = identity
                         chunk["offset"] = .number(Double(offset))
-                        chunk["data"] = .string(data.subdata(in: offset..<min(offset + 216, data.count)).base64EncodedString())
+                        chunk["data"] = .string(data.subdata(in: offset..<min(offset + chunkBytes, data.count)).base64EncodedString())
                         let body = chunk
                         group.addTask { _ = try await send("map.cell.chunk", body) }
                     }
@@ -158,6 +167,7 @@ public final class CorridorLink {
             guard body["scene"] == .string(scene), body["version"] == .number(1),
                   body["cellSize"] == .number(128), body["maximumFiles"] == .number(30),
                   body["maximumResident"] == .number(24), failure == nil else { return }
+            chunkBytes = body["cellChunkBytes"] == .number(Double(Self.largeChunkBytes)) ? Self.largeChunkBytes : Self.legacyChunkBytes
             ready = true
         case "map.cell.result":
             guard ready, body["cell"] == cellInFlight.map(JSONValue.string),

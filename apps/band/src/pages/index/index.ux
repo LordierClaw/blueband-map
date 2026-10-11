@@ -1137,7 +1137,10 @@ export default {
         reject("busy", false)
         return
       }
-      if (!this.validInteger(body.bytes) || body.bytes < 33 || body.bytes > 8192 || !renderProtocol.validSHA256(body.sha256)) {
+      // Older iPhone builds omit `chunk` and keep the original 216-byte contract.
+      var chunk = body.chunk === undefined ? 216 : body.chunk
+      if (!this.validInteger(body.bytes) || body.bytes < 33 || body.bytes > 8192 || !renderProtocol.validSHA256(body.sha256) ||
+        (chunk !== 216 && chunk !== 540)) {
         reject("invalidPayload", false)
         return
       }
@@ -1146,7 +1149,7 @@ export default {
         finish()
         return
       }
-      this.streamTransfer = { epoch: body.epoch, cell: body.cell, bytes: body.bytes, sha256: body.sha256,
+      this.streamTransfer = { epoch: body.epoch, cell: body.cell, bytes: body.bytes, sha256: body.sha256, chunk: chunk,
         buffer: new Uint8Array(body.bytes), offsets: [], received: 0, uri: "" }
       this.cellResult(body.epoch, body.cell, "accepted", "ok", [], message.id)
       finish()
@@ -1158,15 +1161,16 @@ export default {
     }
     if (message.topic === "map.cell.chunk") {
       var bytes = this.decodeBase64(body.data), offset = body.offset
-      if (!bytes || !this.validInteger(offset) || offset < 0 || offset % 216 !== 0 ||
-        offset >= transfer.bytes || offset > transfer.received + 648 ||
-        bytes.length !== Math.min(216, transfer.bytes - offset) || transfer.offsets.indexOf(offset) >= 0) {
+      var size = transfer.chunk
+      if (!bytes || !this.validInteger(offset) || offset < 0 || offset % size !== 0 ||
+        offset >= transfer.bytes || offset > transfer.received + 3 * size ||
+        bytes.length !== Math.min(size, transfer.bytes - offset) || transfer.offsets.indexOf(offset) >= 0) {
         reject("invalidChunk", true)
         return
       }
       transfer.buffer.set(bytes, offset)
       transfer.offsets.push(offset)
-      while (transfer.offsets.indexOf(transfer.received) >= 0) transfer.received += Math.min(216, transfer.bytes - transfer.received)
+      while (transfer.offsets.indexOf(transfer.received) >= 0) transfer.received += Math.min(size, transfer.bytes - transfer.received)
       finish()
       return
     }
@@ -1243,7 +1247,8 @@ export default {
       }
       this.sendStreamEnvelope("map.stream.ready", {
         scene: body.scene, epoch: body.epoch, version: 1, cellSize: corridorMap.cellSize,
-        maximumFiles: corridorMap.maximumFiles, maximumResident: corridorMap.maximumResident
+        maximumFiles: corridorMap.maximumFiles, maximumResident: corridorMap.maximumResident,
+        cellChunkBytes: 540
       })
     } else if (this.streamState && body.epoch === this.streamState.epoch) {
       if (message.topic === "map.stream.view") {

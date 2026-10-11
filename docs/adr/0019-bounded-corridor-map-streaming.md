@@ -77,3 +77,11 @@ Automated: negative cell coordinates, exact edges, continuous multi-cell route p
 Hardware: correct clipping and native release of detached image nodes, bounded RAM/file count on a long journey, current-version roundabout icon on the frozen route, map/route/cursor/destination alignment near turns, notifications and Band blur/resume, locked-iPhone GPS, GPS-to-visible offset latency and frame gaps. Target approximately one second for cached-cell movement; full-frame recovery and cold-cache loading must be measured separately. Do not assert success from compilation or simulator callbacks.
 
 Vela documents image list rendering and 2D transforms, but does not support CSS transition on transform. Do not assume browser animation or memory behavior: [list rendering](https://iot.mi.com/vela/quickapp/en/guide/start/user-interface.html), [animation restrictions](https://iot.mi.com/vela/quickapp/en/components/general/animation-style.html).
+
+## Amendment 2026-10-11: negotiated 540-byte cell chunks
+
+The latency trace measured a median application ACK of about 717 ms per message while full-frame chunks already carried roughly 550 raw bytes per message on hardware. Cells used only 216, so a cell needed about 2.5 times more acknowledged round trips than the same bytes as a full frame.
+
+`map.stream.ready` now also carries `cellChunkBytes: 540`. Only when that exact value is present does iOS add `chunk: 540` to `map.cell.begin` and split the cell in 540-byte chunks; the Band accepts `chunk` 216 or 540 and rejects any other value as `invalidPayload`. A begin without `chunk` keeps 216, and an iPhone that sees no `cellChunkBytes` keeps 216, so a mismatched pair still interoperates. The look-ahead bound stays three chunks (`offset <= received + 3 × chunk`). With a 32-byte command ID, a negative cell key and an 8,100 offset, the chunk envelope is 902 bytes, under the 940-byte bound the full-frame planner already uses on hardware. Xiaomi framing, crypto and the window of four are unchanged.
+
+Hardware acceptance: with the matched pair, the automatic full-flow test must show `map.cell.chunk` ACKs at least as reliable as before and fewer chunk messages per stored cell; do not claim a latency gain from deterministic tests alone.
