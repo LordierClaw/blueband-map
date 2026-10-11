@@ -13,14 +13,33 @@ final class URLSessionHTTPTransport: MapHTTPTransport, @unchecked Sendable {
 
     private let timeout: TimeInterval
     private let protocolClasses: [AnyClass]?
+    private let router: SessionTaskRouter
+    private let session: URLSession
 
+    /// One long-lived ephemeral session per transport: concurrent tile requests share
+    /// keep-alive/HTTP/2 connections instead of paying DNS+TCP+TLS on every request.
     init(timeout: TimeInterval = 15, protocolClasses: [AnyClass]? = nil) {
         precondition(timeout.isFinite && timeout > 0)
         self.timeout = timeout
         self.protocolClasses = protocolClasses
+        let router = SessionTaskRouter()
+        let delegateQueue = OperationQueue()
+        delegateQueue.maxConcurrentOperationCount = 1
+        self.router = router
+        session = URLSession(
+            configuration: Self.configuration(timeout: timeout, protocolClasses: protocolClasses),
+            delegate: router,
+            delegateQueue: delegateQueue
+        )
     }
 
+    deinit { session.invalidateAndCancel() }
+
     func makeConfiguration() -> URLSessionConfiguration {
+        Self.configuration(timeout: timeout, protocolClasses: protocolClasses)
+    }
+
+    private static func configuration(timeout: TimeInterval, protocolClasses: [AnyClass]?) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.urlCache = nil
@@ -46,15 +65,70 @@ final class URLSessionHTTPTransport: MapHTTPTransport, @unchecked Sendable {
         }
 
         let delegate = StreamingRequestDelegate(maximumBodyBytes: request.maximumResponseBytes)
-        let delegateQueue = OperationQueue()
-        delegateQueue.maxConcurrentOperationCount = 1
-        let session = URLSession(
-            configuration: makeConfiguration(),
-            delegate: delegate,
-            delegateQueue: delegateQueue
-        )
-        defer { session.invalidateAndCancel() }
-        return try await delegate.execute(urlRequest, in: session)
+        return try await delegate.execute(urlRequest, in: session, router: router)
+    }
+
+    var activeTaskCountForTesting: Int { router.count }
+}
+
+/// Session-level delegate that forwards each task's callbacks to its own request state.
+private final class SessionTaskRouter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var handlers: [Int: StreamingRequestDelegate] = [:]
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return handlers.count
+    }
+
+    func register(_ handler: StreamingRequestDelegate, for task: URLSessionTask) {
+        lock.lock()
+        handlers[task.taskIdentifier] = handler
+        lock.unlock()
+    }
+
+    private func handler(for task: URLSessionTask, removing: Bool = false) -> StreamingRequestDelegate? {
+        lock.lock()
+        defer { lock.unlock() }
+        return removing ? handlers.removeValue(forKey: task.taskIdentifier) : handlers[task.taskIdentifier]
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let handler = handler(for: task) else {
+            completionHandler(nil)
+            task.cancel()
+            return
+        }
+        handler.urlSession(session, task: task, willPerformHTTPRedirection: response,
+                           newRequest: request, completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let handler = handler(for: dataTask) else {
+            completionHandler(.cancel)
+            return
+        }
+        handler.urlSession(session, dataTask: dataTask, didReceive: response, completionHandler: completionHandler)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        handler(for: dataTask)?.urlSession(session, dataTask: dataTask, didReceive: data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Swift.Error?) {
+        handler(for: task, removing: true)?.urlSession(session, task: task, didCompleteWithError: error)
     }
 }
 
@@ -73,7 +147,7 @@ private final class StreamingRequestDelegate: NSObject, URLSessionDataDelegate, 
         body.reserveCapacity(maximumBodyBytes)
     }
 
-    func execute(_ request: URLRequest, in session: URLSession) async throws -> MapHTTPResponse {
+    func execute(_ request: URLRequest, in session: URLSession, router: SessionTaskRouter) async throws -> MapHTTPResponse {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 lock.lock()
@@ -86,6 +160,8 @@ private final class StreamingRequestDelegate: NSObject, URLSessionDataDelegate, 
                 let task = session.dataTask(with: request)
                 self.task = task
                 lock.unlock()
+                // Register before resume so the shared router never sees an unknown task.
+                router.register(self, for: task)
                 task.resume()
             }
         } onCancel: { [weak self] in

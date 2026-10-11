@@ -139,6 +139,62 @@ final class URLSessionHTTPTransportTests: XCTestCase {
         }
     }
 
+    func testConcurrentRequestsOnOneSessionReceiveTheirOwnBodies() async throws {
+        TestURLProtocol.handler = { protocolInstance in
+            let path = protocolInstance.request.url!.lastPathComponent
+            protocolInstance.respond(status: 200, headers: ["Content-Type": "application/x-protobuf"])
+            protocolInstance.load(Data(path.utf8))
+            protocolInstance.load(Data("|end".utf8))
+            protocolInstance.finish()
+        }
+        let transport = URLSessionHTTPTransport(protocolClasses: [TestURLProtocol.self])
+        let bodies = try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+            for index in 0..<12 {
+                group.addTask {
+                    let response = try await transport.execute(MapHTTPRequest(
+                        method: "GET", url: URL(string: "https://maps.example/tile/\(index)")!, headers: [:], body: Data()))
+                    return (index, response.body)
+                }
+            }
+            var collected: [Int: Data] = [:]
+            for try await (index, body) in group { collected[index] = body }
+            return collected
+        }
+        for index in 0..<12 { XCTAssertEqual(bodies[index], Data("\(index)|end".utf8)) }
+        XCTAssertEqual(transport.activeTaskCountForTesting, 0, "completed tasks must leave the shared router")
+    }
+
+    func testRejectedAndCancelledRequestsDoNotPoisonTheSharedSession() async throws {
+        let transport = URLSessionHTTPTransport(protocolClasses: [TestURLProtocol.self])
+        TestURLProtocol.handler = { protocolInstance in
+            protocolInstance.respond(status: 200, headers: ["Content-Length": String(256 * 1_024 + 1)])
+            protocolInstance.finish()
+        }
+        do {
+            _ = try await transport.execute(request())
+            XCTFail("Expected size rejection")
+        } catch {
+            XCTAssertEqual(error as? URLSessionHTTPTransport.Error, .responseTooLarge)
+        }
+        TestURLProtocol.handler = { _ in }
+        let stalled = Task { try await transport.execute(self.request()) }
+        try await Task.sleep(for: .milliseconds(50))
+        stalled.cancel()
+        do {
+            _ = try await stalled.value
+            XCTFail("Expected cancellation")
+        } catch {}
+        TestURLProtocol.handler = { protocolInstance in
+            protocolInstance.respond(status: 200, headers: [:])
+            protocolInstance.load(Data([9]))
+            protocolInstance.finish()
+        }
+        let response = try await transport.execute(request())
+        XCTAssertEqual(response.body, Data([9]))
+        for _ in 0..<100 where transport.activeTaskCountForTesting > 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(transport.activeTaskCountForTesting, 0)
+    }
+
     private func request() -> MapHTTPRequest {
         MapHTTPRequest(
             method: "GET",
