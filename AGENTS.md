@@ -7,3 +7,5 @@
 - Add a failing behavioral test before implementation changes.
 - Preserve verified Xiaomi bytes. A wire change requires exact independent vectors, an ADR, and identified hardware acceptance cases.
 - Do not claim hardware support from compilation, simulator, or deterministic tests alone.
+- Prefer direct development without subagents unless the user explicitly requests delegation.
+- Keep verification focused: run relevant behavioral checks during development, then the required canonical suite at the handoff checkpoint. Avoid duplicate CI suites and repeated full builds for the same unchanged code; do not remove meaningful failure coverage merely to reduce runtime.

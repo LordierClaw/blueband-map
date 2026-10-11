@@ -3,11 +3,53 @@ import Foundation
 import ImageIO
 import XCTest
 import BlueBandMapCore
+import BlueBandProtocol
 @testable import BlueBandMap
 
 @MainActor
 final class VietmapSnapshotRendererTests: XCTestCase {
     private struct Layer: Decodable { let id: String; let type: String }
+
+    func testLatencyStyleFetchSurvivesCancelledCameraAndIsSharedWithSuccessor() async throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106)
+        let forward = GeoPoint(latitude: 10.001, longitude: 106)
+        let request = VietmapSnapshotRequest(route: RoutePlan(points: [origin, forward], instructions: [], distanceMeters: 111),
+            matchedPosition: origin, overlayGeometry: .init(subdued: [], traveled: [], active: [], context: []),
+            headingDegrees: 0, nextManeuver: forward, tileMapKey: "fixture-key")
+        let transport = LatencyStyleTransport()
+        let renderer = VietmapCPURenderer(transport: transport)
+        let first = Task { try await renderer.render(request) }
+        while await transport.styleCalls == 0 { await Task.yield() }
+        first.cancel()
+        let successor = Task { try await renderer.render(request) }
+        // Both actor calls get a chance to reach the held network boundary.
+        try await Task.sleep(for: .milliseconds(40))
+        await transport.release()
+        _ = await first.result
+        let image = try await successor.value
+        XCTAssertEqual(image.image.width, 424)
+        let calls = await transport.styleCalls
+        XCTAssertEqual(calls, 1, "a cancelled camera must not cause a second style request")
+        _ = try await renderer.render(request)
+        let cachedCalls = await transport.styleCalls
+        XCTAssertEqual(cachedCalls, 1)
+    }
+
+    func testLatencyProviderFailureIdentifiesStageAndSafeErrorCode() async throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106), end = GeoPoint(latitude: 10.001, longitude: 106)
+        let request = VietmapSnapshotRequest(route: RoutePlan(points: [origin, end], instructions: [], distanceMeters: 111),
+            matchedPosition: origin, overlayGeometry: .init(subdued: [], traveled: [], active: [], context: []),
+            headingDegrees: 0, nextManeuver: end, tileMapKey: "never-log-fixture-key")
+        let renderer = VietmapCPURenderer(transport: LatencyStyleTransport(fail: true))
+        let events = LatencyProviderEvents()
+        await renderer.setPerformanceObserver { { event, metrics in events.append(event, metrics) } }
+        do { _ = try await renderer.render(request); XCTFail("expected timeout") }
+        catch { XCTAssertEqual((error as NSError).code, URLError.timedOut.rawValue) }
+        let failure = events.snapshot().first { $0.0 == "provider.failure" }?.1
+        XCTAssertEqual(failure?["stage"], .string("style"))
+        XCTAssertEqual(failure?["code"], .number(-1001))
+        XCTAssertFalse(String(describing: events.snapshot()).contains("never-log-fixture-key"))
+    }
 
     func testCellKeepsBasePixelsAndUsesTheSharedRotatedPlane() throws {
         let origin = GeoPoint(latitude: 10, longitude: 106), forward = GeoPoint(latitude: 10.001, longitude: 106.001)
@@ -483,6 +525,31 @@ final class VietmapSnapshotRendererTests: XCTestCase {
             x: (point.longitude + 180) / 360 * worldSize,
             y: (1 - log(tan(latitude) + 1 / cos(latitude)) / .pi) / 2 * worldSize
         )
+    }
+}
+
+private final class LatencyProviderEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [(String, [String: JSONValue])] = []
+    func append(_ event: String, _ metrics: [String: JSONValue]) { lock.lock(); defer { lock.unlock() }; values.append((event, metrics)) }
+    func snapshot() -> [(String, [String: JSONValue])] { lock.lock(); defer { lock.unlock() }; return values }
+}
+
+private actor LatencyStyleTransport: MapHTTPTransport {
+    private(set) var styleCalls = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var released = false
+    private let fail: Bool
+    private let source = CPUMapTestTransport()
+    init(fail: Bool = false) { self.fail = fail }
+    func release() { released = true; let all = waiting; waiting.removeAll(); all.forEach { $0.resume() } }
+    func execute(_ request: MapHTTPRequest) async throws -> MapHTTPResponse {
+        if request.url.path.hasSuffix("style.json") {
+            styleCalls += 1
+            if fail { throw URLError(.timedOut) }
+            if !released { await withCheckedContinuation { waiting.append($0) } }
+        }
+        return try await source.execute(request)
     }
 }
 

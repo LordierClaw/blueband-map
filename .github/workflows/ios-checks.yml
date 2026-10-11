@@ -6,6 +6,12 @@ on:
   pull_request:
     paths: ['apps/ios/**', 'packages/BlueBandKit/**', '.github/workflows/ios-checks.yml', 'scripts/verify-ios-artifact.sh']
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Full verification and IPA, or focused latency regressions without packaging
+        type: choice
+        options: [full, latency]
+        default: full
 
 permissions:
   contents: read
@@ -34,9 +40,11 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
       - name: Test on an available iPhone simulator
+        env:
+          TEST_SCOPE: ${{ inputs.scope || 'full' }}
         run: |
           device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for devices in data["devices"].values() for d in devices if d["isAvailable"] and d["name"].startswith("iPhone")))')
-          xcodebuild -project apps/ios/BlueBandMap.xcodeproj -scheme BlueBandMap -configuration Debug -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/BlueBandMap-tests.xcresult" CODE_SIGNING_ALLOWED=NO test
+          make test-ios DEVICE="$device" RESULT_BUNDLE="$RUNNER_TEMP/BlueBandMap-tests.xcresult" TEST_SCOPE="$TEST_SCOPE"
       - name: Export rendered test images
         if: always()
         run: xcrun xcresulttool export attachments --path "$RUNNER_TEMP/BlueBandMap-tests.xcresult" --output-path "$RUNNER_TEMP/map-visuals"
@@ -47,6 +55,7 @@ jobs:
           name: blueband-map-visuals-${{ github.sha }}
           path: ${{ runner.temp }}/map-visuals
       - name: Build and inspect unsigned arm64 device app
+        if: inputs.scope != 'latency'
         run: |
           xcodebuild -project apps/ios/BlueBandMap.xcodeproj -scheme BlueBandMap -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
           app="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/BlueBandMap.app"
@@ -56,6 +65,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/Payload" "$RUNNER_TEMP/BlueBandMap-unsigned.ipa"
           shasum -a 256 "$RUNNER_TEMP/BlueBandMap-unsigned.ipa" > "$RUNNER_TEMP/BlueBandMap-unsigned.ipa.sha256"
       - name: Upload unsigned IPA
+        if: inputs.scope != 'latency'
         uses: actions/upload-artifact@v4
         with:
           name: blueband-map-ios-${{ github.sha }}

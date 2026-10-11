@@ -12,6 +12,31 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testLatencyQueuedArrivalDoesNotWaitAnotherSecondAfterDelayedACK() async throws {
+        let sender = MeasurementProbeSender()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, routeTransport: ShortAutomaticRouteTransport(), sender: sender,
+            render: { request in
+                let context = try XCTUnwrap(CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 1696, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: try XCTUnwrap(context.makeImage()), retainedFillLayers: 0,
+                    retainedLineLayers: 0, retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0,
+                    snapshotMilliseconds: 0, cacheState: "cpu-warm", configuration: config)
+            })
+        defer { model.stopNavigation(); Task { await sender.releaseNavigation() } }
+        model.performanceMapMode = .full
+        await sender.holdFirstNavigation()
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.consume(.connected); model.startAutomaticNavigationTest()
+        await waitUntil { await sender.requests.count == 2 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil({ model.navigationState == .arrived }, timeout: .seconds(4))
+        await sender.releaseNavigation()
+        await waitUntil({ await sender.navigationUpdates.contains { $0["status"] == .string("arrived") } },
+            timeout: .milliseconds(500))
+    }
+
     func testAutomaticRejectedArrivalStopsAndExportsFailureWithoutFinalProbe() async throws {
         try await assertAutomaticNavigationRejection(status: "arrived")
     }

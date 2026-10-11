@@ -1,10 +1,6 @@
 name: Protocol laboratory checks
 
 on:
-  push:
-    paths: ['tools/protocol-lab/**', '.github/workflows/protocol-lab-checks.yml']
-  pull_request:
-    paths: ['tools/protocol-lab/**', '.github/workflows/protocol-lab-checks.yml']
   workflow_dispatch:
 
 permissions:

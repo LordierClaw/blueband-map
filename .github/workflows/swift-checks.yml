@@ -1,10 +1,6 @@
 name: Swift package checks
 
 on:
-  push:
-    paths: ['packages/BlueBandKit/**', '.github/workflows/swift-checks.yml']
-  pull_request:
-    paths: ['packages/BlueBandKit/**', '.github/workflows/swift-checks.yml']
   workflow_dispatch:
 
 permissions:

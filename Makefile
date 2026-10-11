@@ -1,5 +1,10 @@
 .DEFAULT_GOAL := help
 PYTHON ?= python3
+TEST_SCOPE ?= full
+
+.PHONY: test-ios
+test-ios:
+	@bash tools/ios/test-app.sh "$(DEVICE)" "$(RESULT_BUNDLE)" "$(TEST_SCOPE)"
 
 .PHONY: help doctor bootstrap test test-swift test-rpk test-lab test-ios-metadata test-vietmap-smoke vietmap-smoke-route vietmap-smoke-style test-handoff lint clean
 

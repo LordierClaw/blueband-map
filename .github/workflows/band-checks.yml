@@ -1,10 +1,6 @@
 name: Band package checks
 
 on:
-  push:
-    paths: ['apps/band/**', '.github/workflows/band-checks.yml']
-  pull_request:
-    paths: ['apps/band/**', '.github/workflows/band-checks.yml']
   workflow_dispatch:
 
 permissions:

@@ -5,6 +5,31 @@ import XCTest
 
 @MainActor
 final class NavigationReplayTests: XCTestCase {
+    func testLatencyFullFlowHasMovementZoomDrainAndBoundedAutomaticCompletion() async throws {
+        let clock = ReplayClock()
+        let replay = NavigationReplay(now: { clock.time }, date: { clock.date }, sleep: { try await clock.sleep($0) })
+        defer { replay.stop(); clock.finishSleeps() }
+        var phases: [String] = [], fixes: [CLLocation] = []
+        var finished = 0
+        replay.onPhase = { phases.append($0) }
+        replay.onFixObserved = { fixes.append($0) }
+        replay.onFinished = { finished += 1 }
+        replay.start(at: point(0, 0))
+        replay.follow(route: route([point(0, 0), point(0, 0.01), point(0.01, 0.01), point(0.01, 0)]))
+        await settle()
+        for _ in 0..<280 { await clock.advance(by: 1) }
+        XCTAssertTrue(phases.contains("cachedMovement"))
+        XCTAssertTrue(phases.contains("coverage"))
+        XCTAssertTrue(phases.contains("zoomOut"))
+        XCTAssertTrue(phases.contains("zoomIn"))
+        XCTAssertTrue(phases.contains("drain"))
+        let atDrain = fixes.count
+        for _ in 0..<20 { await clock.advance(by: 1) }
+        XCTAssertEqual(fixes.count, atDrain, "drain must stop producers")
+        XCTAssertEqual(finished, 1)
+        XCTAssertNil(replay.recentLocation())
+    }
+
     func testStartProvidesStationaryFreshFixWithoutDeviceGPS() async throws {
         let clock = ReplayClock()
         let replay = makeReplay(clock)
