@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: Full verification and IPA, or focused latency regressions without packaging
+        description: Full verification and IPA, focused latency regressions, or export assertion repair and IPA
         type: choice
-        options: [full, latency]
+        options: [full, latency, export-repair]
         default: full
 
 permissions:

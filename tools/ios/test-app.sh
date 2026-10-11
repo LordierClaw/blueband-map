@@ -12,6 +12,11 @@ if [[ "$scope" == latency ]]; then
     -only-testing:BlueBandMapTests/AppModelPickerTests/testLatencyQueuedArrivalDoesNotWaitAnotherSecondAfterDelayedACK
     -only-testing:BlueBandMapTests/NavigationReplayTests/testLatencyFullFlowHasMovementZoomDrainAndBoundedAutomaticCompletion
   )
+elif [[ "$scope" == export-repair ]]; then
+  filters+=(
+    -only-testing:BlueBandMapTests/AppModelPickerTests/testFullFlowRunsAllPhasesAndExportsAfterDrainWithoutManualStop
+    -only-testing:BlueBandMapTests/AppModelPickerTests/testAutomaticRejectedMovementStopsAndExportsFailureWithoutFinalProbe
+  )
 elif [[ "$scope" != full ]]; then
   echo "Unknown iOS test scope" >&2
   exit 2

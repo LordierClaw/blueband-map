@@ -51,7 +51,8 @@ final class AppModelPickerTests: XCTestCase {
         for phase in ["cachedMovement", "coverage", "turns", "zoomOut", "zoomIn", "drain", "fullFlowComplete"] {
             XCTAssertTrue(phases.contains(phase), phase)
         }
-        XCTAssertEqual((rows.last?["metrics"] as? [String: Any])?["reason"] as? String, "full-flow-complete")
+        let end = rows.first { $0["event"] as? String == "session.end" }?["metrics"] as? [String: Any]
+        XCTAssertEqual(end?["reason"] as? String, "full-flow-complete")
         XCTAssertTrue(rows.contains { $0["event"] as? String == "band.callbacks" })
         XCTAssertTrue(rows.contains { $0["event"] as? String == "replay.fix" })
     }
@@ -109,7 +110,9 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil { await sender.requests.count == 2 }
         try await answerAutomaticDiagnostics(model, sender: sender)
         await waitUntil({ await sender.navigationUpdates.contains { $0["status"] == .string(status) } }, timeout: .seconds(5))
-        await waitUntil { model.preparedPerformanceTrace != nil }
+        // Export includes fsync on the simulator host. Its disk latency is not
+        // the GPS-to-display target; retain a bound without a two-second disk race.
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: .seconds(8))
         await diagnoseMissingAutomaticExport(model)
         XCTAssertFalse(model.isNavigationRunning)
         XCTAssertEqual(model.navigationState, .failed("TEST_NAV_DELIVERY_FAILED"))
