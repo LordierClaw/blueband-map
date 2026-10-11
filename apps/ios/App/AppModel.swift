@@ -1061,12 +1061,13 @@ final class AppModel: ObservableObject {
         let snapshot = prepared.snapshot, asset = prepared.asset, encoded = prepared.encoded
         // Warm only the camera actually being transmitted. Speculative snapshots
         // must not invalidate the atlas backing the current corridor.
-        if usesCPURenderer, !corridorUnavailable, corridorPlane == nil, !automaticDraining {
+        if usesCPURenderer, !corridorUnavailable, corridorPlane == nil, !automaticDraining,
+           let firstCell = (try? CorridorViewport(x: 0, y: 0))?.visibleCells.first {
             corridorWarmTask?.cancel()
             let renderer = snapshotRenderer.backgroundRenderer, source = mapRequest(request)
             corridorWarmTask = Task {
                 _ = try? await renderer.renderCell(source, plane: snapshot.configuration,
-                    cell: CorridorCell(column: 0, row: 0))
+                    cell: firstCell)
             }
         }
         let location = request.location, progress = request.progress, bearingDegrees = request.bearingDegrees
