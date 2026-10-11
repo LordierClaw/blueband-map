@@ -363,7 +363,11 @@ class ReportTest(unittest.TestCase):
         result = subprocess.run([sys.executable, str(REPORT), str(self.run)], capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.run.joinpath("navigation.jsonl").write_text("input remains\n")
-        self.run.joinpath("summary.json").symlink_to(self.run / "navigation.jsonl")
+        try:
+            self.run.joinpath("summary.json").symlink_to(self.run / "navigation.jsonl")
+        except OSError as error:
+            # Windows without Developer Mode denies symlinks (WinError 1314); Linux CI still covers aliasing.
+            self.skipTest(f"symlinks unavailable: {error}")
         result = subprocess.run([sys.executable, str(REPORT), str(self.run)], capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.run.joinpath("navigation.jsonl").read_text(), "input remains\n")
