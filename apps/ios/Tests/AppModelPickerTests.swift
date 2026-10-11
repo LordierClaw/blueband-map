@@ -40,7 +40,7 @@ final class AppModelPickerTests: XCTestCase {
         await clock.advance(by: 10)
         await waitUntil { await sender.requests.count == 6 }
         try await answerAutomaticDiagnostics(model, sender: sender)
-        await waitUntil(timeout: Self.exportTimeout) { model.preparedPerformanceTrace != nil }
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: Self.exportTimeout)
         XCTAssertFalse(model.isNavigationRunning)
         let rows = try XCTUnwrap(model.preparedPerformanceTrace).split(separator: 10).map {
             try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
@@ -137,7 +137,7 @@ final class AppModelPickerTests: XCTestCase {
         model.consume(.connected); model.startAutomaticNavigationTest()
         await waitUntil { await sender.requests.count == 2 }
         model.consume(.disconnected)
-        await waitUntil(timeout: Self.exportTimeout) { model.preparedPerformanceTrace != nil }
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: Self.exportTimeout)
         await diagnoseMissingAutomaticExport(model)
         XCTAssertFalse(model.isNavigationRunning)
         XCTAssertEqual(model.navigationState, .failed("TEST_BAND_DISCONNECTED"))
@@ -194,7 +194,7 @@ final class AppModelPickerTests: XCTestCase {
         model.stopNavigation()
         XCTAssertFalse(model.isNavigationRunning)
         XCTAssertFalse(manager.backgroundEnabled)
-        await waitUntil(timeout: Self.exportTimeout) { model.preparedPerformanceTrace != nil }
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: Self.exportTimeout)
         await diagnoseMissingAutomaticExport(model)
         let data = try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus)
         let text = String(decoding: data, as: UTF8.self)
@@ -216,7 +216,7 @@ final class AppModelPickerTests: XCTestCase {
         XCTAssertEqual(model.navigationState, .failed("TEST_DIAGNOSTICS_INCOMPLETE"))
         XCTAssertFalse(model.isNavigationRunning)
         // The stop is bounded by the deadline; trace export (file sync) completes afterwards.
-        await waitUntil(timeout: Self.exportTimeout) { model.preparedPerformanceTrace != nil }
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: Self.exportTimeout)
         XCTAssertNotNil(model.preparedPerformanceTrace, model.automaticTestStatus)
         await diagnoseMissingAutomaticExport(model)
         XCTAssertNil(model.navigationStart)
@@ -233,7 +233,7 @@ final class AppModelPickerTests: XCTestCase {
         await waitUntil { await sender.requests.count == 4 }
         XCTAssertTrue(model.isNavigationRunning, "Stop remains available during final diagnostics")
         try await answerAutomaticDiagnostics(model, sender: sender)
-        await waitUntil(timeout: Self.exportTimeout) { model.preparedPerformanceTrace != nil }
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: Self.exportTimeout)
         await diagnoseMissingAutomaticExport(model)
         XCTAssertFalse(model.isNavigationRunning)
         let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus), as: UTF8.self)
@@ -261,7 +261,7 @@ final class AppModelPickerTests: XCTestCase {
         try await answerAutomaticDiagnostics(model, sender: sender)
         await waitUntil({ await sender.requests.count == 4 }, timeout: .seconds(5))
         try await answerAutomaticDiagnostics(model, sender: sender)
-        await waitUntil(timeout: Self.exportTimeout) { model.preparedPerformanceTrace != nil }
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: Self.exportTimeout)
         await diagnoseMissingAutomaticExport(model)
         XCTAssertFalse(model.isNavigationRunning)
         let text = String(decoding: try XCTUnwrap(model.preparedPerformanceTrace, model.automaticTestStatus), as: UTF8.self)
@@ -340,7 +340,7 @@ final class AppModelPickerTests: XCTestCase {
         await sender.releaseNavigation()
         await waitUntil({ await sender.requests.count == 4 }, timeout: .seconds(5))
         try await answerAutomaticDiagnostics(model, sender: sender)
-        await waitUntil(timeout: Self.exportTimeout) { model.preparedPerformanceTrace != nil }
+        await waitUntil({ model.preparedPerformanceTrace != nil }, timeout: Self.exportTimeout)
         await diagnoseMissingAutomaticExport(model)
         let updates = await sender.navigationUpdates
         XCTAssertEqual(updates.last?["status"], .string("arrived"))
