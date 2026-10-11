@@ -3,6 +3,7 @@ import Foundation
 import ImageIO
 import XCTest
 import BlueBandMapCore
+import BlueBandCore
 import BlueBandProtocol
 @testable import BlueBandMap
 
