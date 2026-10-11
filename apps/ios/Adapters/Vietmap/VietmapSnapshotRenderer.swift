@@ -20,6 +20,7 @@ struct VietmapSnapshotRequest: Sendable {
     let nextManeuver: GeoPoint
     let tileMapKey: String
     var profile: SnapshotPaletteProfile = .colors32Labels
+    var zoomOverride: Double? = nil
 }
 
 struct VietmapSnapshotConfiguration: Equatable, Sendable {
@@ -71,6 +72,10 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
         }
         let distance = meters(request.matchedPosition, request.nextManeuver)
         var zoom: Double = distance <= 150 ? 17 : distance <= 500 ? 16 : distance <= 1_500 ? 15 : 14
+        if let fixed = request.zoomOverride {
+            guard fixed.isFinite, (14...17).contains(fixed) else { throw VietmapSnapshotRenderer.Error.invalidRequest }
+            zoom = fixed
+        }
         let size = CGSize(width: RenderProtocol.viewportWidth, height: RenderProtocol.viewportHeight)
         let overlayInsets = EdgeInsets(top: 144, left: 14, bottom: 12, right: 14)
         let desiredPoint = CGPoint(
@@ -98,6 +103,7 @@ struct VietmapSnapshotConfiguration: Equatable, Sendable {
                 center: center
             )
             if localConfiguration == nil { localConfiguration = configuration }
+            if request.zoomOverride != nil { return configuration }
             let user = configuration.point(for: request.matchedPosition)
             let forward = configuration.point(for: request.nextManeuver)
             // A hairpin/roundabout exit can be behind the current road tangent.
@@ -346,7 +352,8 @@ final class VietmapSnapshotRenderer: NSObject, MGLMapSnapshotterDelegate {
         }
     }
 
-    func prewarm(tileMapKey: String) {
+    func prewarm(tileMapKey: String, owner: Int = 0) {
+        Task { await backgroundRenderer.prewarm(tileMapKey: tileMapKey, owner: owner) }
         guard applicationActive, prewarmer == nil,
               let styleURL = Self.styleURL(tileMapKey: tileMapKey) else { return }
         let camera = MGLMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 0, longitude: 0), altitude: 0, pitch: 0, heading: 0)

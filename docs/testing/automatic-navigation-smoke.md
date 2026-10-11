@@ -1,61 +1,42 @@
-# Test tự động tại chỗ
+# Test full luồng tại chỗ
 
-Cặp phiên bản: **iOS 0.5.26 (42)** + **RPK 0.6.21 (36)**.
-Chỉ bàn giao artifact sau khi CI của bản tương ứng đã kiểm thử và xác minh gói.
+Cặp phiên bản: **iOS 0.5.27 (43)** + **RPK 0.6.22 (37)**.
+Chỉ bàn giao artifact sau khi kiểm thử và xác minh gói của cùng commit.
 
-Bài này thay GPS thật bằng tọa độ phát trong app, còn lấy tuyến, dựng bản đồ,
-truyền Bluetooth và xác nhận từ Band dùng luồng thật. Không cần di chuyển ngoài
-đường, máy tính phát GPS hay Developer Mode chỉ để tạo tọa độ. Không dùng bài
-này để xác nhận Core Location khi khóa iPhone hoặc kết luận Band không crash.
+## Cài và chạy một lần
 
-## Một lần chạy
+1. Cài IPA bằng cách ký/sideload đang dùng; IPA bàn giao chưa ký. Cài RPK mới, mở BlueBandMap trên Band, kết nối iPhone và chờ xác thực. Kiểm tra hai phiên bản phía trên. Giữ các khóa Vietmap đã lưu và kết nối mạng.
+2. Trong phần điều hướng, chọn chế độ bản đồ **auto**, bấm **Chạy test full luồng (~5 phút)**. Giữ iPhone mở ở màn hình điều hướng và Band mở app trong lượt này. Không cần di chuyển thật, nhập điểm đến, tự rẽ, bấm zoom hay đánh dấu từng đoạn. Không cần Developer Mode để tạo GPS.
+3. Đợi app tự dừng rồi chọn **Tệp/Files → Lưu** trong hộp thoại xuất kết quả. Nếu đóng hộp thoại, bấm **Lưu kết quả test (.jsonl)**. Gửi file JSONL vừa lưu cùng ghi chú Band có lag, thoát app hay hiện logo khởi động lại hay không.
 
-1. Cài đúng cặp IPA/RPK bàn giao, kết nối và chờ xác thực. Mở app trên Band.
-   Giữ iPhone và Band mở trong bài đầu. Các khóa bản đồ đã lưu vẫn được dùng.
-2. Bấm **Chạy test tự động**. App kiểm tra phiên bản và chẩn đoán Band trước,
-   rồi phát tuyến mẫu cố định với tốc độ 10 m/s và nhịp 1 Hz. Điểm đến điều hướng
-   hằng ngày không bị ghi đè. Theo dõi trạng thái; không cần tự đánh dấu đoạn.
-3. Khi bài kết thúc hoặc lỗi, màn hình lưu file tự mở: chọn thư mục trong
-   **Tệp/Files → Lưu**. Nếu đóng hộp thoại, bấm **Lưu kết quả test (.jsonl)**.
-   Gửi JSONL này cùng ghi chú
-   nhìn thấy trên Band. Nếu quay video, dùng thiết bị khác và ghi FPS.
+Không chạy lại chỉ để lấy PASS. Một lượt chậm hoặc lỗi vẫn có giá trị phân tích. Lưu kết quả trước khi chạy bài khác; recorder giữ tối đa ba phiên gần nhất.
 
-Nút **Dừng** trên thanh công cụ luôn sẵn khi đang chạy. Dừng trên iPhone không
-chờ BLE. Ảnh cuối trên Band có thể còn nguyên; dòng trạng thái iPhone và các
-event Stop/end xác định phiên có thực sự dừng hay không. Không coi ảnh đứng
-yên sau Stop là bằng chứng ứng dụng còn gửi bản đồ.
+## Bài tự chạy những gì
 
-## Kết quả và giới hạn
+Sau kiểm tra phiên bản/chẩn đoán, app dùng tuyến giả lập cố định và phát tọa độ 1 Hz. Tọa độ và tuyến là dữ liệu tổng hợp; tải dữ liệu bản đồ Vietmap, dựng ảnh, truyền Bluetooth, giải mã/hiển thị trên Band và phản hồi đều đi qua luồng thật. Bài này không gọi dịch vụ tìm tuyến cho tuyến giả lập, không xác nhận GPS thật hay khả năng khóa iPhone. Điểm đến điều hướng thường ngày không bị ghi đè.
 
-- Sai/thiếu phiên bản RPK: app kết thúc với lý do cụ thể và giữ log; không bắt
-  người dùng chạy dài mới tìm ra cặp cài không khớp.
-- Khi đang phát tuyến, app lấy chẩn đoán mỗi 10 giây, mỗi lần có deadline 8 giây;
-  chỉ cho phép một cặp yêu cầu đang chờ. Việc lấy chẩn đoán vẫn chạy khi chờ tuyến
-  hoặc dựng bản đồ. Đây là nhịp đo sức khỏe, không phải nhịp cập nhật bản đồ.
-- Mất kết nối, gửi cập nhật điều hướng thất bại hoặc hết hạn chẩn đoán đang chạy:
-  dừng tại iPhone và chuẩn bị export với lý do riêng, không chờ lấy chẩn đoán cuối.
-  Nếu chưa có sự kiện mất kết nối/lỗi gửi, phát hiện im lặng có thể mất khoảng
-  18 giây (10 giây tới mẫu tiếp theo + 8 giây chờ), khi iPhone còn hoạt động.
-- Hết tuyến, lỗi, hoặc giới hạn 600 giây phát: tự kết thúc; không phát bù một loạt
-  tọa độ cũ sau khi app bị treo/ngủ. Timestamp phát thực tế được lưu riêng.
-- Cuối tuyến chờ tối đa 3 giây cho lệnh tới đích, rồi tối đa 8 giây lấy chẩn đoán.
-  Nút Dừng vẫn dùng được trong thời gian này. ACK chỉ xác nhận nhận lệnh;
-  log không coi ACK là bằng chứng Band đã vẽ chữ ARRIVED.
-- Không chạy ca tiếp theo trước khi lưu kết quả; recorder vẫn giữ tối đa 3 phiên.
-- Một bài chậm/lỗi vẫn là dữ liệu hữu ích. Không cần chạy lại chỉ để có PASS.
-- Nếu Band hiện logo rồi khởi động lại: giữ iPhone mở và lưu JSONL được chuẩn bị.
-  Không cần mở lại app Band hoặc chạy lượt thứ hai. Ghi rõ có logo khởi động,
-  khác với trường hợp chỉ thoát về mặt đồng hồ. Nếu hộp thoại chưa hiện, bấm
-  Dừng trên iPhone rồi Lưu kết quả test (.jsonl).
-- Ngủ/thoát Band hoặc khóa/mở iPhone thật là các ca riêng. Không đánh dấu chúng
-  đã thử chỉ bằng cách gọi hàm hay thay đổi GPS mô phỏng.
+| Thời gian từ lúc bắt đầu tuyến | Hoạt động tự động |
+| --- | --- |
+| 0–30 giây | Di chuyển ngắn, cho cache hình thành |
+| 30–90 giây | Di chuyển sang vùng bản đồ mới |
+| 90–150 giây | Tiếp tục tuyến qua các đoạn đổi hướng |
+| 150–190 giây | Đổi zoom từ 17 xuống 16 |
+| 190–280 giây | Trở lại zoom 17, tiếp tục di chuyển/rẽ đến cuối tuyến |
+| 280–290 giây | Dừng các nguồn phát ảnh/vị trí, đo callback tồn đọng |
+| Sau 290 giây | Lấy chẩn đoán cuối tối đa 8 giây, tự Stop và xuất log |
 
-Start→xác nhận và GPS→xác nhận được chấm riêng, đều có mục tiêu <1000 ms. Thời gian
-kiểm tra RPK đầu lượt vẫn nằm trong Start→xác nhận và có event riêng để phân tích.
-Việc phát đúng 1 Hz không chứng minh khung cập nhật trong 1 giây. Video vẫn cần để xác
-nhận thời điểm pixel thật trên màn Band; ACK không thay thế quan sát màn hình.
+Các mốc là lịch phát; đổi hướng/vùng thành công chỉ được tính khi có phản hồi tương ứng. Không coi marker phase hay nhịp phát 1 Hz là bằng chứng update <1 giây. Thời gian đầu kiểm tra RPK/tải ảnh có thể làm tổng lượt lâu hơn 5 phút.
 
-App tự gắn phase theo fix: rẽ dựa trên đổi hướng; đổi vùng/cached dựa trên ô còn
-thiếu trong yêu cầu viewport. Chỉ có marker không được tính là đã test thành
-công: phải có xác nhận tương ứng. Một lượt không nhận được xác nhận rẽ/đổi vùng
-sẽ còn thiếu bằng chứng; app không tự ghi PASS.
+## Dừng và xử lý lỗi
+
+Nút **Dừng** trên thanh công cụ iPhone vẫn dùng được trong toàn bộ lượt, kể cả đang chờ bản đồ hoặc chẩn đoán. Dừng không chờ BLE. Ảnh cuối còn trên Band không có nghĩa iPhone vẫn gửi: xem trạng thái đã dừng và kết quả xuất log.
+
+App lấy chẩn đoán mỗi 10 giây với deadline 8 giây, chỉ một nhóm yêu cầu đang chờ. Sai RPK, mất kết nối, lỗi gửi hướng dẫn hoặc Band không phản hồi sẽ kết thúc và chuẩn bị log với lý do riêng. Khi iPhone còn chạy, phát hiện im lặng có thể mất khoảng 18 giây. Giới hạn cứng nguồn replay là 600 giây; không phát bù dồn dập các vị trí cũ sau một lần treo/ngủ.
+
+Nếu Band hiện logo và reboot: giữ iPhone mở để lưu kết quả; không cần mở lại app Band hay chạy thêm. Nếu hộp thoại chưa xuất hiện, bấm **Dừng**, rồi **Lưu kết quả test (.jsonl)**. Phân biệt reboot có logo với chỉ thoát về mặt đồng hồ.
+
+## Cách đọc kết quả
+
+Trace có profile `full-flow-v1`, các phase, fix phát/được xác nhận, thời gian tải style/tile/decode/draw/encode/transfer, lỗi provider đã lược thông tin nhạy cảm, và số hình học bị loại/số phép chiếu được tái sử dụng. Chẩn đoán Band có bộ đếm callback ACK/message riêng và tối đa 16 mẫu timestamp đang chờ. Đây không phải phép đo RAM native; không kết luận OOM từ số pending.
+
+Mục tiêu vẫn là Start→xác nhận và GPS→xác nhận đều <1000 ms, gồm cả rẽ/đổi vùng. Start có tính cả kiểm tra RPK trước replay và có event riêng để tách thời gian. Xác nhận giao thức không thay thế thời điểm pixel thật hiện trên Band. Nếu có video bằng thiết bị khác, gửi kèm FPS; video hữu ích nhưng không bắt buộc để xuất và phân tích JSONL. Chưa có kết luận phần cứng đạt <1 giây hay hết reboot.

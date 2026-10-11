@@ -19,9 +19,27 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Identify changes requiring executable checks
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          heavy=false
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            heavy=true
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                docs/*|*.md) ;;
+                *) heavy=true ;;
+              esac
+            done < <(git diff --name-only "$BASE_SHA" HEAD)
+          fi
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
       - name: Run fast repository checks
         run: make lint
       - name: Run canonical Linux test suites
+        if: steps.changes.outputs.heavy == 'true'
         run: make test
       - name: Download and verify pinned Gitleaks
         env:
@@ -33,6 +51,7 @@ jobs:
           tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
           ./gitleaks git --redact --no-banner .
       - name: Upload RPK from canonical test run
+        if: steps.changes.outputs.heavy == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: blueband-map-verified-rpk-${{ github.sha }}

@@ -87,6 +87,9 @@ final class AppModel: ObservableObject {
     private var automaticPreflight = false
     private var automaticTurnFixes: Set<Int> = []
     private var automaticArrivalAcknowledged = false
+    private var automaticFullFlow = false
+    private var automaticDraining = false
+    private var automaticZoomOverride: Double?
 
     let performanceTrace: PerformanceTraceRecorder
     private let performanceFixes: PerformanceFixTracker
@@ -105,6 +108,8 @@ final class AppModel: ObservableObject {
     private var performanceProbeTimeoutTask: Task<Void, Never>?
     private var receivedResourceProbe = false
     private var receivedTransportProbe = false
+    private var receivedCallbackProbe = false
+    private var requiresCallbackProbe = false
 
     private let keyStore: any AuthKeyStoreProtocol
     private let vietmapKeyStore: any VietmapKeyStoreProtocol
@@ -116,6 +121,9 @@ final class AppModel: ObservableObject {
     private let snapshotRenderer: VietmapSnapshotRenderer
     private let snapshotRender: @MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput
     private let cellRender: @Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data
+    private let usesCPURenderer: Bool
+    private let replayFactory: @MainActor (Bool) -> NavigationReplay
+    private var corridorWarmTask: Task<Void, Never>?
     private let locationClient: ForegroundLocationClient
     private let renderCoordinator: RouteCardRenderCoordinator
     private let routeCardSender: any RouteCardSessionSending
@@ -180,7 +188,8 @@ final class AppModel: ObservableObject {
         updateClock: any BlueBandClock = ContinuousBlueBandClock(),
         defaults: UserDefaults = .standard,
         scanDuration: Duration = .seconds(15),
-        performanceTrace: PerformanceTraceRecorder? = nil
+        performanceTrace: PerformanceTraceRecorder? = nil,
+        replayFactory: @escaping @MainActor (Bool) -> NavigationReplay = { NavigationReplay(fullFlow: $0) }
     ) {
         let trace = performanceTrace ?? PerformanceTraceRecorder(directory:
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -208,6 +217,8 @@ final class AppModel: ObservableObject {
             }
         } }
         self.cellRender = cellRender ?? { try await cpuRenderer.renderCell($0, plane: $1, cell: $2) }
+        self.usesCPURenderer = cellRender == nil
+        self.replayFactory = replayFactory
         self.locationClient = locationClient
         self.updateClock = updateClock
         self.defaults = defaults
@@ -373,11 +384,14 @@ final class AppModel: ObservableObject {
         sessionState = .idle
     }
 
-    func startAutomaticNavigationTest() {
+    func startAutomaticNavigationTest(fullFlow: Bool = false) {
         guard !isNavigationRunning else { return }
         automaticRunID = UUID()
-        navigationReplay = NavigationReplay()
-        automaticTestStatus = "Đang kiểm tra RPK 0.6.21 (36)…"
+        automaticFullFlow = fullFlow
+        automaticDraining = false
+        automaticZoomOverride = fullFlow ? 17 : nil
+        navigationReplay = replayFactory(fullFlow)
+        automaticTestStatus = "Đang kiểm tra RPK 0.6.22 (37)…"
         locationClient.stopPrewarming()
         locationClient.stop()
         locationNeedsSettings = false
@@ -406,6 +420,7 @@ final class AppModel: ObservableObject {
             metadata["firmware"] = .string(snapshot.firmware ?? "unknown")
             metadata["transferWindow"] = .number(4)
             metadata["inAppReplay"] = .bool(automatic)
+            metadata["replayProfile"] = .string(automaticFullFlow ? "full-flow-v1" : automatic ? "provider-route" : "none")
             performanceTrace.start(metadata: metadata)
             performanceTrace.record("navigation.intent", metrics: ["sampleUptimeMs": .number(intentUptime * 1000),
                 "intentAdmissionDelayMs": .number((ProcessInfo.processInfo.systemUptime - intentUptime) * 1000)])
@@ -418,7 +433,7 @@ final class AppModel: ObservableObject {
             else { performanceTrace.end(reason: "rejected-rpk-not-ready") }
             return
         }
-        guard let destination = automatic ? NavigationReplay.destination : destination,
+        guard let destination = automatic ? (automaticFullFlow ? NavigationReplay.fullFlowRoute.points.last : NavigationReplay.destination) : destination,
               let serviceKey = loadVietmapKey(.service) else {
             navigationState = .failed("CONFIG_MISSING")
             errorMessage = "Navigation Failed (CONFIG_MISSING). Hãy lưu tọa độ đích và Service/API key."
@@ -443,13 +458,18 @@ final class AppModel: ObservableObject {
         let generation = navigationGeneration
         navigationTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            if usesCPURenderer, let key = loadVietmapKey(.tileMap) {
+                await snapshotRenderer.backgroundRenderer.prewarm(tileMapKey: key, owner: generation)
+                guard generation == navigationGeneration, !Task.isCancelled else { return }
+            }
             if automatic {
                 while performanceProbeSession != nil {
                     do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
                     guard generation == navigationGeneration else { return }
                 }
                 guard generation == navigationGeneration, !Task.isCancelled else { return }
-                guard receivedResourceProbe && receivedTransportProbe && probeRPKMatches else {
+                guard receivedResourceProbe && receivedTransportProbe && probeRPKMatches &&
+                        (!requiresCallbackProbe || receivedCallbackProbe) else {
                     rejectAutomaticTest("TEST_DIAGNOSTICS_INCOMPLETE")
                     return
                 }
@@ -476,6 +496,7 @@ final class AppModel: ObservableObject {
         cancelNavigationWork()
         navigationReplay?.stop(); navigationReplay = nil
         automaticRunID = nil
+        automaticFullFlow = false; automaticDraining = false; automaticZoomOverride = nil
         isNavigationRunning = false
         navigationState = .idle
         performanceTrace.record("navigation.stopped", metrics: ["reason": .string(reason)])
@@ -489,6 +510,11 @@ final class AppModel: ObservableObject {
 
     private func cancelNavigationWork() {
         navigationGeneration += 1
+        corridorWarmTask?.cancel(); corridorWarmTask = nil
+        if usesCPURenderer {
+            let owner = navigationGeneration, renderer = snapshotRenderer.backgroundRenderer
+            Task { await renderer.stopPreparation(owner: owner) }
+        }
         invalidateCorridor(keepMap: false)
         corridorUnavailable = false
         rerouteTask?.cancel()
@@ -523,14 +549,15 @@ final class AppModel: ObservableObject {
         stopNavigation(reason: code)
         navigationState = .failed(code)
         errorMessage = code == "TEST_RPK_MISMATCH"
-            ? "Band báo \(observedRPK). Test cần RPK 0.6.21 (36); hãy cài đúng file rồi mở lại app Band."
+            ? "Band báo \(observedRPK). Test cần RPK 0.6.22 (37); hãy cài đúng file rồi mở lại app Band."
             : "Test chưa bắt đầu (\(code)). Log đã được giữ để kiểm tra."
     }
 
     private func startReplay(generation: Int) {
         guard let replay = navigationReplay else { return }
         var previousCourse: Double?
-        automaticTestStatus = "Đang chạy tuyến tự động · 10 m/s · không cần di chuyển"
+        automaticTestStatus = automaticFullFlow ? "Đang test full luồng ~5 phút · tuyến giả lập · không cần di chuyển"
+            : "Đang chạy tuyến tự động · 10 m/s · không cần di chuyển"
         replay.onFixObserved = { [weak self, weak replay] fix in
             guard let self, let replay, generation == navigationGeneration else { return }
             performanceFixes.received(timestamp: fix.timestamp, accuracy: fix.horizontalAccuracy,
@@ -553,6 +580,23 @@ final class AppModel: ObservableObject {
         replay.onPhase = { [weak self] phase in
             guard let self, generation == navigationGeneration else { return }
             performanceTrace.record("automatic.phase", metrics: ["phase": .string(phase)])
+            if automaticFullFlow {
+                if phase == "zoomOut" { automaticZoomOverride = 16 }
+                if phase == "zoomIn" { automaticZoomOverride = 17 }
+                if phase == "drain" {
+                    automaticDraining = true
+                    corridorWarmTask?.cancel(); corridorWarmTask = nil
+                    snapshotRefreshTask?.cancel(); snapshotRefreshTask = nil
+                    nextSnapshotPreparation?.cancel(); nextSnapshotPreparation = nil
+                    pendingSnapshotRefresh = nil
+                    updateTask?.cancel(); updateTask = nil; updateCoalescer.reset()
+                    renderCoordinator.cancel(); invalidateCorridor()
+                    automaticTestStatus = "Đang ngừng phát dữ liệu 10 giây để đo callback; sau đó tự lưu log…"
+                    if performanceProbeSession == nil { capturePerformanceDiagnostics() }
+                } else if phase != "fullFlowComplete" {
+                    automaticTestStatus = "Test full luồng · \(phase) · tự dừng sau khoảng 5 phút"
+                }
+            }
             if phase == "timeout" { navigationState = .failed("TEST_TIMEOUT") }
         }
         replay.onFinished = { [weak self] in
@@ -560,6 +604,7 @@ final class AppModel: ObservableObject {
             // Arrival must be consumed by runNavigation before teardown. Only the
             // hard deadline can interrupt an independently stuck route/render task.
             if navigationState == .failed("TEST_TIMEOUT") { beginAutomaticFinish(reason: "TEST_TIMEOUT") }
+            else if automaticFullFlow { beginAutomaticFinish(reason: "full-flow-complete") }
         }
         markMeasurementPhase(.startup)
         replay.start()
@@ -630,7 +675,8 @@ final class AppModel: ObservableObject {
             }
             guard automaticRunID == owner, !Task.isCancelled else { return }
             performanceTrace.record("automatic.finished", metrics: ["reason": .string(reason),
-                "endDiagnosticsComplete": .bool(receivedResourceProbe && receivedTransportProbe)])
+                "endDiagnosticsComplete": .bool(receivedResourceProbe && receivedTransportProbe &&
+                    (!requiresCallbackProbe || receivedCallbackProbe))])
             stopNavigation(reason: reason)
             if reason.hasPrefix("failed:") || reason == "TEST_TIMEOUT" { navigationState = .failed(reason) }
         }
@@ -670,7 +716,7 @@ final class AppModel: ObservableObject {
     private func updateNavigationPrewarming() {
         if navigationReplay == nil, navigationScreenIsActive, rpkState == .ready, applicationState == "active" {
             locationClient.startPrewarming()
-            if let key = loadVietmapKey(.tileMap) { snapshotRenderer.prewarm(tileMapKey: key) }
+            if let key = loadVietmapKey(.tileMap) { snapshotRenderer.prewarm(tileMapKey: key, owner: navigationGeneration) }
             else { snapshotRenderer.stopPrewarming() }
         } else {
             locationClient.stopPrewarming()
@@ -810,7 +856,7 @@ final class AppModel: ObservableObject {
                     confirmedBearingDegrees: activeSnapshotConfiguration?.heading ?? routeBearing,
                     secondsSinceRefresh: lastSnapshotRefreshStartedAt.map { Date().timeIntervalSince($0) } ?? .infinity
                 )
-                if goodFix && Self.meters(location.geoPoint, destination) <= 25 {
+                if !automaticFullFlow && goodFix && Self.meters(location.geoPoint, destination) <= 25 {
                     navigationState = .arrived
                     sendNavigationUpdate(route: route, progress: progress, location: displayedLocation, headingDegrees: location.course, horizontalAccuracyMeters: location.horizontalAccuracy, status: .arrived)
                     return
@@ -912,12 +958,18 @@ final class AppModel: ObservableObject {
             "heading=\(heading.map(String.init) ?? "unknown") " +
             "speedMps=\(location.speed.isFinite ? String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), location.speed) : "unknown")"
         )
-        let route = try await routeClient.route(
+        let route: RoutePlan
+        if automaticFullFlow {
+            route = NavigationReplay.fullFlowRoute
+            performanceTrace.record("automatic.route", metrics: ["source": .string("synthetic-full-flow-v1")])
+        } else {
+        route = try await routeClient.route(
             origin: location.geoPoint,
             destination: destination,
             serviceKey: serviceKey,
             headingDegrees: heading
         )
+        }
         try checkNavigationOwner(generation)
         routeRequestMilliseconds += max(0, Self.nowMilliseconds() - started)
         navigationRouteDistanceMeters = Int(route.distanceMeters.rounded())
@@ -1007,6 +1059,16 @@ final class AppModel: ObservableObject {
         try checkNavigationOwner(generation)
         let request = prepared.request
         let snapshot = prepared.snapshot, asset = prepared.asset, encoded = prepared.encoded
+        // Warm only the camera actually being transmitted. Speculative snapshots
+        // must not invalidate the atlas backing the current corridor.
+        if usesCPURenderer, !corridorUnavailable, corridorPlane == nil, !automaticDraining {
+            corridorWarmTask?.cancel()
+            let renderer = snapshotRenderer.backgroundRenderer, source = mapRequest(request)
+            corridorWarmTask = Task {
+                _ = try? await renderer.renderCell(source, plane: snapshot.configuration,
+                    cell: CorridorCell(column: 0, row: 0))
+            }
+        }
         let location = request.location, progress = request.progress, bearingDegrees = request.bearingDegrees
         let snapshotStartedAt = prepared.startedAt
         let transferStartedAt = Date()
@@ -1065,6 +1127,7 @@ final class AppModel: ObservableObject {
         bearingDegrees: Double,
         reason: String
     ) {
+        guard !automaticDraining else { return }
         let request = SnapshotRefreshRequest(
             route: route,
             progress: progress,
@@ -1227,7 +1290,7 @@ final class AppModel: ObservableObject {
                     active: Array(route.points.dropFirst(progress.pointIndex)), context: []),
             headingDegrees: request.bearingDegrees,
             nextManeuver: GuidancePresentationPolicy.forwardPoint(route: route, progress: progress, selection: selection) ?? route.points[end],
-            tileMapKey: request.tileMapKey, profile: .colors16Labels)
+            tileMapKey: request.tileMapKey, profile: .colors16Labels, zoomOverride: automaticZoomOverride)
     }
 
     private func corridorViewport(_ request: SnapshotRefreshRequest, plane: VietmapSnapshotConfiguration) throws -> CorridorViewport {
@@ -1260,6 +1323,10 @@ final class AppModel: ObservableObject {
         corridorPlane = frame.snapshot.configuration
         corridorRoute = frame.request.route
         corridorLatest = pendingSnapshotRefresh ?? frame.request
+        guard let candidate = corridorLatest, acceptsCorridor(candidate) else {
+            corridorPlane = nil; corridorRoute = nil
+            return false
+        }
         let owner = corridorGeneration
         let enabled = await corridorLink.open(scene: scene)
         guard generation == navigationGeneration, owner == corridorGeneration, !Task.isCancelled else { return false }
@@ -1457,14 +1524,16 @@ final class AppModel: ObservableObject {
         performanceProbeSession = ownedSession
         performanceProbeDeadline = ProcessInfo.processInfo.systemUptime + 8
         receivedResourceProbe = false; receivedTransportProbe = false
+        receivedCallbackProbe = false; requiresCallbackProbe = automaticFullFlow
         probeRPKMatches = false
         performanceDiagnosticsStatus = "Đang chờ chẩn đoán từ Band…"
-        let sender = routeCardSender, visual = activeMeasurement?.visualMarker ?? false
+        let sender = routeCardSender, visual = activeMeasurement?.visualMarker ?? false, callbacks = automaticFullFlow
         performanceProbeTask = Task { @MainActor in
             async let resource: String? = try? sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
                 body: ["request": .string(request), "visual": .bool(visual)])
             async let transport: String? = try? sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
-                body: ["request": .string(request + "-t"), "transport": .bool(true)])
+                body: callbacks ? ["request": .string(request + "-t"), "transport": .bool(true), "callbacks": .bool(true)]
+                    : ["request": .string(request + "-t"), "transport": .bool(true)])
             _ = await (resource, transport)
         }
         // The deadline must not await a Bluetooth write or its acknowledgement. A sender
@@ -1476,7 +1545,8 @@ final class AppModel: ObservableObject {
                   performanceTrace.activeSessionID == ownedSession else { return }
             performanceDiagnosticsStatus = "Thiếu chẩn đoán; giữ trace để kiểm tra"
             performanceTrace.record("measurement.probe.incomplete", expectedSessionID: ownedSession,
-                metrics: ["resourceReceived": .bool(receivedResourceProbe), "transportReceived": .bool(receivedTransportProbe)])
+                metrics: ["resourceReceived": .bool(receivedResourceProbe), "transportReceived": .bool(receivedTransportProbe),
+                    "callbacksReceived": .bool(receivedCallbackProbe), "callbacksRequired": .bool(requiresCallbackProbe)])
             let runningAutomaticProbe = automaticRunID != nil && !automaticPreflight && automaticFinishTask == nil
             cancelPerformanceProbe()
             if runningAutomaticProbe { failAutomaticLink("TEST_BAND_DIAGNOSTICS_TIMEOUT") }
@@ -1492,7 +1562,7 @@ final class AppModel: ObservableObject {
     }
 
     private func completePerformanceProbeIfReady() {
-        guard receivedResourceProbe && receivedTransportProbe else { return }
+        guard receivedResourceProbe && receivedTransportProbe && (!requiresCallbackProbe || receivedCallbackProbe) else { return }
         performanceDiagnosticsStatus = "Đã nhận đủ chẩn đoán Band"
         cancelPerformanceProbe()
     }
@@ -1503,6 +1573,14 @@ final class AppModel: ObservableObject {
             guard performanceProbeSession == performanceTrace.activeSessionID, performanceProbeSession != nil,
                   ProcessInfo.processInfo.systemUptime <= performanceProbeDeadline else { return }
             if body["request"] == transportProbeRequest.map(JSONValue.string) {
+                if body["callbacks"] != nil {
+                    if let metrics = NativeCallbackDiagnostics.validated(body["callbacks"]) {
+                        performanceTrace.record("band.callbacks", source: "band", requestID: transportProbeRequest, metrics: metrics)
+                        receivedCallbackProbe = true
+                        completePerformanceProbeIfReady()
+                    } else { performanceTrace.record("band.callbacks.invalid", source: "band") }
+                    return
+                }
                 guard let metrics = NativeTransportDiagnostics.validated(body["transport"]) else {
                     performanceTrace.record("band.transport.invalid", source: "band"); return
                 }
@@ -1521,7 +1599,7 @@ final class AppModel: ObservableObject {
                 let version: String = { if case let .string(v)? = body["versionName"] { return v }; return "unknown" }()
                 observedRPK = "\(version) (\(Int(build)))"
             }
-            probeRPKMatches = body["rpk"] == .number(36) && body["versionName"] == .string("0.6.21")
+            probeRPKMatches = body["rpk"] == .number(37) && body["versionName"] == .string("0.6.22")
             if automaticPreflight && !probeRPKMatches {
                 rejectAutomaticTest("TEST_RPK_MISMATCH")
                 return
@@ -1574,7 +1652,7 @@ final class AppModel: ObservableObject {
         status: NavigationStatus
     ) {
         // A late map publication must not replace the queued terminal update.
-        guard automaticFinishTask == nil || status == .arrived else { return }
+        guard !automaticDraining, automaticFinishTask == nil || status == .arrived else { return }
         guard let scene = activeSceneID else { return }
         let selection = GuidancePresentationPolicy.select(
             route: route,
@@ -1746,11 +1824,15 @@ final class AppModel: ObservableObject {
         var next: NavigationUpdate? = first
         while let update = next, !Task.isCancelled, generation == navigationGeneration {
             do {
+                let sentAt = ProcessInfo.processInfo.systemUptime
                 _ = try await routeCardSender.sendAwaitingAcknowledgement(topic: NavigationUpdate.topic, body: update.jsonBody())
                 try checkNavigationOwner(generation)
                 if automaticRunID != nil && update.status == .arrived { automaticArrivalAcknowledged = true }
                 performanceTrace.record("nav.delivery.ack", metrics: ["status": .string(update.status.rawValue)])
-                try await updateClock.sleep(for: .seconds(1))
+                // Cap bursts at four updates/second, including the ACK wait in
+                // that budget. Slow ACKs must not add another full second.
+                let remaining = 0.25 - (ProcessInfo.processInfo.systemUptime - sentAt)
+                if remaining > 0 { try await updateClock.sleep(for: .seconds(remaining)) }
                 try checkNavigationOwner(generation)
             } catch {
                 guard generation == navigationGeneration else { return }

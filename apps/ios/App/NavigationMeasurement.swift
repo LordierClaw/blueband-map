@@ -55,3 +55,30 @@ enum NativeTransportDiagnostics {
         return metrics
     }
 }
+
+enum NativeCallbackDiagnostics {
+    static func validated(_ value: JSONValue?) -> [String: JSONValue]? {
+        guard case let .object(m)? = value, m["v"] == .number(1),
+              case let .bool(validClock)? = m["clockValid"], case let .bool(saturated)? = m["saturated"],
+              Set(m.keys) == Set(["v", "clockValid", "saturated", "ack", "message", "sample", "duplicate", "late"]) else { return nil }
+        func counter(_ value: JSONValue?) -> Double? {
+            guard case let .number(n)? = value, n.isFinite, n.rounded() == n, (0...2147483647).contains(n) else { return nil }
+            return n
+        }
+        var pending = 0.0
+        for key in ["ack", "message"] {
+            guard case let .array(values)? = m[key], values.count == 5 else { return nil }
+            let counts = values.compactMap { counter($0) }
+            guard counts.count == 5, saturated || counts[0] == counts.dropFirst().reduce(0, +) else { return nil }
+            pending += counts[3]
+        }
+        guard counter(m["duplicate"]) != nil, counter(m["late"]) != nil,
+              case let .array(sample)? = m["sample"], sample.count == 3,
+              let count = counter(sample[0]), count <= 16, count <= pending,
+              counter(sample[2]) != nil else { return nil }
+        if sample[1] != .null {
+            guard validClock, count > 0, let age = counter(sample[1]), age <= 600000 else { return nil }
+        } else if validClock && count > 0 { return nil }
+        return m
+    }
+}

@@ -171,10 +171,10 @@ struct ContentView: View {
 
     @ViewBuilder
     private var performanceControls: some View {
-        Button("Chạy test tự động") { model.startAutomaticNavigationTest() }
+        Button("Chạy test full luồng (~5 phút)") { model.startAutomaticNavigationTest(fullFlow: true) }
             .disabled(navigationIsActive || model.rpkState != .ready)
             .accessibilityIdentifier("navigation.automatic")
-        Text("Tự chạy tuyến mẫu ở 10 m/s, tối đa 10 phút; tự dừng và mở lưu log. Giữ app iPhone và Band mở; không cần di chuyển.")
+        Text("Tuyến giả lập cố định: di chuyển, qua vùng mới, rẽ, đổi zoom và dừng đo callback. Tự dừng và mở lưu log sau khoảng 5 phút. Giữ app iPhone và Band mở; không cần di chuyển.")
             .font(.caption).foregroundStyle(.secondary)
         if !model.automaticTestStatus.isEmpty {
             Text(model.automaticTestStatus).font(.caption)

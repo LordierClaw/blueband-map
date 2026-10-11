@@ -12,6 +12,9 @@ actor VietmapCPURenderer {
     private let transport: any MapHTTPTransport
     private var style: VietmapMapStyle?
     private var styleKey: String?
+    private var styleTask: Task<VietmapMapStyle, Swift.Error>?
+    private var styleTicket = UUID()
+    private var preparationOwner = 0
     private var tiles: [URL: VietmapSceneTile] = [:]
     private var costs: [URL: Int] = [:]
     private var order: [URL] = []
@@ -21,15 +24,87 @@ actor VietmapCPURenderer {
     private var atlases: [String: CGImage] = [:]
     private var atlasOrder: [String] = []
     private var atlasGeneration = 0
+    private var atlasFlight: (key: String, generation: Int, id: UUID, task: Task<CGImage, Swift.Error>)?
 
-    init(transport: any MapHTTPTransport = URLSessionHTTPTransport(timeout: 2)) {
+    init(transport: any MapHTTPTransport = URLSessionHTTPTransport(timeout: 8)) {
         self.transport = transport
+    }
+
+    func prewarm(tileMapKey: String, owner: Int) {
+        guard owner >= preparationOwner, !tileMapKey.isEmpty else { return }
+        preparationOwner = owner
+        selectSource(tileMapKey)
+        if style == nil { _ = startStyleLoad(tileMapKey) }
+    }
+
+    func stopPreparation(owner: Int) {
+        guard owner >= preparationOwner else { return }
+        preparationOwner = owner
+        styleTicket = UUID(); styleTask?.cancel(); styleTask = nil
+        atlasFlight?.task.cancel(); atlasFlight = nil
+        atlases.removeAll(); atlasOrder.removeAll(); atlasGeneration += 1
+    }
+
+    private func selectSource(_ key: String) {
+        guard styleKey != key else { return }
+        styleTicket = UUID(); styleTask?.cancel(); styleTask = nil
+        style = nil; styleKey = key
+        tiles.removeAll(); costs.removeAll(); order.removeAll()
+        atlasFlight?.task.cancel(); atlasFlight = nil
+        atlases.removeAll(); atlasOrder.removeAll(); atlasGeneration += 1
+    }
+
+    private func startStyleLoad(_ key: String) -> Task<VietmapMapStyle, Swift.Error> {
+        if let styleTask { return styleTask }
+        let ticket = UUID(), transport = transport, observer = performanceObserver?()
+        styleTicket = ticket
+        let task = Task { () throws -> VietmapMapStyle in
+            let started = ProcessInfo.processInfo.systemUptime
+            observer?("provider.start", ["stage": .string("style")])
+            do {
+                let loaded = try await VietmapStyleClient(transport: transport).loadMapStyle(tileMapKey: key)
+                try Task.checkCancellation()
+                guard self.styleTicket == ticket, self.styleKey == key else { throw CancellationError() }
+                self.style = loaded
+                self.styleTask = nil
+                observer?("provider.style", ["durationMs": .number((ProcessInfo.processInfo.systemUptime - started) * 1000)])
+                return loaded
+            } catch {
+                if self.styleTicket == ticket { self.styleTask = nil }
+                Self.recordFailure(error, stage: "style", started: started, observer: observer)
+                throw error
+            }
+        }
+        styleTask = task
+        return task
+    }
+
+    private func loadStyle(_ key: String) async throws -> VietmapMapStyle {
+        selectSource(key)
+        if let style { return style }
+        let task = startStyleLoad(key), ticket = styleTicket
+        let loaded = try await task.value
+        guard styleTicket == ticket, styleKey == key else { throw CancellationError() }
+        try Task.checkCancellation()
+        return loaded
+    }
+
+    private nonisolated static func recordFailure(_ error: Swift.Error, stage: String, started: TimeInterval,
+                                                  observer: BandPerformanceObserver?) {
+        let native = error as NSError
+        // Never stringify an error: userInfo may contain a provider URL/key.
+        let domain = native.domain == NSURLErrorDomain ? "NSURLErrorDomain" : error is CancellationError ? "cancelled" : "provider"
+        observer?("provider.failure", ["stage": .string(stage), "domain": .string(domain),
+            "code": .number(Double(native.code)), "cancelled": .bool(error is CancellationError || native.code == NSURLErrorCancelled),
+            "durationMs": .number((ProcessInfo.processInfo.systemUptime - started) * 1000)])
     }
 
     func renderCell(_ request: VietmapSnapshotRequest, plane: VietmapSnapshotConfiguration, cell: CorridorCell) async throws -> Data {
         try Task.checkCancellation()
+        selectSource(request.tileMapKey)
         guard abs(cell.column) <= 261, abs(cell.row) <= 261 else { throw VietmapSnapshotRenderer.Error.invalidRequest }
         if atlasPlane != plane || atlasKey != request.tileMapKey || atlasProfile != request.profile {
+            atlasFlight?.task.cancel(); atlasFlight = nil
             atlases.removeAll(); atlasOrder.removeAll(); atlasGeneration += 1
             atlasPlane = plane; atlasKey = request.tileMapKey; atlasProfile = request.profile
         }
@@ -42,10 +117,25 @@ actor VietmapCPURenderer {
         performanceObserver?()?("map.atlas", ["hit": .bool(atlases[key] != nil), "retained": .number(Double(atlases.count))])
         if let cached = atlases[key] { base = cached }
         else {
-            let output = try await render(request, configuration: plane.window(bounds), baseOnly: true)
-            try Task.checkCancellation()
-            guard generation == atlasGeneration else { throw CancellationError() }
-            base = output.image
+            let flight: (key: String, generation: Int, id: UUID, task: Task<CGImage, Swift.Error>)
+            if let existing = atlasFlight, existing.key == key, existing.generation == generation {
+                flight = existing
+            } else {
+                atlasFlight?.task.cancel()
+                flight = (key, generation, UUID(), Task {
+                    try await self.render(request, configuration: plane.window(bounds), baseOnly: true).image
+                })
+                atlasFlight = flight
+            }
+            do {
+                base = try await flight.task.value
+                try Task.checkCancellation()
+                guard generation == atlasGeneration else { throw CancellationError() }
+                if atlasFlight?.id == flight.id { atlasFlight = nil }
+            } catch {
+                if atlasFlight?.id == flight.id, !Task.isCancelled { atlasFlight = nil }
+                throw error
+            }
             // Evict before retaining the new atlas (one additional render may be in flight).
             while atlasOrder.count >= 2 { atlases.removeValue(forKey: atlasOrder.removeFirst()) }
             atlases[key] = base
@@ -55,7 +145,11 @@ actor VietmapCPURenderer {
         let crop = CGRect(x: (cellBounds.minX - bounds.minX) * 2, y: (cellBounds.minY - bounds.minY) * 2, width: 256, height: 256)
         guard let pixels = base.cropping(to: crop) else { throw VietmapSnapshotRenderer.Error.imageUnavailable }
         let image = try Self.cellImage(base: pixels, request: request, configuration: plane.window(cellBounds))
-        return try SnapshotPNGEncoder.encode(image, profiles: [request.profile]).data
+        let started = ProcessInfo.processInfo.systemUptime
+        let encoded = try SnapshotPNGEncoder.encode(image, profiles: [request.profile]).data
+        performanceObserver?()?("map.cell.encode", ["durationMs": .number((ProcessInfo.processInfo.systemUptime - started) * 1000),
+            "bytes": .number(Double(encoded.count))])
+        return encoded
     }
 
     nonisolated static func cellImage(base: CGImage, request: VietmapSnapshotRequest,
@@ -78,20 +172,7 @@ actor VietmapCPURenderer {
         try Task.checkCancellation()
         let started = Date()
         let configuration = try supplied ?? VietmapSnapshotConfiguration.make(request)
-        if styleKey != request.tileMapKey {
-            style = nil
-            tiles.removeAll(); costs.removeAll(); order.removeAll()
-            styleKey = request.tileMapKey
-        }
-        if style == nil {
-            let styleStarted = ProcessInfo.processInfo.systemUptime
-            let loadedStyle = try await VietmapStyleClient(transport: transport).loadMapStyle(tileMapKey: request.tileMapKey)
-            try Task.checkCancellation()
-            guard styleKey == request.tileMapKey else { throw CancellationError() }
-            style = loadedStyle
-            observer?("provider.style", ["durationMs": .number((ProcessInfo.processInfo.systemUptime - styleStarted) * 1000)])
-        }
-        guard let style else { throw VietmapSnapshotRenderer.Error.styleLoadFailed }
+        let style = try await loadStyle(request.tileMapKey)
         let loaded = Date()
         let zoom = min(Int(configuration.zoom), style.template.maximumZoom ?? 15)
         guard zoom >= style.template.minimumZoom ?? 0 else { throw VietmapSnapshotRenderer.Error.invalidRequest }
@@ -109,6 +190,9 @@ actor VietmapCPURenderer {
                 let (url, x, y) = item
                 group.addTask {
                     let fetchStarted = ProcessInfo.processInfo.systemUptime
+                    var stage = "tile"
+                    observer?("provider.start", ["stage": .string(stage)])
+                    do {
                     let response = try await transport.execute(MapHTTPRequest(method: "GET", url: url,
                         headers: ["Accept": "application/vnd.mapbox-vector-tile, application/x-protobuf"],
                         body: Data(), maximumResponseBytes: MapboxVectorTile.maximumBodyBytes))
@@ -122,6 +206,7 @@ actor VietmapCPURenderer {
                     }
                     guard !response.body.isEmpty else { throw RouteCardAssetFactory.Error.tileEmpty }
                     try Task.checkCancellation()
+                    stage = "decode"
                     let tile = try VietmapVectorTileDecoder.decode(response.body)
                     observer?("provider.decode", ["decodeMs": .number((ProcessInfo.processInfo.systemUptime - fetched) * 1000)])
                     // Account for decoded geometry and strings, not only compressed HTTP bytes.
@@ -132,6 +217,10 @@ actor VietmapCPURenderer {
                         }
                     }
                     return (url, VietmapSceneTile(tile: tile, zoom: zoom, x: x, y: y), cost)
+                    } catch {
+                        Self.recordFailure(error, stage: stage, started: fetchStarted, observer: observer)
+                        throw error
+                    }
                 }
             }
             var next = 0
@@ -154,7 +243,10 @@ actor VietmapCPURenderer {
         for url in urls { order.removeAll { $0 == url }; order.append(url) }
         trimCache()
         guard sourceTiles.count == coordinates.count else { throw VietmapSnapshotRenderer.Error.imageUnavailable }
-        let image = try Self.draw(request, configuration: configuration, style: style, tiles: sourceTiles, baseOnly: baseOnly)
+        let drawStarted = ProcessInfo.processInfo.systemUptime
+        let image: CGImage
+        do { image = try Self.draw(request, configuration: configuration, style: style, tiles: sourceTiles, baseOnly: baseOnly, observer: observer) }
+        catch { Self.recordFailure(error, stage: "draw", started: drawStarted, observer: observer); throw error }
         let layers = Self.layers(style, request: request, configuration: configuration)
         return VietmapSnapshotOutput(image: image,
             retainedFillLayers: layers.filter { $0.type == "fill" }.count,
@@ -198,7 +290,12 @@ actor VietmapCPURenderer {
     }
 
     nonisolated static func draw(_ request: VietmapSnapshotRequest, configuration: VietmapSnapshotConfiguration,
-                                 style: VietmapMapStyle, tiles: [VietmapSceneTile], baseOnly: Bool = false) throws -> CGImage {
+                                 style: VietmapMapStyle, tiles: [VietmapSceneTile], baseOnly: Bool = false,
+                                 observer: BandPerformanceObserver? = nil) throws -> CGImage {
+        let started = ProcessInfo.processInfo.systemUptime
+        struct FeatureKey: Hashable { let tile: Int; let layer: String; let feature: Int }
+        var boundsCache: [FeatureKey: CGRect] = [:], projections: [FeatureKey: [[CGPoint]]] = [:]
+        var cachedVertices = 0, projectedVertices = 0, culled = 0, visited = 0, projectionHits = 0
         let size = configuration.size, scale = configuration.scale
         guard size.width > 0, size.height > 0, size.width <= 1024, size.height <= 1024, scale == 2 else {
             throw VietmapSnapshotRenderer.Error.invalidRequest
@@ -238,15 +335,47 @@ actor VietmapCPURenderer {
             context.setLineCap(cap); context.setLineJoin(join)
             context.setLineDash(phase: 0, lengths: dash)
             context.setAlpha(min(1, max(0, layer.number(layer.type + "-opacity", zoom: configuration.zoom, fallback: 1))))
-            for tile in tiles {
+            // Conservative bounds include stroke miters and the stable label gutter.
+            let gutter = layer.type == "line" ? max(2, (gap + 2 * width) * 5 + 2) : layer.type == "symbol" ? 260.0 : 2.0
+            let clipWorld = [CGPoint(x: -gutter, y: -gutter), CGPoint(x: size.width + gutter, y: -gutter),
+                             CGPoint(x: -gutter, y: size.height + gutter), CGPoint(x: size.width + gutter, y: size.height + gutter)]
+                .map { configuration.worldPoint(for: $0) }
+            for (tileIndex, tile) in tiles.enumerated() {
                 guard let source = tile.tile.layers.first(where: { $0.name == layer.sourceLayer }) else { continue }
                 let scale = 512 * pow(2, configuration.zoom - Double(tile.zoom))
-                for feature in source.features where layer.matches(feature) {
-                    let lines = feature.lines.map { line in line.map { point in
+                let clipX = clipWorld.map { ($0.x / scale - Double(tile.x)) * Double(source.extent) }
+                let clipY = clipWorld.map { ($0.y / scale - Double(tile.y)) * Double(source.extent) }
+                let left = clipX.min()!, right = clipX.max()!, top = clipY.min()!, bottom = clipY.max()!
+                for (featureIndex, feature) in source.features.enumerated() where layer.matches(feature) {
+                    visited += 1
+                    if visited % 128 == 0 { try Task.checkCancellation() }
+                    let key = FeatureKey(tile: tileIndex, layer: source.name, feature: featureIndex)
+                    let bounds: CGRect
+                    if let cached = boundsCache[key] { bounds = cached }
+                    else {
+                        var x0 = Double.infinity, y0 = Double.infinity, x1 = -Double.infinity, y1 = -Double.infinity
+                        for line in feature.lines { for p in line {
+                            x0 = min(x0, Double(p.x)); x1 = max(x1, Double(p.x))
+                            y0 = min(y0, Double(p.y)); y1 = max(y1, Double(p.y))
+                        } }
+                        bounds = x0.isFinite ? CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0) : .null
+                        boundsCache[key] = bounds
+                    }
+                    // Inclusive comparisons also retain zero-height/zero-width lines and enclosing polygons.
+                    guard !bounds.isNull, bounds.maxX >= left, bounds.minX <= right,
+                          bounds.maxY >= top, bounds.minY <= bottom else { culled += 1; continue }
+                    let lines: [[CGPoint]]
+                    if let cached = projections[key] { lines = cached; projectionHits += 1 }
+                    else {
+                    lines = feature.lines.map { line in line.map { point in
                         let x = (Double(tile.x) + Double(point.x) / Double(source.extent)) * scale - centerWorld.x
                         let y = (Double(tile.y) + Double(point.y) / Double(source.extent)) * scale - centerWorld.y
                         return CGPoint(x: center.x + x * cosine + y * sine, y: center.y - x * sine + y * cosine)
                     } }
+                    let count = lines.reduce(0) { $0 + $1.count }
+                    projectedVertices += count
+                    if cachedVertices + count <= 100_000 { projections[key] = lines; cachedVertices += count }
+                    }
                     if layer.type == "symbol" {
                         let name = layer.text(for: feature)
                         guard !name.isEmpty, !names.contains(name), occupied.count < (baseOnly ? 512 : 48) else { continue }
@@ -277,6 +406,9 @@ actor VietmapCPURenderer {
         if !baseOnly { VietmapRouteOverlay.draw(request, context: context, project: configuration.point(for:)) }
         if fullFrame { drawText("© Vietmap", at: CGPoint(x: 106, y: 490), angle: 0, size: 9, context: context) }
         guard let image = context.makeImage() else { throw VietmapSnapshotRenderer.Error.imageUnavailable }
+        observer?("map.cpu.draw", ["durationMs": .number((ProcessInfo.processInfo.systemUptime - started) * 1000),
+            "features": .number(Double(visited)), "culled": .number(Double(culled)),
+            "projectedVertices": .number(Double(projectedVertices)), "projectionHits": .number(Double(projectionHits))])
         return image
     }
 

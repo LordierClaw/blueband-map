@@ -52,6 +52,73 @@ final class VietmapSnapshotRendererTests: XCTestCase {
         XCTAssertFalse(String(describing: events.snapshot()).contains("never-log-fixture-key"))
     }
 
+    func testStoppedSourceCannotReplaceSuccessorStyleOrRestartThroughOldPrewarmOwner() async throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106), end = GeoPoint(latitude: 10.001, longitude: 106)
+        func request(_ key: String) -> VietmapSnapshotRequest {
+            .init(route: .init(points: [origin, end], instructions: [], distanceMeters: 111),
+                matchedPosition: origin, overlayGeometry: .init(subdued: [], traveled: [], active: [], context: []),
+                headingDegrees: 0, nextManeuver: end, tileMapKey: key)
+        }
+        let transport = LatencyStyleTransport(), renderer = VietmapCPURenderer(transport: transport)
+        await renderer.prewarm(tileMapKey: "old-key", owner: 1)
+        while await transport.styleCalls == 0 { await Task.yield() }
+        let old = Task { try await renderer.render(request("old-key")) }
+        try await Task.sleep(for: .milliseconds(20))
+        await renderer.stopPreparation(owner: 2)
+        await renderer.prewarm(tileMapKey: "next-key", owner: 3)
+        await renderer.prewarm(tileMapKey: "old-key", owner: 1)
+        await transport.release()
+        do { _ = try await old.value; XCTFail("retired source must not publish") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        _ = try await renderer.render(request("next-key"))
+        let calls = await transport.styleCalls
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testDenseOffscreenGeometryPreservesVisibleRoadsAndLabelsAtRotatedAtlasEdges() throws {
+        let origin = GeoPoint(latitude: 10, longitude: 106)
+        let latitude = origin.latitude * .pi / 180
+        let worldX = (origin.longitude + 180) / 360 * 4096 * 32768
+        let worldY = (1 - log(tan(latitude) + 1 / cos(latitude)) / .pi) / 2 * 4096 * 32768
+        let tx = Int(worldX / 4096), ty = Int(worldY / 4096)
+        let x = Int(worldX) - tx * 4096, y = Int(worldY) - ty * 4096
+        func point(_ dx: Int, _ dy: Int) -> MapboxVectorTile.TilePoint { .init(x: x + dx, y: y + dy) }
+        let visible: [MapboxVectorTile.Feature] = [
+            .init(geometryType: .lineString, properties: ["name": "Visible Road"], lines: [[point(-3000, -120), point(3000, -120)]]),
+            .init(geometryType: .lineString, properties: ["name": "Crossing"], lines: [[point(0, -3000), point(0, 3000)]])]
+        let far: [MapboxVectorTile.Feature] = (0..<300).map { index in
+            .init(geometryType: .lineString, properties: ["name": "Far \(index)"],
+                lines: [(0..<64).map { point(100000 + $0 * 10, 100000 + index * 10) }])
+        }
+        func tile(_ features: [MapboxVectorTile.Feature]) -> VietmapSceneTile {
+            .init(tile: .init(layers: [.init(name: "road", extent: 4096, features: features)]), zoom: 15, x: tx, y: ty)
+        }
+        let layers = try JSONDecoder().decode([VietmapMapStyle.Layer].self, from: Data(#"""
+        [{"id":"road_primary_casing","type":"line","source-layer":"road","paint":{"line-width":14}},
+         {"id":"road_primary","type":"line","source-layer":"road","paint":{"line-width":10}},
+         {"id":"road_primary_label","type":"symbol","source-layer":"road","layout":{"text-field":"{name}"}}]
+        """#.utf8))
+        let style = VietmapMapStyle(template: .init(urlTemplate: "", sourceLayers: []), layers: layers)
+        for heading in [0.0, 45, 90] {
+            let forward = GeoPoint(latitude: 10.0001, longitude: 106)
+            let request = VietmapSnapshotRequest(route: .init(points: [origin, forward], instructions: [], distanceMeters: 11),
+                matchedPosition: origin, overlayGeometry: .init(subdued: [], traveled: [], active: [], context: []),
+                headingDegrees: heading, nextManeuver: forward, tileMapKey: "fixture")
+            let plane = try VietmapSnapshotConfiguration.make(request).window(CGRect(x: -128, y: -128, width: 768, height: 768))
+            let expected = try VietmapCPURenderer.draw(request, configuration: plane, style: style, tiles: [tile(visible)], baseOnly: true)
+            let events = LatencyProviderEvents()
+            let actual = try VietmapCPURenderer.draw(request, configuration: plane, style: style,
+                tiles: [tile(visible + far)], baseOnly: true, observer: { events.append($0, $1) })
+            let empty = try VietmapCPURenderer.draw(request, configuration: plane, style: style, tiles: [], baseOnly: true)
+            XCTAssertEqual(actual.dataProvider?.data as Data?, expected.dataProvider?.data as Data?)
+            XCTAssertNotEqual(actual.dataProvider?.data as Data?, empty.dataProvider?.data as Data?)
+            let work = try XCTUnwrap(events.snapshot().first { $0.0 == "map.cpu.draw" }?.1)
+            XCTAssertEqual(work["culled"], .number(900))
+            XCTAssertEqual(work["projectedVertices"], .number(4))
+            XCTAssertEqual(work["projectionHits"], .number(4))
+        }
+    }
+
     func testCellKeepsBasePixelsAndUsesTheSharedRotatedPlane() throws {
         let origin = GeoPoint(latitude: 10, longitude: 106), forward = GeoPoint(latitude: 10.001, longitude: 106.001)
         let route = RoutePlan(points: [origin, forward], instructions: [], distanceMeters: 150)

@@ -233,7 +233,7 @@ final class NavigationReplayTests: XCTestCase {
     }
 
     private func makeReplay(_ clock: ReplayClock) -> NavigationReplay {
-        NavigationReplay(now: { clock.time }, date: { clock.date }, sleep: { try await clock.sleep($0) })
+        NavigationReplay(now: { clock.time }, date: { clock.date }, sleep: { try await clock.sleep($0) }, fullFlow: false)
     }
 
     private func settle() async {
@@ -242,7 +242,7 @@ final class NavigationReplayTests: XCTestCase {
 }
 
 @MainActor
-private final class ReplayClock {
+final class ReplayClock {
     var time: TimeInterval = 0
     var date: Date { Date(timeIntervalSince1970: 1_800_000_000 + time) }
     private var sleepers: [(deadline: TimeInterval, continuation: CheckedContinuation<Void, Swift.Error>)] = []

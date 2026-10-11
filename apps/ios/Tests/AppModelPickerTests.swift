@@ -12,6 +12,50 @@ import BlueBandProtocol
 
 @MainActor
 final class AppModelPickerTests: XCTestCase {
+    func testFullFlowRunsAllPhasesAndExportsAfterDrainWithoutManualStop() async throws {
+        let clock = ReplayClock(), sender = MeasurementProbeSender()
+        let model = makeModel(central: PickerCentral(), authMode: .missing,
+            navigationConfigured: true, routeTransport: ShortAutomaticRouteTransport(), sender: sender,
+            render: { request in
+                let context = try XCTUnwrap(CGContext(data: nil, width: 424, height: 1040, bitsPerComponent: 8,
+                    bytesPerRow: 1696, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let config = try VietmapSnapshotConfiguration.make(request)
+                return VietmapSnapshotOutput(image: try XCTUnwrap(context.makeImage()), retainedFillLayers: 0,
+                    retainedLineLayers: 0, retainedSymbolLayers: 0, zoom: config.zoom, styleLoadMilliseconds: 0,
+                    snapshotMilliseconds: 0, cacheState: "fixture", configuration: config)
+            }, replayFactory: { full in NavigationReplay(now: { clock.time }, date: { clock.date },
+                sleep: { try await clock.sleep($0) }, fullFlow: full) })
+        defer { model.stopNavigation(); clock.finishSleeps() }
+        model.performanceMapMode = .full
+        await sender.setReceiver { [weak model] envelope in model?.consume(.received(envelope)) }
+        model.consume(.connected); model.startAutomaticNavigationTest(fullFlow: true)
+        await waitUntil { await sender.requests.count == 2 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil { model.navigationInstructions.contains { $0.maneuver == .uTurn } }
+        await waitUntil { model.navigationDebugEntries.contains { $0.stage == "band.displayed" } }
+        // A controlled source clock covers five minutes without a long simulator test.
+        for seconds in [1.0, 29, 60, 60, 40, 90] { await clock.advance(by: seconds) }
+        await waitUntil { await sender.requests.count == 4 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await clock.advance(by: 10)
+        await waitUntil { await sender.requests.count == 6 }
+        try await answerAutomaticDiagnostics(model, sender: sender)
+        await waitUntil { model.preparedPerformanceTrace != nil }
+        XCTAssertFalse(model.isNavigationRunning)
+        let rows = try XCTUnwrap(model.preparedPerformanceTrace).split(separator: 10).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        let phases = rows.filter { $0["event"] as? String == "automatic.phase" }.compactMap {
+            ($0["metrics"] as? [String: Any])?["phase"] as? String
+        }
+        for phase in ["cachedMovement", "coverage", "turns", "zoomOut", "zoomIn", "drain", "fullFlowComplete"] {
+            XCTAssertTrue(phases.contains(phase), phase)
+        }
+        XCTAssertEqual((rows.last?["metrics"] as? [String: Any])?["reason"] as? String, "full-flow-complete")
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "band.callbacks" })
+        XCTAssertTrue(rows.contains { $0["event"] as? String == "replay.fix" })
+    }
+
     func testLatencyQueuedArrivalDoesNotWaitAnotherSecondAfterDelayedACK() async throws {
         let sender = MeasurementProbeSender()
         let model = makeModel(central: PickerCentral(), authMode: .missing,
@@ -227,8 +271,16 @@ final class AppModelPickerTests: XCTestCase {
         let requests = Array(await sender.requests.suffix(2))
         let resource = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
         let transport = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
+        if requests.contains(where: { $0["callbacks"] == .bool(true) }) {
+            let detail: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
+                "ack": .array([2, 1, 0, 1, 0].map { .number(Double($0)) }),
+                "message": .array([2, 1, 0, 1, 0].map { .number(Double($0)) }),
+                "sample": .array([.number(2), .number(5), .number(0)]), "duplicate": .number(0), "late": .number(0)]
+            model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report",
+                body: ["request": transport, "callbacks": .object(detail)])))
+        }
         model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report", body: [
-            "request": resource, "rpk": .number(36), "versionName": .string("0.6.21"), "perfVersion": .number(1),
+            "request": resource, "rpk": .number(37), "versionName": .string("0.6.22"), "perfVersion": .number(1),
             "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
         let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
             "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
@@ -355,7 +407,7 @@ final class AppModelPickerTests: XCTestCase {
         let resourceID = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
         let transportID = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
         model.consume(.received(.message(id: "resource-good", source: .band, topic: "diagnostics.report", body: [
-            "request": resourceID, "rpk": .number(36), "versionName": .string("0.6.21"), "perfVersion": .number(1),
+            "request": resourceID, "rpk": .number(37), "versionName": .string("0.6.22"), "perfVersion": .number(1),
             "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
         let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
             "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
@@ -1039,7 +1091,8 @@ final class AppModelPickerTests: XCTestCase {
         routeTransport: (any MapHTTPTransport)? = nil,
         sender: (any RouteCardSessionSending)? = nil,
         render: (@MainActor (VietmapSnapshotRequest) async throws -> VietmapSnapshotOutput)? = nil,
-        cellRender: @escaping @Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data = { _, _, _ in Data() }
+        cellRender: @escaping @Sendable (VietmapSnapshotRequest, VietmapSnapshotConfiguration, CorridorCell) async throws -> Data = { _, _, _ in Data() },
+        replayFactory: @escaping @MainActor (Bool) -> NavigationReplay = { NavigationReplay(fullFlow: $0) }
     ) -> AppModel {
         let cipher = PickerCipher()
         let trustStore = PickerTrustStore()
@@ -1065,7 +1118,8 @@ final class AppModelPickerTests: XCTestCase {
             cellRender: cellRender,
             scanDuration: .seconds(3_600),
             performanceTrace: PerformanceTraceRecorder(directory: FileManager.default.temporaryDirectory
-                .appendingPathComponent("trace-tests-" + UUID().uuidString))
+                .appendingPathComponent("trace-tests-" + UUID().uuidString)),
+            replayFactory: replayFactory
         )
     }
 

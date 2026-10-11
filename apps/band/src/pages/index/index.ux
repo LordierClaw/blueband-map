@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.21</text>
+      <text class="version">RPK 0.6.22</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -577,8 +577,8 @@ export default {
     retiredMapURI: "",
     nextRenderToken: 1,
     showDiagnostics: true,
-    rpkVersion: "0.6.21",
-    rpkBuild: 36,
+    rpkVersion: "0.6.22",
+    rpkBuild: 37,
     perfVisual: false,
     perfFrame: "",
     perfLastNow: 0,
@@ -592,6 +592,9 @@ export default {
     this.transportPerf = { attempted: 0, succeeded: 0, failed: 0, pending: 0,
       peakPending: 0, timeouts204: 0, abandoned: 0, saturated: false,
       lastCallbackMs: null, maxCallbackMs: null }
+    // At most sixteen timestamps; never retain payloads or an unbounded ID map.
+    this.callbackPerf = { ack: [0, 0, 0, 0, 0], message: [0, 0, 0, 0, 0],
+      samples: [], dropped: 0, duplicate: 0, late: 0, saturated: false }
     this.streamState = null
     this.nextStreamImageToken = 1
     this.streamTransfer = null
@@ -724,6 +727,13 @@ export default {
       this.transportCount("abandoned", this.transportPerf.pending)
       this.transportPerf.pending = 0
     }
+    if (this.callbackPerf) {
+      for (var kind of ["ack", "message"]) {
+        var counts = this.callbackPerf[kind]
+        counts[4] = this.callbackAdd(counts[4], counts[3]); counts[3] = 0
+      }
+      this.callbackPerf.samples = []
+    }
     this.perfVisual = false
     this.resetStream()
     this.restorePreparedNavigation()
@@ -844,6 +854,10 @@ export default {
       var request = message.body.request
       if (typeof request !== "string" || !/^[a-z0-9-]{1,32}$/.test(request)) return
       if (message.body.transport === true) {
+        if (message.body.callbacks === true) {
+          this.sendEnvelope({ v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "diagnostics.report",
+            body: { request: request, callbacks: this.callbackSnapshot() } })
+        }
         this.sendEnvelope({
           v: 1, id: this.nextBandMessageID(), src: "band", type: "message", topic: "diagnostics.report",
           body: { request: request, rpk: this.rpkBuild, versionName: this.rpkVersion, transport: this.transportSnapshot() }
@@ -1946,6 +1960,21 @@ export default {
     return value
   },
 
+  callbackAdd(value, increment) {
+    if (value + increment > 2147483647) this.callbackPerf.saturated = true
+    return Math.min(2147483647, value + increment)
+  },
+
+  callbackSnapshot() {
+    var now = this.perfNow(), stats = this.callbackPerf, oldest = null
+    if (this.perfClockValid && stats.samples.length) {
+      oldest = Math.min(600000, Math.max(0, now - stats.samples[0].started))
+    }
+    return { v: 1, clockValid: this.perfClockValid, ack: stats.ack.slice(), message: stats.message.slice(),
+      sample: [stats.samples.length, oldest, stats.dropped], duplicate: stats.duplicate,
+      late: stats.late, saturated: stats.saturated }
+  },
+
   sendEnvelope(message) {
     if (message.body && message.body.perf) {
       // Optional measurements must never enlarge the existing 512-byte replies.
@@ -1961,13 +1990,32 @@ export default {
     var epoch = this.lifecycleEpoch
     var started = this.perfNow()
     var completed = false
+    var classCounts = this.callbackPerf[message.type === "ack" ? "ack" : "message"]
+    classCounts[0] = this.callbackAdd(classCounts[0], 1)
+    classCounts[3] = this.callbackAdd(classCounts[3], 1)
+    var sample = null
+    if (this.callbackPerf.samples.length < 16) {
+      sample = { started: started }
+      this.callbackPerf.samples.push(sample)
+    } else { this.callbackPerf.dropped = this.callbackAdd(this.callbackPerf.dropped, 1) }
     this.transportCount("attempted", 1)
     this.transportCount("pending", 1)
     this.transportPerf.peakPending = Math.max(this.transportPerf.peakPending, this.transportPerf.pending)
     var finish = function (failed) {
-      if (completed || !page.ownsConnectionEpoch(ownedConnection, epoch) ||
-        !page.connected || !page.acceptingMessages) return false
+      if (completed) {
+        page.callbackPerf.duplicate = page.callbackAdd(page.callbackPerf.duplicate, 1)
+        return false
+      }
+      if (!page.ownsConnectionEpoch(ownedConnection, epoch) || !page.connected || !page.acceptingMessages) {
+        completed = true
+        page.callbackPerf.late = page.callbackAdd(page.callbackPerf.late, 1)
+        return false
+      }
       completed = true
+      classCounts[3] = Math.max(0, classCounts[3] - 1)
+      var outcome = failed ? 2 : 1
+      classCounts[outcome] = page.callbackAdd(classCounts[outcome], 1)
+      if (sample) page.callbackPerf.samples = page.callbackPerf.samples.filter(function (item) { return item !== sample })
       page.transportPerf.pending = Math.max(0, page.transportPerf.pending - 1)
       page.transportCount(failed ? "failed" : "succeeded", 1)
       var elapsed = page.perfElapsed(started)
