@@ -3,7 +3,8 @@ set -euo pipefail
 device=${1:?Simulator identifier required}
 result=${2:?Result bundle path required}
 scope=${3:-full}
-filters=()
+# macOS ships Bash 3.2, where an empty array with nounset cannot be expanded.
+filters=(test)
 if [[ "$scope" == latency ]]; then
   filters+=(
     -only-testing:BlueBandMapTests/VietmapSnapshotRendererTests/testLatencyStyleFetchSurvivesCancelledCameraAndIsSharedWithSuccessor
@@ -17,4 +18,4 @@ elif [[ "$scope" != full ]]; then
 fi
 xcodebuild -project apps/ios/BlueBandMap.xcodeproj -scheme BlueBandMap -configuration Debug \
   -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$result" \
-  CODE_SIGNING_ALLOWED=NO "${filters[@]}" test
+  CODE_SIGNING_ALLOWED=NO "${filters[@]}"
