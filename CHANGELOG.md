@@ -1,5 +1,10 @@
 # Changelog
 
+## iOS 0.5.28 / RPK 0.6.23 - 2026-10-12
+
+- Package the review fixes for the next latency hardware round: 540-byte negotiated corridor cell chunks and one shared HTTP connection per Vietmap transport.
+- Bump iOS to `0.5.28 (44)` and RPK to `0.6.23 (38)` because both packaged components changed; the full-flow automatic test now requires this RPK pair. Xiaomi wire bytes are unchanged.
+
 ## iOS 0.5.15 / RPK 0.6.11 - 2026-09-04
 
 - Restore the conservative stop-and-wait map transfer default after iOS 0.5.14 still stalled at 7/18 application ACKs with `TRANSFER_TIMEOUT` under a two-message window.

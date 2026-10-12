@@ -5,7 +5,7 @@
       <text class="title">BLUEBAND MAP</text>
       <text class="status">ĐANG CHỜ KẾT NỐI…</text>
       <text class="detail">Mở BlueBandMap trên iPhone để kết nối Band 10.</text>
-      <text class="version">RPK 0.6.22</text>
+      <text class="version">RPK 0.6.23</text>
     </div>
 
     <div class="connected" if="{{ connected }}">
@@ -577,8 +577,8 @@ export default {
     retiredMapURI: "",
     nextRenderToken: 1,
     showDiagnostics: true,
-    rpkVersion: "0.6.22",
-    rpkBuild: 37,
+    rpkVersion: "0.6.23",
+    rpkBuild: 38,
     perfVisual: false,
     perfFrame: "",
     perfLastNow: 0,

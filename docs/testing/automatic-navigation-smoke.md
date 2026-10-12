@@ -1,6 +1,6 @@
 # Test full luồng tại chỗ
 
-Cặp phiên bản: **iOS 0.5.27 (43)** + **RPK 0.6.22 (37)**.
+Cặp phiên bản: **iOS 0.5.28 (44)** + **RPK 0.6.23 (38)**.
 Chỉ bàn giao artifact sau khi kiểm thử và xác minh gói cùng phiên bản giao thức; nguồn và SHA-256 được ghi trong hồ sơ bàn giao.
 
 ## Cài và chạy một lần

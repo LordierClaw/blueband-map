@@ -285,7 +285,7 @@ final class AppModelPickerTests: XCTestCase {
                 body: ["request": transport, "callbacks": .object(detail)])))
         }
         model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report", body: [
-            "request": resource, "rpk": .number(37), "versionName": .string("0.6.22"), "perfVersion": .number(1),
+            "request": resource, "rpk": .number(38), "versionName": .string("0.6.23"), "perfVersion": .number(1),
             "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
         let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
             "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
@@ -412,7 +412,7 @@ final class AppModelPickerTests: XCTestCase {
         let resourceID = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
         let transportID = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
         model.consume(.received(.message(id: "resource-good", source: .band, topic: "diagnostics.report", body: [
-            "request": resourceID, "rpk": .number(37), "versionName": .string("0.6.22"), "perfVersion": .number(1),
+            "request": resourceID, "rpk": .number(38), "versionName": .string("0.6.23"), "perfVersion": .number(1),
             "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
         let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
             "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),

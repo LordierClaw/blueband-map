@@ -391,7 +391,7 @@ final class AppModel: ObservableObject {
         automaticDraining = false
         automaticZoomOverride = fullFlow ? 17 : nil
         navigationReplay = replayFactory(fullFlow)
-        automaticTestStatus = "Đang kiểm tra RPK 0.6.22 (37)…"
+        automaticTestStatus = "Đang kiểm tra RPK 0.6.23 (38)…"
         locationClient.stopPrewarming()
         locationClient.stop()
         locationNeedsSettings = false
@@ -549,7 +549,7 @@ final class AppModel: ObservableObject {
         stopNavigation(reason: code)
         navigationState = .failed(code)
         errorMessage = code == "TEST_RPK_MISMATCH"
-            ? "Band báo \(observedRPK). Test cần RPK 0.6.22 (37); hãy cài đúng file rồi mở lại app Band."
+            ? "Band báo \(observedRPK). Test cần RPK 0.6.23 (38); hãy cài đúng file rồi mở lại app Band."
             : "Test chưa bắt đầu (\(code)). Log đã được giữ để kiểm tra."
     }
 
@@ -1600,7 +1600,7 @@ final class AppModel: ObservableObject {
                 let version: String = { if case let .string(v)? = body["versionName"] { return v }; return "unknown" }()
                 observedRPK = "\(version) (\(Int(build)))"
             }
-            probeRPKMatches = body["rpk"] == .number(37) && body["versionName"] == .string("0.6.22")
+            probeRPKMatches = body["rpk"] == .number(38) && body["versionName"] == .string("0.6.23")
             if automaticPreflight && !probeRPKMatches {
                 rejectAutomaticTest("TEST_RPK_MISMATCH")
                 return
