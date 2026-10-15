@@ -53,7 +53,10 @@ final class AppModelPickerTests: XCTestCase {
         }
         let end = rows.first { $0["event"] as? String == "session.end" }?["metrics"] as? [String: Any]
         XCTAssertEqual(end?["reason"] as? String, "full-flow-complete")
-        XCTAssertTrue(rows.contains { $0["event"] as? String == "band.callbacks" })
+        // Per-send callback bookkeeping froze RPK 0.6.23 on hardware; never request it.
+        let requested = await sender.requests
+        XCTAssertFalse(requested.contains { $0["callbacks"] != nil })
+        XCTAssertFalse(rows.contains { $0["event"] as? String == "band.callbacks" })
         XCTAssertTrue(rows.contains { $0["event"] as? String == "replay.fix" })
     }
 
@@ -276,16 +279,8 @@ final class AppModelPickerTests: XCTestCase {
         let requests = Array(await sender.requests.suffix(2))
         let resource = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
         let transport = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
-        if requests.contains(where: { $0["callbacks"] == .bool(true) }) {
-            let detail: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
-                "ack": .array([2, 1, 0, 1, 0].map { .number(Double($0)) }),
-                "message": .array([2, 1, 0, 1, 0].map { .number(Double($0)) }),
-                "sample": .array([.number(2), .number(5), .number(0)]), "duplicate": .number(0), "late": .number(0)]
-            model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report",
-                body: ["request": transport, "callbacks": .object(detail)])))
-        }
         model.consume(.received(.message(id: UUID().uuidString, source: .band, topic: "diagnostics.report", body: [
-            "request": resource, "rpk": .number(38), "versionName": .string("0.6.23"), "perfVersion": .number(1),
+            "request": resource, "rpk": .number(39), "versionName": .string("0.6.24"), "perfVersion": .number(1),
             "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
         let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
             "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),
@@ -412,7 +407,7 @@ final class AppModelPickerTests: XCTestCase {
         let resourceID = try XCTUnwrap(requests.first { $0["transport"] == nil }?["request"])
         let transportID = try XCTUnwrap(requests.first { $0["transport"] == .bool(true) }?["request"])
         model.consume(.received(.message(id: "resource-good", source: .band, topic: "diagnostics.report", body: [
-            "request": resourceID, "rpk": .number(38), "versionName": .string("0.6.23"), "perfVersion": .number(1),
+            "request": resourceID, "rpk": .number(39), "versionName": .string("0.6.24"), "perfVersion": .number(1),
             "perf": .object(["v": .number(1), "clockValid": .bool(true), "files": .number(0), "nodes": .number(0), "pendingDeletes": .number(0)])])))
         let native: [String: JSONValue] = ["v": .number(1), "clockValid": .bool(true), "saturated": .bool(false),
             "attempted": .number(2), "succeeded": .number(1), "failed": .number(0), "pending": .number(1),

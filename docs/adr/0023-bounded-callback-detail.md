@@ -15,3 +15,7 @@ Independent literal vectors live in `apps/band/test/fixtures/callback-diagnostic
 ```
 
 Hardware cases: compare per-class counts against phone-received replies; observe a 10-second producer drain; test Stop/reopen and late callbacks; confirm ten-second diagnostic sampling does not stall map updates. A successful callback is not a display confirmation and a missing callback is not proof that bytes failed to arrive. No host test establishes firmware memory reclamation or a reboot fix.
+
+## Amendment 2026-10-15: withdrawn after hardware regression
+
+Status: withdrawn. On 2026-10-15 two automatic full-flow runs of iOS 0.5.28 / RPK 0.6.23 froze the Band during the first full-frame transfer: after 7 of 9 `map.asset.chunk` messages the Band stopped sending application ACKs and Xiaomi transport acknowledgements, while the guidance screen stayed visible. The 2026-10-11 run of iOS 0.5.26 / RPK 0.6.21 used the same chunk sizes and window and completed 91 s. The per-send callback bookkeeping in `sendEnvelope` was the only Band-side difference on that path, so RPK 0.6.24 removes it and answers `callbacks:true` with the ordinary transport report only; iOS 0.5.29 no longer requests it. The cause is not proven; the next hardware run decides it.

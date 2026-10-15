@@ -1,6 +1,6 @@
 # Test full luồng tại chỗ
 
-Cặp phiên bản: **iOS 0.5.28 (44)** + **RPK 0.6.23 (38)**.
+Cặp phiên bản: **iOS 0.5.29 (45)** + **RPK 0.6.24 (39)**.
 Chỉ bàn giao artifact sau khi kiểm thử và xác minh gói cùng phiên bản giao thức; nguồn và SHA-256 được ghi trong hồ sơ bàn giao.
 
 ## Cài và chạy một lần
@@ -37,6 +37,6 @@ Nếu Band hiện logo và reboot: giữ iPhone mở để lưu kết quả; kh�
 
 ## Cách đọc kết quả
 
-Trace có profile `full-flow-v1`, các phase, fix phát/được xác nhận, thời gian tải style/tile/decode/draw/encode/transfer, lỗi provider đã lược thông tin nhạy cảm, và số hình học bị loại/số phép chiếu được tái sử dụng. Chẩn đoán Band có bộ đếm callback ACK/message riêng và tối đa 16 mẫu timestamp đang chờ. Đây không phải phép đo RAM native; không kết luận OOM từ số pending.
+Trace có profile `full-flow-v1`, các phase, fix phát/được xác nhận, thời gian tải style/tile/decode/draw/encode/transfer, lỗi provider đã lược thông tin nhạy cảm, và số hình học bị loại/số phép chiếu được tái sử dụng. Chẩn đoán Band chỉ có bộ đếm gửi tổng (transport); bộ đếm callback theo từng lần gửi đã bị gỡ ở RPK 0.6.24. Đây không phải phép đo RAM native; không kết luận OOM từ số pending.
 
 Mục tiêu vẫn là Start→xác nhận và GPS→xác nhận đều <1000 ms, gồm cả rẽ/đổi vùng. Start có tính cả kiểm tra RPK trước replay và có event riêng để tách thời gian. Xác nhận giao thức không thay thế thời điểm pixel thật hiện trên Band. Nếu có video bằng thiết bị khác, gửi kèm FPS; video hữu ích nhưng không bắt buộc để xuất và phân tích JSONL. Chưa có kết luận phần cứng đạt <1 giây hay hết reboot.

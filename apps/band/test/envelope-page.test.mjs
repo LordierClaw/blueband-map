@@ -122,33 +122,21 @@ test("native callback diagnostics count first owned completion without throttlin
   } finally { page.onDestroy() }
 })
 
-test("callback classes and finite pending sample distinguish delivered sends from missing callbacks", async () => {
+test("callback detail requests get only the transport report so sends keep no per-send bookkeeping", async () => {
+  // Hardware 2026-10-15: RPK 0.6.22/0.6.23 with per-send callback samples froze
+  // the first full-frame transfer; 0.6.21 without them did not. Keep sends minimal.
   const sends = []
-  let now = 1000
   const connection = { getReadyState({ success }) { success({ status: 1 }) }, send(options) { sends.push(options) } }
-  const page = await loadPage(connection, memoryFile(), { now: () => now })
+  const page = await loadPage(connection, memoryFile(), { now: () => 1000 })
   try {
-    page.sendACK("a"); page.sendPing()
-    now += 20
-    sends[0].success(); sends[0].success()
-    for (let i = 0; i < 30; i++) page.sendACK(`sample-${i}`)
-    now += 500
+    for (let i = 0; i < 20; i++) page.sendACK(`pending-${i}`)
+    assert.equal(page.callbackPerf, undefined)
+    const before = sends.length
     page.receiveMessage({ data: envelope("probe", "diagnostics.get", { request: "class-1", transport: true, callbacks: true }) })
-    const detail = sends.find(s => s.data.body?.callbacks)?.data
-    assert.ok(detail, "explicit detail request must produce class evidence")
-    assert.deepEqual(detail.body.callbacks.ack, [31, 1, 0, 30, 0])
-    assert.deepEqual(detail.body.callbacks.message, [1, 0, 0, 1, 0])
-    assert.deepEqual(detail.body.callbacks.sample, [16, 520, 15])
-    assert.equal(detail.body.callbacks.duplicate, 1)
-    assert.ok(Buffer.byteLength(JSON.stringify(detail)) <= 512)
-    page.resetMapLifecycle()
-    sends[1].success()
-    page.receiveMessage({ data: envelope("probe-2", "diagnostics.get", { request: "class-2", transport: true, callbacks: true }) })
-    const after = sends.filter(s => s.data.body?.callbacks).at(-1).data.body.callbacks
-    assert.equal(after.ack[3], 0)
-    assert.equal(after.ack[4], 31)
-    assert.equal(after.late, 1)
-    assert.equal(after.sample[0], 0)
+    const replies = sends.slice(before).map(s => s.data)
+    assert.deepEqual(replies.map(m => m.type + ":" + (m.topic || "")), ["message:diagnostics.report", "ack:"])
+    assert.equal(replies[0].body.callbacks, undefined)
+    assert.equal(replies[0].body.transport.attempted, 20)
   } finally { page.onDestroy() }
 })
 
@@ -163,23 +151,6 @@ test("transport reply matches an independent literal maximum-width vector", asyn
     page.transportPerf = { ...expected.body.transport }
     delete page.transportPerf.v; delete page.transportPerf.clockValid
     page.receiveMessage({ data: envelope("probe", "diagnostics.get", { request: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", transport: true }) })
-    assert.equal(JSON.stringify(sent[0]), literal)
-  } finally { page.onDestroy() }
-})
-
-test("callback detail matches an independent bounded maximum-width vector", async () => {
-  const literal = (await readFile(new URL("./fixtures/callback-diagnostics.json", import.meta.url), "utf8")).trim()
-  assert.ok(Buffer.byteLength(literal) <= 512)
-  const expected = JSON.parse(literal), sent = []
-  const connection = { getReadyState({ success }) { success({ status: 1 }) }, send({ data }) { sent.push(data) } }
-  const page = await loadPage(connection, memoryFile(), { now: () => 9999999999999 })
-  try {
-    const metrics = expected.body.callbacks
-    page.nextID = 999999
-    Object.assign(page.callbackPerf, { ack: metrics.ack.slice(), message: metrics.message.slice(),
-      dropped: 2147483647, duplicate: 2147483647, late: 2147483647, saturated: true,
-      samples: Array.from({ length: 16 }, () => ({ started: 9999999399999 })) })
-    page.receiveMessage({ data: envelope("probe", "diagnostics.get", { request: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", transport: true, callbacks: true }) })
     assert.equal(JSON.stringify(sent[0]), literal)
   } finally { page.onDestroy() }
 })

@@ -1,5 +1,10 @@
 # Changelog
 
+## iOS 0.5.29 / RPK 0.6.24 - 2026-10-15
+
+- Remove the Band's per-send callback bookkeeping (ADR 0023, added in RPK 0.6.22). Both hardware runs of 0.5.28/0.6.23 froze during the first full-frame transfer, while 0.6.21 without it completed; the full-frame path now matches 0.6.21 again.
+- iOS no longer requests `callbacks:true` diagnostics. The 540-byte corridor cell chunks and shared HTTP connection stay.
+
 ## iOS 0.5.28 / RPK 0.6.23 - 2026-10-12
 
 - Package the review fixes for the next latency hardware round: 540-byte negotiated corridor cell chunks and one shared HTTP connection per Vietmap transport.

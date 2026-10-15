@@ -391,7 +391,7 @@ final class AppModel: ObservableObject {
         automaticDraining = false
         automaticZoomOverride = fullFlow ? 17 : nil
         navigationReplay = replayFactory(fullFlow)
-        automaticTestStatus = "Đang kiểm tra RPK 0.6.23 (38)…"
+        automaticTestStatus = "Đang kiểm tra RPK 0.6.24 (39)…"
         locationClient.stopPrewarming()
         locationClient.stop()
         locationNeedsSettings = false
@@ -549,7 +549,7 @@ final class AppModel: ObservableObject {
         stopNavigation(reason: code)
         navigationState = .failed(code)
         errorMessage = code == "TEST_RPK_MISMATCH"
-            ? "Band báo \(observedRPK). Test cần RPK 0.6.23 (38); hãy cài đúng file rồi mở lại app Band."
+            ? "Band báo \(observedRPK). Test cần RPK 0.6.24 (39); hãy cài đúng file rồi mở lại app Band."
             : "Test chưa bắt đầu (\(code)). Log đã được giữ để kiểm tra."
     }
 
@@ -1525,16 +1525,15 @@ final class AppModel: ObservableObject {
         performanceProbeSession = ownedSession
         performanceProbeDeadline = ProcessInfo.processInfo.systemUptime + 8
         receivedResourceProbe = false; receivedTransportProbe = false
-        receivedCallbackProbe = false; requiresCallbackProbe = automaticFullFlow
+        receivedCallbackProbe = false; requiresCallbackProbe = false
         probeRPKMatches = false
         performanceDiagnosticsStatus = "Đang chờ chẩn đoán từ Band…"
-        let sender = routeCardSender, visual = activeMeasurement?.visualMarker ?? false, callbacks = automaticFullFlow
+        let sender = routeCardSender, visual = activeMeasurement?.visualMarker ?? false
         performanceProbeTask = Task { @MainActor in
             async let resource: String? = try? sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
                 body: ["request": .string(request), "visual": .bool(visual)])
             async let transport: String? = try? sender.sendAwaitingAcknowledgement(topic: "diagnostics.get",
-                body: callbacks ? ["request": .string(request + "-t"), "transport": .bool(true), "callbacks": .bool(true)]
-                    : ["request": .string(request + "-t"), "transport": .bool(true)])
+                body: ["request": .string(request + "-t"), "transport": .bool(true)])
             _ = await (resource, transport)
         }
         // The deadline must not await a Bluetooth write or its acknowledgement. A sender
@@ -1600,7 +1599,7 @@ final class AppModel: ObservableObject {
                 let version: String = { if case let .string(v)? = body["versionName"] { return v }; return "unknown" }()
                 observedRPK = "\(version) (\(Int(build)))"
             }
-            probeRPKMatches = body["rpk"] == .number(38) && body["versionName"] == .string("0.6.23")
+            probeRPKMatches = body["rpk"] == .number(39) && body["versionName"] == .string("0.6.24")
             if automaticPreflight && !probeRPKMatches {
                 rejectAutomaticTest("TEST_RPK_MISMATCH")
                 return
