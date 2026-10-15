@@ -15,7 +15,7 @@
     "build": "aiot build && node scripts/verify-rpk.mjs"
   },
   "devDependencies": {
-    "@aiot-toolkit/jsc": "1.0.3",
+    "@aiot-toolkit/jsc": "1.0.9",
     "aiot-toolkit": "2.0.5"
   }
 }
